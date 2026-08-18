@@ -19,7 +19,7 @@ from a set of **default data types** that each device keeps. You can inspect the
 with [`Device::settings`](https://docs.rs/burn/latest/burn/tensor/struct.Device.html):
 
 ```rust, ignore
-use burn::tensor::Device;
+use cortex::tensor::Device;
 
 let device = Device::wgpu(Default::default());
 let settings = device.settings();
@@ -31,7 +31,7 @@ To use a different default (e.g. `f16` for floats), configure the device with
 any tensor on it:
 
 ```rust, ignore
-use burn::tensor::{Device, FloatDType, IntDType};
+use cortex::tensor::{Device, FloatDType, IntDType};
 
 let mut device = Device::wgpu(Default::default());
 device.configure((FloatDType::F16, IntDType::I32))?;
@@ -53,7 +53,7 @@ the creation options (this tuple is just a convenient conversion into
 [`TensorCreationOptions`](https://docs.rs/burn/latest/burn/tensor/struct.TensorCreationOptions.html)):
 
 ```rust, ignore
-use burn::tensor::DType;
+use cortex::tensor::DType;
 
 // device defaults to f32
 let x = Tensor::<2>::zeros([2, 3], &device);                   // f32
@@ -67,7 +67,7 @@ To convert an _existing_ tensor to another element type, use
 let x_f64 = x.cast(FloatDType::F64); // convert the f32 tensor above to f64
 ```
 
-Burn Tensors are defined by the number of dimensions D in its declaration as opposed to its shape.
+Cortex Tensors are defined by the number of dimensions D in its declaration as opposed to its shape.
 The actual shape of the tensor is inferred from its initialization. For example, a Tensor of size
 (5,) is initialized as below:
 
@@ -86,7 +86,7 @@ let tensor_1 = Tensor::<1>::from_floats(floats, &device);
 
 ### Initialization
 
-Burn Tensors are primarily initialized using the `from_data()` method which takes the `TensorData`
+Cortex Tensors are primarily initialized using the `from_data()` method which takes the `TensorData`
 struct as input. The `TensorData` struct has two public fields: `shape` and `dtype`. The `value`,
 now stored as bytes, is private but can be accessed via any of the following methods: `as_slice`,
 `as_mut_slice`, `to_vec` and `iter`. To retrieve the data from a tensor, the method `.to_data()`
@@ -130,7 +130,7 @@ let tensor_5 = Tensor::<1>::from_data(data, &device);
 
 ## Ownership and Cloning
 
-Almost all Burn operations take ownership of the input tensors. Therefore, reusing a tensor multiple
+Almost all Cortex operations take ownership of the input tensors. Therefore, reusing a tensor multiple
 times will necessitate cloning it. Let's look at an example to understand the ownership rules and
 cloning better. Suppose we want to do a simple min-max normalization of an input tensor.
 
@@ -144,7 +144,7 @@ let input = (input - min).div(max - min);
 With PyTorch tensors, the above code would work as expected. However, Rust's strict ownership rules
 will give an error and prevent using the input tensor after the first `.min()` operation. The
 ownership of the input tensor is transferred to the variable `min` and the input tensor is no longer
-available for further operations. Burn Tensors like most complex primitives do not implement the
+available for further operations. Cortex Tensors like most complex primitives do not implement the
 `Copy` trait and therefore have to be cloned explicitly. Now let's rewrite a working example of
 doing min-max normalization with cloning.
 
@@ -172,7 +172,7 @@ inplace operations will always be used when available.
 ## Tensor Operations
 
 Normally with PyTorch, explicit inplace operations aren't supported during the backward pass, making
-them useful only for data preprocessing or inference-only model implementations. With Burn, you can
+them useful only for data preprocessing or inference-only model implementations. With Cortex, you can
 focus more on _what_ the model should do, rather than on _how_ to do it. We take the responsibility
 of making your code run as fast as possible during training as well as inference. The same
 principles apply to broadcasting; all operations support broadcasting unless specified otherwise.
@@ -185,7 +185,7 @@ for the sake of simplicity, we ignore type signatures. For more details, refer t
 
 Those operations are available for all tensor kinds: `Int`, `Float`, and `Bool`.
 
-| Burn                                                 | PyTorch Equivalent                                                        |
+| Cortex                                                 | PyTorch Equivalent                                                        |
 | ---------------------------------------------------- | ------------------------------------------------------------------------- |
 | `Tensor::cat(tensors, dim)`                          | `torch.cat(tensors, dim)`                                                 |
 | `Tensor::empty(shape, options)`                      | `torch.empty(shape, device=device, dtype=dtype)`                          |
@@ -258,7 +258,7 @@ Those operations are available for all tensor kinds: `Int`, `Float`, and `Bool`.
 
 Those operations are available for numeric tensor kinds: `Float` and `Int`.
 
-| Burn                                                            | PyTorch Equivalent                            |
+| Cortex                                                            | PyTorch Equivalent                            |
 | --------------------------------------------------------------- | --------------------------------------------- |
 | `tensor.abs()`                                                  | `torch.abs(tensor)`                           |
 | `tensor.add(other)` or `tensor + other`                         | `tensor + other`                              |
@@ -339,7 +339,7 @@ Those operations are available for numeric tensor kinds: `Float` and `Int`.
 
 Those operations are only available for `Float` tensors.
 
-| Burn API                                     | PyTorch Equivalent                         |
+| Cortex API                                     | PyTorch Equivalent                         |
 | -------------------------------------------- | ------------------------------------------ |
 | `tensor.acos()`                              | `tensor.acos()`                            |
 | `tensor.acosh()`                             | `tensor.acosh()`                           |
@@ -392,7 +392,7 @@ Those operations are only available for `Float` tensors.
 
 Those operations are only available for `Int` tensors.
 
-| Burn API                                    | PyTorch Equivalent                                      |
+| Cortex API                                    | PyTorch Equivalent                                      |
 | ------------------------------------------- | ------------------------------------------------------- |
 | `Tensor::arange(5..10, device)`             | `tensor.arange(start=5, end=10, device=device)`         |
 | `Tensor::arange_step(5..10, 2, device)`     | `tensor.arange(start=5, end=10, step=2, device=device)` |
@@ -415,7 +415,7 @@ Those operations are only available for `Int` tensors.
 
 Those operations are only available for `Bool` tensors.
 
-| Burn API                             | PyTorch Equivalent              |
+| Cortex API                             | PyTorch Equivalent              |
 | ------------------------------------ | ------------------------------- |
 | `Tensor::diag_mask(shape, diagonal)` | N/A                             |
 | `Tensor::tril_mask(shape, diagonal)` | N/A                             |
@@ -434,14 +434,14 @@ Those operations are only available for `Bool` tensors.
 Those operations are only available for `Float` tensors on backends that implement quantization
 strategies.
 
-| Burn API                           | PyTorch Equivalent |
+| Cortex API                           | PyTorch Equivalent |
 | ---------------------------------- | ------------------ |
 | `tensor.quantize(scheme, qparams)` | N/A                |
 | `tensor.dequantize()`              | N/A                |
 
 ## Activation Functions
 
-| Burn API                                          | PyTorch Equivalent                                  |
+| Cortex API                                          | PyTorch Equivalent                                  |
 | ------------------------------------------------- | --------------------------------------------------- |
 | `activation::celu(tensor, alpha)`                 | `nn.functional.celu(tensor, alpha)`                 |
 | `activation::elu(tensor, alpha)`                  | `nn.functional.elu(tensor, alpha)`                  |
@@ -475,7 +475,7 @@ strategies.
 
 ## Grid Functions
 
-| Burn API                                            | PyTorch Equivalent                                             |
+| Cortex API                                            | PyTorch Equivalent                                             |
 | --------------------------------------------------- | -------------------------------------------------------------- |
 | `grid::affine_grid_2d(transformation_tensor, dims)` | `nn.functional.affine_grid(theta_tensor, size, align_corners)` |
 | `grid::meshgrid(tensors, GridIndexing::Matrix)`     | `torch.meshgrid(tensors, indexing="ij")`                       |
@@ -484,7 +484,7 @@ strategies.
 
 ## Linalg Functions
 
-| Burn API                                           | PyTorch Equivalent                                  |
+| Cortex API                                           | PyTorch Equivalent                                  |
 | -------------------------------------------------- | --------------------------------------------------- |
 | `linalg::cosine_similarity(x1, x2, dim, eps)`      | `nn.functional.cosine_similarity(x1, x2, dim, eps)` |
 | `linalg::det(tensor)`                              | `torch.linalg.det(tensor)`                          |
@@ -506,13 +506,13 @@ strategies.
 
 ## Signal Processing Functions
 
-Signal-processing helpers live in `burn::tensor::signal` and operate on real-valued float tensors.
+Signal-processing helpers live in `cortex::tensor::signal` and operate on real-valued float tensors.
 FFT length `n` (and `n_fft` in STFT) must currently be a power of two: when `n` is `Some(size)`, the
 input is truncated or zero-padded to `size` and the output has `size / 2 + 1` frequency bins.
 Non-power-of-two sizes panic at the public API boundary; general arbitrary-size DFT support
 (Bluestein's algorithm) is a tracked follow-up.
 
-| Burn API                                              | PyTorch Equivalent                                                                |
+| Cortex API                                              | PyTorch Equivalent                                                                |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `signal::rfft(tensor, dim, n)`                        | `torch.fft.rfft(tensor, n, dim)`                                                  |
 | `signal::irfft(re, im, dim, n)`                       | `torch.fft.irfft(complex, n, dim)`                                                |
@@ -530,7 +530,7 @@ is validated on entry to both `stft` and `istft`; `n_fft` must be a power of two
 
 ## Displaying Tensor Details
 
-Burn provides flexible options for displaying tensor information, allowing you to control the level
+Cortex provides flexible options for displaying tensor information, allowing you to control the level
 of detail and formatting to suit your needs.
 
 ### Basic Display
@@ -582,11 +582,11 @@ Tensor {
 
 ### Global Print Options
 
-For more fine-grained control over tensor printing, Burn provides a `PrintOptions` struct and a
+For more fine-grained control over tensor printing, Cortex provides a `PrintOptions` struct and a
 `set_print_options` function:
 
 ```rust, ignore
-use burn::tensor::{set_print_options, PrintOptions};
+use cortex::tensor::{set_print_options, PrintOptions};
 
 let print_options = PrintOptions {
     precision: Some(2),
@@ -605,7 +605,7 @@ Options:
 
   ### Checking Tensor Closeness
 
-  Burn provides a utility function `check_closeness` to compare two tensors and assess their
+  Cortex provides a utility function `check_closeness` to compare two tensors and assess their
   similarity. This function is particularly useful for debugging and validating tensor operations,
   especially when working with floating-point arithmetic where small numerical differences can
   accumulate. It's also valuable when comparing model outputs during the process of importing models
@@ -615,8 +615,8 @@ Options:
   Here's an example of how to use `check_closeness`:
 
   ```rust, ignore
-  use burn::tensor::{check_closeness, Tensor};
-  type B = burn::backend::Flex;
+  use cortex::tensor::{check_closeness, Tensor};
+  type B = cortex::backend::Flex;
 
   let device = Default::default();
   let tensor1 = Tensor::<1>::from_floats(
@@ -646,5 +646,5 @@ Options:
 
   This utility can be invaluable when implementing or debugging tensor operations, especially those
   involving complex mathematical computations or when porting algorithms from other frameworks. It's
-  also an essential tool when verifying the accuracy of imported models, ensuring that the Burn
+  also an essential tool when verifying the accuracy of imported models, ensuring that the Cortex
   implementation produces results that closely match those of the original model.

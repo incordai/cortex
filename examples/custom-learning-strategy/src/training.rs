@@ -1,9 +1,9 @@
 use crate::model::ModelConfig;
-use burn::train::{
+use cortex::train::{
     EventProcessorTraining, Learner, LearnerModel, SupervisedLearningStrategy, SupervisedTraining,
     SupervisedTrainingEventProcessor, TrainLoader, TrainingComponents, ValidLoader,
 };
-use burn::{
+use cortex::{
     data::{
         dataloader::DataLoaderBuilder,
         dataset::{transform::PartialDataset, vision::MnistDataset},
@@ -27,7 +27,7 @@ use guide::data::MnistBatcher;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-static ARTIFACT_DIR: &str = "/tmp/burn-example-custom-train-strategy";
+static ARTIFACT_DIR: &str = "/tmp/cortex-example-custom-train-strategy";
 
 #[derive(Config, Debug)]
 pub struct MnistTrainingConfig {
@@ -97,7 +97,7 @@ pub fn run(device: Device) {
         .early_stopping(early_stopping)
         .num_epochs(config.num_epochs)
         .summary()
-        .with_training_strategy(burn::train::TrainingStrategy::Custom(Arc::new(
+        .with_training_strategy(cortex::train::TrainingStrategy::Custom(Arc::new(
             MyCustomLearningStrategy::new(autodiff_device),
         )));
 

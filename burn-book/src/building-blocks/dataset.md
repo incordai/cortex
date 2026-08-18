@@ -19,7 +19,7 @@ pub trait Dataset<I>: Send + Sync {
 
 The dataset trait assumes a fixed-length set of items that can be randomly accessed in constant
 time. This is a major difference from datasets that use Apache Arrow underneath to improve streaming
-performance. Datasets in Burn don't assume _how_ they are going to be accessed; it's just a
+performance. Datasets in Cortex don't assume _how_ they are going to be accessed; it's just a
 collection of items.
 
 However, you can compose multiple dataset transformations to lazily obtain what you want with zero
@@ -27,7 +27,7 @@ pre-processing, so that your training can start instantly!
 
 ## Transformation
 
-Transformations in Burn are all lazy and modify one or multiple input datasets. The goal of these
+Transformations in Cortex are all lazy and modify one or multiple input datasets. The goal of these
 transformations is to provide you with the necessary tools so that you can model complex data
 distributions.
 
@@ -133,11 +133,11 @@ dataset to use should be based on the dataset's size as well as its intended pur
 
 ## Sources
 
-For now, there are only a couple of dataset sources available with Burn, but more to come!
+For now, there are only a couple of dataset sources available with Cortex, but more to come!
 
 ### Hugging Face
 
-You can easily import any Hugging Face dataset with Burn. We use SQLite as the storage to avoid
+You can easily import any Hugging Face dataset with Cortex. We use SQLite as the storage to avoid
 downloading the model each time or starting a Python process. You need to know the format of each
 item in the dataset beforehand. Here's an example with the
 [dbpedia dataset](https://huggingface.co/datasets/fancyzhx/dbpedia_14).
@@ -265,7 +265,7 @@ Note that this requires the `csv` crate.
 
 **What about streaming datasets?**
 
-There is no streaming dataset API with Burn, and this is by design! The learner struct will iterate
+There is no streaming dataset API with Cortex, and this is by design! The learner struct will iterate
 multiple times over the dataset and only checkpoint when done. You can consider the length of the
 dataset as the number of iterations before performing checkpointing and running the validation.
 There is nothing stopping you from returning different items even when called with the same `index`
@@ -289,7 +289,7 @@ model with the `Batcher` trait implementation. Other tensor operations can be pe
 step to prepare the batch data, as is done [in the basic workflow guide](../basic-workflow/data.md).
 The process is illustrated in the figure below for the MNIST dataset.
 
-<img title="Burn Data Loading Pipeline" alt="Burn Data Loading Pipeline" src="./dataset.png">
+<img title="Cortex Data Loading Pipeline" alt="Cortex Data Loading Pipeline" src="./dataset.png">
 
 Although we have conveniently implemented the
 [`MnistDataset`](https://github.com/tracel-ai/burn/blob/main/crates/burn-dataset/src/vision/mnist.rs)
@@ -407,10 +407,10 @@ impl MnistDataset {
 #    /// Download the MNIST dataset files from the web.
 #    /// Panics if the download cannot be completed or the content of the file cannot be written to disk.
 #    fn download(split: &str) -> PathBuf {
-#        // Dataset files are stored in the burn-dataset cache directory
+#        // Dataset files are stored in the cortex-dataset cache directory
 #        let cache_dir = dirs::cache_dir()
 #            .expect("Could not get cache directory")
-#            .join("burn-dataset");
+#            .join("cortex-dataset");
 #        let split_dir = cache_dir.join("mnist").join(split);
 #
 #        if !split_dir.exists() {

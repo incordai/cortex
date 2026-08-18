@@ -1,11 +1,11 @@
 # Backend and Device
 
-Burn's user-facing API is centered on `Tensor`, `Module`, and `Device`. These types are not generic
+Cortex's user-facing API is centered on `Tensor`, `Module`, and `Device`. These types are not generic
 over a backend. Instead, every tensor carries a runtime `Device` that identifies where and how its
 operations execute.
 
 ```rust, ignore
-use burn::tensor::{Device, Tensor};
+use cortex::tensor::{Device, Tensor};
 
 let device = Device::wgpu(Default::default());
 let tensor = Tensor::<2>::ones([2, 3], &device);
@@ -45,7 +45,7 @@ Indexed devices accept either an integer or `DeviceIndex`. WGPU-family construct
 available device:
 
 ```rust, ignore
-use burn::tensor::{Device, DeviceIndex, DeviceKind};
+use cortex::tensor::{Device, DeviceIndex, DeviceKind};
 
 let default_wgpu = Device::wgpu(Default::default());
 let discrete_wgpu = Device::wgpu(DeviceKind::DiscreteGpu(0));
@@ -54,7 +54,7 @@ let default_cuda = Device::cuda(DeviceIndex::Default);
 let second_cuda = Device::cuda(1);
 ```
 
-Burn also supports remote devices when the corresponding remote feature is enabled. Constructors
+Cortex also supports remote devices when the corresponding remote feature is enabled. Constructors
 include `Device::remote_websocket` for WebSocket connections and `Device::remote_iroh` for
 peer-to-peer remote execution.
 
@@ -112,7 +112,7 @@ Each device has their own runtime settings, including its default float, integer
 dtypes. Inspect them with `settings()` and set them with `configure()`:
 
 ```rust, ignore
-use burn::tensor::{Device, DeviceConfig, FloatDType, IntDType};
+use cortex::tensor::{Device, DeviceConfig, FloatDType, IntDType};
 
 let mut device = Device::cuda(0);
 device.configure(
@@ -133,7 +133,7 @@ dtypes are locked; a later incompatible configuration returns an error.
 hardware dynamically or setting up multi-device training:
 
 ```rust, ignore
-use burn::tensor::{Device, DeviceFilter, DeviceType};
+use cortex::tensor::{Device, DeviceFilter, DeviceType};
 
 let devices = Device::enumerate(
     DeviceFilter::new()

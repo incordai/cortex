@@ -1,6 +1,6 @@
-use burn::rl::{Environment, StepResult, ToAction, ToObservation};
-use burn::tensor::Device;
-use burn::{Tensor, prelude::ToElement};
+use cortex::rl::{Environment, StepResult, ToAction, ToObservation};
+use cortex::tensor::Device;
+use cortex::{Tensor, prelude::ToElement};
 use gym_rs::{
     core::Env,
     envs::classical_control::cartpole::{CartPoleEnv, CartPoleObservation},

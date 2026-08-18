@@ -1,0 +1,53 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "WGPU backend for the Cortex framework"
+documentation = "https://docs.rs/burn-wgpu"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "gpu", "wgpu", "webgpu"]
+license.workspace = true
+name = "cortex-wgpu"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-wgpu"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std", "autotune", "fusion", "cortex-cubecl/default", "cubecl/default"]
+doc = ["cortex-cubecl/doc"]
+std = ["cortex-cubecl/std", "cubecl/std"]
+
+tracing = [
+    "cubecl/tracing",
+    "cortex-backend/tracing",
+    "cortex-fusion?/tracing",
+    "cortex-cubecl/tracing",
+]
+
+fusion = ["cortex-fusion", "cortex-cubecl/fusion"]
+autotune = ["cortex-cubecl/autotune"]
+autotune-checks = ["cortex-cubecl/autotune-checks"]
+
+exclusive-memory-only = ["cubecl/exclusive-memory-only"]
+template = ["cortex-cubecl/template", "cubecl/template"]
+
+# Backends
+metal = ["cubecl/metal", "cortex-backend/cubecl-metal"]
+vulkan = ["cubecl/vulkan", "cortex-backend/cubecl-vulkan"]
+webgpu = ["cubecl/webgpu", "cortex-backend/cubecl-webgpu"]
+
+[dependencies]
+cubecl = { workspace = true, features = ["wgpu"] }
+
+cortex-cubecl = { workspace = true }
+cortex-fusion = { workspace = true, optional = true, features = ["default"] }
+cortex-backend = { workspace = true, features = [
+    "cubecl-wgpu",
+] }
+
+
+[package.metadata.docs.rs]
+features = ["default"]
+rustdoc-args = ["--cfg", "docsrs"]

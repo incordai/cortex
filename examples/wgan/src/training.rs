@@ -1,7 +1,7 @@
 use crate::dataset::MnistBatcher;
 use crate::model::{Clip, ModelConfig};
-use burn::optim::{GradientsParams, RmsPropConfig};
-use burn::{
+use cortex::optim::{GradientsParams, RmsPropConfig};
+use cortex::{
     data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
     prelude::*,
     tensor::Distribution,

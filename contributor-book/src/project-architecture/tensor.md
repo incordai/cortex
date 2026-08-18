@@ -1,7 +1,7 @@
 # Tensor
 
 A proper deep learning framework should have a fast tensor implementation with autodiff support, and
-Burn is no exception. The tensor API abstracts away backend implementation details and focuses on
+Cortex is no exception. The tensor API abstracts away backend implementation details and focuses on
 usability without compromising performance. To make it as easy as possible to use, there is only one
 tensor type, which is different from multiple tensor and deep learning crates in Rust. Generic
 parameters are used instead to specialize the tensor type.

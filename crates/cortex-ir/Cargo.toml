@@ -1,0 +1,33 @@
+[package]
+authors = ["laggui <lagrange.guillaume.1@gmail.com>", "nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "Intermediate representation for the Cortex framework"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor"]
+license.workspace = true
+name = "cortex-ir"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-ir"
+documentation = "https://docs.rs/burn-ir"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = ["cortex-backend/std"]
+doc = ["default"]
+tracing = [
+    "cortex-backend/tracing",
+]
+
+[dependencies]
+serde = { workspace = true }
+hashbrown = { workspace = true } # no_std compatible
+
+cortex-backend = { workspace = true }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

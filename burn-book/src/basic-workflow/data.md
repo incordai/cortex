@@ -1,9 +1,9 @@
 # Data
 
-Typically, one trains a model on some dataset. Burn provides a library of very useful dataset
+Typically, one trains a model on some dataset. Cortex provides a library of very useful dataset
 sources and transformations, such as Hugging Face dataset utilities that allow to download and store
 data into an SQLite database for extremely efficient data streaming and storage. For this guide
-though, we will use the MNIST dataset from `burn::data::dataset::vision` which requires no external
+though, we will use the MNIST dataset from `cortex::data::dataset::vision` which requires no external
 dependency.
 
 To iterate over a dataset efficiently, we will define a struct which will implement the `Batcher`
@@ -15,7 +15,7 @@ the imports for brevity, but the full code for following this guide can be found
 `examples/guide/` [directory](https://github.com/tracel-ai/burn/tree/main/examples/guide).
 
 ```rust , ignore
-use burn::{
+use cortex::{
     data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
     prelude::*,
 };
@@ -26,13 +26,13 @@ pub struct MnistBatcher {}
 ```
 
 This batcher is pretty straightforward, as it only defines a struct that will implement the
-`Batcher` trait. Its batching method receives Burn's runtime `Device`, so the tensors it creates are
+`Batcher` trait. Its batching method receives Cortex's runtime `Device`, so the tensors it creates are
 placed on the device selected by the caller.
 
 Next, we need to actually implement the batching logic.
 
 ```rust , ignore
-# use burn::{
+# use cortex::{
 #     data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
 #     prelude::*,
 # };
@@ -114,6 +114,6 @@ Book.
 In the previous example, we implement the `Batcher` trait with a list of `MnistItem` as input and a
 single `MnistBatch` as output. The batch contains the images in the form of a 3D tensor, along with
 a targets tensor that contains the indexes of the correct digit class. The first step is to parse
-the image array into a `TensorData` struct. Burn provides the `TensorData` struct to encapsulate
+the image array into a `TensorData` struct. Cortex provides the `TensorData` struct to encapsulate
 tensor storage information without being specific to a backend. When creating a tensor,
 `Tensor::from_data` converts the data to the kind and dtype requested by the device.

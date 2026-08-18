@@ -21,16 +21,16 @@ There are a few commands you will want to run prior to any commit for a non-draf
    > RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zmacro-backtrace" cargo run-checks
    > ```
 
-## Updating the burn semver version
+## Updating the cortex semver version
 
 If for some reason you need to bump for the next version (though that should probably be left to the
-maintainers), edit the semantic version number in `burn/Cargo.toml`, and then run `cargo update` to
+maintainers), edit the semantic version number in `cortex/Cargo.toml`, and then run `cargo update` to
 update the lock file.
 
-## Contributing to either the Burn Book or Contributor Book
+## Contributing to either the Cortex Book or Contributor Book
 
-Both the Burn Book and the Contributor Book are built with mdbook. To open the book locally, run
-`mdbook serve <path/to/book>` or `cargo xtask books {burn|contributor} open` which will install and
+Both the Cortex Book and the Contributor Book are built with mdbook. To open the book locally, run
+`mdbook serve <path/to/book>` or `cargo xtask books {cortex|contributor} open` which will install and
 use mdbook automatically.
 
 Alternatively, if you want to install mdbook directly, run the following command[^update_note]:

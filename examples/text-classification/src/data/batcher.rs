@@ -11,7 +11,7 @@
 // generates a padding mask, and returns a batch object.
 
 use super::{dataset::TextClassificationItem, tokenizer::Tokenizer};
-use burn::{
+use cortex::{
     data::dataloader::batcher::Batcher,
     nn::attention::{SeqLengthOption, generate_padding_mask},
     prelude::*,

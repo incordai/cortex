@@ -7,14 +7,14 @@ version = "0.22.0-pre.2"
 workspace = true
 
 [features]
-cuda = ["burn/cuda"]
-flex = ["burn/flex"]
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
+cuda = ["cortex/cuda"]
+flex = ["cortex/flex"]
+tch-cpu = ["cortex/tch"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
 
 [dependencies]
-burn = { workspace = true, features = ["default", "train"] }
+cortex = { workspace = true, features = ["default", "train"] }
 
 # Random number generator
 rand = { workspace = true, features = ["thread_rng"] }

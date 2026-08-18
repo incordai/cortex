@@ -52,10 +52,10 @@ jobs:
     # '@id:' label must be unique within this worklow
     runs-on:
       [
-        "@id:burn-cuda-job-${{github.run_id}}-${{github.run_attempt}}",
+        "@id:cortex-cuda-job-${{github.run_id}}-${{github.run_attempt}}",
         "@pr_number:${{ inputs.pr_number }}",
         "@organization:tracel-ai",
-        "@repository:burn",
+        "@repository:cortex",
         "@image-family:${{ needs.prepare-checks.outputs.gcp_runners_image_family }}",
         "@machine-type:${{ needs.prepare-checks.outputs.gcp_runners_machine_type }}",
         "@zones:${{ needs.prepare-checks.outputs.gcp_runners_zone }}",
@@ -82,7 +82,7 @@ jobs:
           rust-toolchain: ${{ matrix.toolchain }}
           enable-cache: false
       # --------------------------------------------------------------------------------
-      - name: Tests (burn-cuda)
+      - name: Tests (cortex-cuda)
         run: cargo xtask test ${{ env.TEST_RELEASE_FLAG }} --ci gcp-cuda-runner
 
   linux-std-vulkan-tests:
@@ -91,10 +91,10 @@ jobs:
     # '@id:' label must be unique within this worklow
     runs-on:
       [
-        "@id:burn-vulkan-job-${{github.run_id}}-${{github.run_attempt}}",
+        "@id:cortex-vulkan-job-${{github.run_id}}-${{github.run_attempt}}",
         "@pr_number:${{ inputs.pr_number }}",
         "@organization:tracel-ai",
-        "@repository:burn",
+        "@repository:cortex",
         "@image-family:${{ needs.prepare-checks.outputs.gcp_runners_image_family }}",
         "@machine-type:${{ needs.prepare-checks.outputs.gcp_runners_machine_type }}",
         "@zones:${{ needs.prepare-checks.outputs.gcp_runners_zone }}",
@@ -120,7 +120,7 @@ jobs:
           rust-toolchain: ${{ matrix.toolchain }}
           enable-cache: false
       # --------------------------------------------------------------------------------
-      - name: Tests (burn-vulkan)
+      - name: Tests (cortex-vulkan)
         run: cargo xtask test ${{ env.TEST_RELEASE_FLAG }} --ci gcp-vulkan-runner
 
   linux-std-wgpu-tests:
@@ -129,10 +129,10 @@ jobs:
     # '@id:' label must be unique within this worklow
     runs-on:
       [
-        "@id:burn-wgpu-job-${{github.run_id}}-${{github.run_attempt}}",
+        "@id:cortex-wgpu-job-${{github.run_id}}-${{github.run_attempt}}",
         "@pr_number:${{ inputs.pr_number }}",
         "@organization:tracel-ai",
-        "@repository:burn",
+        "@repository:cortex",
         "@image-family:${{ needs.prepare-checks.outputs.gcp_runners_image_family }}",
         "@machine-type:${{ needs.prepare-checks.outputs.gcp_runners_machine_type }}",
         "@zones:${{ needs.prepare-checks.outputs.gcp_runners_zone }}",
@@ -158,5 +158,5 @@ jobs:
           rust-toolchain: ${{ matrix.toolchain }}
           enable-cache: false
       # --------------------------------------------------------------------------------
-      - name: Tests (burn-wgpu)
+      - name: Tests (cortex-wgpu)
         run: cargo xtask test ${{ env.TEST_RELEASE_FLAG }} --ci gcp-wgpu-runner

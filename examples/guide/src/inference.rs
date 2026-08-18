@@ -1,5 +1,5 @@
 use crate::{data::MnistBatcher, training::TrainingConfig};
-use burn::{
+use cortex::{
     data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
     prelude::*,
     store::ModuleRecord,

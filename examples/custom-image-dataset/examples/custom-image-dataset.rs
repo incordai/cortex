@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 
-use burn::optim::{SgdConfig, momentum::MomentumConfig};
+use cortex::optim::{SgdConfig, momentum::MomentumConfig};
 use custom_image_dataset::training::TrainingConfig;
 
 // Import only when backend features are enabled
@@ -27,7 +27,7 @@ fn main() {
 
     #[cfg(feature = "tch-gpu")]
     {
-        use burn::tensor::{Device, DeviceIndex};
+        use cortex::tensor::{Device, DeviceIndex};
 
         #[cfg(not(target_os = "macos"))]
         let device = Device::libtorch_cuda(DeviceIndex::Default);
@@ -41,7 +41,7 @@ fn main() {
     {
         // Note: Metal backend may have shader compilation issues on Intel Macs with AMD GPUs
         // If you encounter errors, use WGPU backend as an alternative
-        use burn::tensor::{Device, DeviceKind};
+        use cortex::tensor::{Device, DeviceKind};
         train(config, Device::wgpu(DeviceKind::DefaultDevice));
     }
 }

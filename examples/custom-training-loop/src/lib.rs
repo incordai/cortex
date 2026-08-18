@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
     module::AutodiffModule,
     nn::loss::CrossEntropyLoss,

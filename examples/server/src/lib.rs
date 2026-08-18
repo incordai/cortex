@@ -1,6 +1,6 @@
 #![recursion_limit = "141"]
 
-use burn::{server::Channel, tensor::Device};
+use cortex::{server::Channel, tensor::Device};
 
 pub fn start() {
     let port = std::env::var("REMOTE_BACKEND_PORT")
@@ -10,5 +10,5 @@ pub fn start() {
         })
         .unwrap_or(3000);
 
-    burn::server::start(Device::default(), Channel::WebSocket { port });
+    cortex::server::start(Device::default(), Channel::WebSocket { port });
 }

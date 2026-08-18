@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     config::Config,
     data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
     optim::AdamConfig,
@@ -64,7 +64,7 @@ impl MetricsRenderer for CustomRenderer {
         // Nothing to do.
     }
 
-    fn register_metric(&mut self, _definition: burn::train::metric::MetricDefinition) {}
+    fn register_metric(&mut self, _definition: cortex::train::metric::MetricDefinition) {}
 }
 
 impl MetricsRendererEvaluation for CustomRenderer {

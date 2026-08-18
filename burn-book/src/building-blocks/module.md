@@ -5,7 +5,7 @@ derive function only generates the necessary methods to essentially act as a par
 your type, it makes no assumptions about how the forward pass is declared.
 
 ```rust, ignore
-use burn::module::Module;
+use cortex::module::Module;
 
 #[derive(Module, Debug)]
 pub struct PositionWiseFeedForward {
@@ -50,7 +50,7 @@ the `Module` derive, you need to be careful to achieve the behavior you want.
 
 These methods are available for all modules.
 
-| Burn API                             | PyTorch Equivalent                       |
+| Cortex API                             | PyTorch Equivalent                       |
 | ------------------------------------ | ---------------------------------------- |
 | `module.devices()`                   | N/A                                      |
 | `module.fork(device)`                | Similar to `module.to(device).detach()`  |
@@ -74,7 +74,7 @@ These methods are available for all modules.
 The `AutodiffModule` trait provides training-specific helpers for modules whose parameters are on an
 autodiff-enabled device, and vice-versa.
 
-| Burn API         | PyTorch Equivalent |
+| Cortex API         | PyTorch Equivalent |
 | ---------------- | ------------------ |
 | `module.valid()` | `module.eval()`    |
 | `module.train()` | `module.train()`   |
@@ -87,7 +87,7 @@ extending module functionalities is not as straightforward.
 
 The `map` and `visitor` methods are quite similar but serve different purposes. Mapping is used for
 potentially mutable operations where each parameter of a module can be updated to a new value. In
-Burn, optimizers are essentially just sophisticated module mappers. Visitors, on the other hand, are
+Cortex, optimizers are essentially just sophisticated module mappers. Visitors, on the other hand, are
 used when you don't intend to modify the module but need to retrieve specific information from it,
 such as the number of parameters or a list of devices in use.
 
@@ -135,9 +135,9 @@ pub struct Clamp {
 impl ModuleMapper for Clamp {
     fn map_float<const D: usize>(
         &mut self,
-        _id: burn::module::ParamId,
-        tensor: burn::prelude::Tensor<D>,
-    ) -> burn::prelude::Tensor<D> {
+        _id: cortex::module::ParamId,
+        tensor: cortex::prelude::Tensor<D>,
+    ) -> cortex::prelude::Tensor<D> {
         tensor.clamp(self.min, self.max)
     }
 }
@@ -158,9 +158,9 @@ implementation.
 impl ModuleMapper for Clamp {
     fn map_float<const D: usize>(
         &mut self,
-        _id: burn::module::ParamId,
-        tensor: burn::prelude::Tensor<D>,
-    ) -> burn::prelude::Tensor<D> {
+        _id: cortex::module::ParamId,
+        tensor: cortex::prelude::Tensor<D>,
+    ) -> cortex::prelude::Tensor<D> {
         let is_require_grad = tensor.is_require_grad();
 
         let mut tensor = tensor.detach().clamp(self.min, self.max);
@@ -182,7 +182,7 @@ state materializes the value returned by `Param::val()`. LoRA uses this mechanis
 structural base and attach trainable low-rank factors:
 
 ```rust, ignore
-use burn::module::{Lora, Module};
+use cortex::module::{Lora, Module};
 
 let model = model.apply_lora(Lora::new(8, 16.0));
 ```
@@ -203,7 +203,7 @@ reparameterized parameters. Use `Param::base()` to access the stored base direct
 
 ## Module Display
 
-Burn provides a simple way to display the structure of a module and its configuration at a glance.
+Cortex provides a simple way to display the structure of a module and its configuration at a glance.
 You can print the module to see its structure, which is useful for debugging and tracking changes
 across different versions of a module. (See the print output of the
 [Basic Workflow Model](../basic-workflow/model.md) example.)
@@ -226,7 +226,7 @@ pub struct PositionWiseFeedForward {
 impl ModuleDisplay for PositionWiseFeedForward {
     /// Custom settings for the display of the module.
     /// If `None` is returned, the default settings will be used.
-    fn custom_settings(&self) -> Option<burn::module::DisplaySettings> {
+    fn custom_settings(&self) -> Option<cortex::module::DisplaySettings> {
         DisplaySettings::new()
             // Will show all attributes (default is false)
             .with_show_all_attributes(false)
@@ -257,11 +257,11 @@ impl ModuleDisplay for PositionWiseFeedForward {
 
 ## Built-in Modules
 
-Burn comes with built-in modules that you can use to build your own modules.
+Cortex comes with built-in modules that you can use to build your own modules.
 
 ### General
 
-| Burn API            | PyTorch Equivalent                            |
+| Cortex API            | PyTorch Equivalent                            |
 | ------------------- | --------------------------------------------- |
 | `BatchNorm`         | `nn.BatchNorm1d`, `nn.BatchNorm2d` etc.       |
 | `Celu`              | `nn.CELU`                                     |
@@ -302,7 +302,7 @@ Burn comes with built-in modules that you can use to build your own modules.
 
 ### Convolutions
 
-| Burn API          | PyTorch Equivalent             |
+| Cortex API          | PyTorch Equivalent             |
 | ----------------- | ------------------------------ |
 | `Conv1d`          | `nn.Conv1d`                    |
 | `Conv2d`          | `nn.Conv2d`                    |
@@ -314,7 +314,7 @@ Burn comes with built-in modules that you can use to build your own modules.
 
 ### Pooling
 
-| Burn API            | PyTorch Equivalent     |
+| Cortex API            | PyTorch Equivalent     |
 | ------------------- | ---------------------- |
 | `AdaptiveAvgPool1d` | `nn.AdaptiveAvgPool1d` |
 | `AdaptiveAvgPool2d` | `nn.AdaptiveAvgPool2d` |
@@ -325,7 +325,7 @@ Burn comes with built-in modules that you can use to build your own modules.
 
 ### Interpolation
 
-| Burn API        | PyTorch Equivalent |
+| Cortex API        | PyTorch Equivalent |
 | --------------- | ------------------ |
 | `Interpolate1d` | `nn.Upsample`      |
 | `Interpolate2d` | `nn.Upsample`      |
@@ -350,7 +350,7 @@ Configuration is done via `Interpolate1dConfig` / `Interpolate2dConfig` with the
 
 ### RNNs
 
-| Burn API         | PyTorch Equivalent     |
+| Cortex API         | PyTorch Equivalent     |
 | ---------------- | ---------------------- |
 | `Gru`/`BiGru`    | `nn.GRU`               |
 | `Lstm`/`BiLstm`  | `nn.LSTM`              |
@@ -358,7 +358,7 @@ Configuration is done via `Interpolate1dConfig` / `Interpolate2dConfig` with the
 
 ### Transformer
 
-| Burn API             | PyTorch Equivalent      |
+| Cortex API             | PyTorch Equivalent      |
 | -------------------- | ----------------------- |
 | `MultiHeadAttention` | `nn.MultiheadAttention` |
 | `TransformerDecoder` | `nn.TransformerDecoder` |
@@ -368,7 +368,7 @@ Configuration is done via `Interpolate1dConfig` / `Interpolate2dConfig` with the
 
 ### Loss
 
-| Burn API                 | PyTorch Equivalent                |
+| Cortex API                 | PyTorch Equivalent                |
 | ------------------------ | --------------------------------- |
 | `BinaryCrossEntropyLoss` | `nn.BCELoss`                      |
 | `CosineEmbeddingLoss`    | `nn.CosineEmbeddingLoss`          |

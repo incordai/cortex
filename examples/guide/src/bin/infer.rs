@@ -1,5 +1,5 @@
 #![recursion_limit = "131"]
-use burn::{data::dataset::Dataset, prelude::*};
+use cortex::{data::dataset::Dataset, prelude::*};
 use guide::inference;
 
 fn main() {
@@ -12,7 +12,7 @@ fn main() {
     inference::infer(
         artifact_dir,
         device,
-        burn::data::dataset::vision::MnistDataset::test()
+        cortex::data::dataset::vision::MnistDataset::test()
             .get(42)
             .unwrap(),
     );

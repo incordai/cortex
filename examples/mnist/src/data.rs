@@ -1,6 +1,6 @@
 use std::{f32::consts::FRAC_PI_4, fmt::Display};
 
-use burn::{
+use cortex::{
     data::{
         dataloader::batcher::Batcher,
         dataset::{transform::Mapper, vision::MnistItem},

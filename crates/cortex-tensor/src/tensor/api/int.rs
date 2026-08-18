@@ -1,0 +1,263 @@
+use cortex_backend::{ElementConversion, Scalar, ops::IntTensorOps};
+use cortex_dispatch::Dispatch;
+
+use crate::{
+    Cast, Device, Float, Int, Shape, Tensor, TensorCreationOptions, TensorData, cartesian_grid,
+    ops::BridgeTensor,
+};
+
+use core::ops::Range;
+
+impl Tensor<1, Int> {
+    /// Returns a new integer tensor on the specified device.
+    ///
+    /// # Arguments
+    ///
+    /// * `range` - The range of values to generate.
+    /// * `device` - The device to create the tensor on.
+    pub fn arange(range: Range<i64>, options: impl Into<TensorCreationOptions>) -> Self {
+        let opt = options.into();
+        let dtype = opt.resolve_dtype::<Int>();
+        Tensor::new(arange_impl(range, opt.device, dtype))
+    }
+
+    /// Returns a new integer tensor on the specified device.
+    ///
+    /// # Arguments
+    ///
+    /// * `range` - The range of values to generate.
+    /// * `step` - The step between each value.
+    pub fn arange_step(
+        range: Range<i64>,
+        step: usize,
+        options: impl Into<TensorCreationOptions>,
+    ) -> Self {
+        let opt = options.into();
+        let dtype = opt.resolve_dtype::<Int>();
+        Tensor::new(arange_step_impl(range, step, opt.device, dtype))
+    }
+}
+
+impl<const D: usize> Tensor<D, Int> {
+    /// Create a tensor from integers (i32), placing it on a given device.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cortex_tensor::{Tensor, Int};
+    ///
+    /// let device = Default::default();
+    /// let _x: Tensor<1, Int> = Tensor::from_ints([1, 2], &device);
+    /// let _y: Tensor<2, Int> = Tensor::from_ints([[1, 2], [3, 4]], &device);
+    /// ```
+    pub fn from_ints<A: Into<TensorData>>(ints: A, device: &Device) -> Self {
+        Self::from_data(ints.into().convert::<i32>(), device)
+    }
+
+    /// Returns a new tensor with the same shape and device as the current tensor and the data
+    /// cast to Float.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cortex_tensor::{Int, Tensor};
+    ///
+    /// let device = Default::default();
+    /// let int_tensor = Tensor::<1, Int>::arange(0..5, &device);
+    /// let float_tensor = int_tensor.float();
+    /// ```
+    pub fn float(self) -> Tensor<D, Float> {
+        let device = self.device();
+        Tensor::new(int_to_float_impl(self.primitive, device))
+    }
+
+    /// Generates a cartesian grid for the given tensor shape on the specified device.
+    /// The generated tensor is of dimension `D2 = D + 1`, where each element at dimension D contains the cartesian grid coordinates for that element.
+    ///
+    /// # Arguments
+    ///
+    /// * `shape` - The shape specifying the dimensions of the tensor.
+    /// * `device` - The device to create the tensor on.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `D2` is not equal to `D+1`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    ///    use cortex_tensor::Int;
+    ///    use cortex_tensor::{Shape, Tensor};
+    /// let device = Default::default();
+    /// let result: Tensor<3, _> = Tensor::<2, Int>::cartesian_grid([2, 3], &device);
+    /// println!("{}", result);
+    /// ```
+    pub fn cartesian_grid<S: Into<Shape>, const D2: usize>(
+        shape: S,
+        device: &Device,
+    ) -> Tensor<D2, Int> {
+        cartesian_grid::<S, D, D2>(shape, device)
+    }
+
+    /// Applies element wise square operation.
+    ///
+    #[cfg_attr(doc, doc = r#"$y_i = x_i * x_i$"#)]
+    #[cfg_attr(not(doc), doc = "`y_i = x_i * x_i`")]
+    pub fn square(self) -> Self {
+        Self::new(square_impl(self.primitive))
+    }
+
+    /// Applies the bitwise logical and operation with each bit representing the integer.
+    pub fn bitwise_and(self, other: Self) -> Self {
+        Self::new(bitwise_and_impl(self.primitive, other.primitive))
+    }
+
+    /// Applies the bitwise logical or operation with another tensor.
+    pub fn bitwise_or(self, other: Self) -> Self {
+        Self::new(bitwise_or_impl(self.primitive, other.primitive))
+    }
+
+    /// Applies the bitwise logical xor operation with another tensor.
+    pub fn bitwise_xor(self, other: Self) -> Self {
+        Self::new(bitwise_xor_impl(self.primitive, other.primitive))
+    }
+
+    /// Applies the bitwise logical not operation.
+    pub fn bitwise_not(self) -> Self {
+        Self::new(bitwise_not_impl(self.primitive))
+    }
+
+    /// Applies the bitwise logical and operation with each bit in the scalar and the integers in the tensor.
+    pub fn bitwise_and_scalar(self, other: impl ElementConversion) -> Self {
+        let other = Scalar::new(other, &self.dtype());
+        Self::new(bitwise_and_scalar_impl(self.primitive, other))
+    }
+
+    /// Applies the bitwise logical or operation with each bit in the scalar and the integers in the tensor.
+    pub fn bitwise_or_scalar(self, other: impl ElementConversion) -> Self {
+        let other = Scalar::new(other, &self.dtype());
+        Self::new(bitwise_or_scalar_impl(self.primitive, other))
+    }
+
+    /// Applies bitwise logical xor operation with each bit in the scalar and the integers in the tensor.
+    pub fn bitwise_xor_scalar(self, other: impl ElementConversion) -> Self {
+        let other = Scalar::new(other, &self.dtype());
+        Self::new(bitwise_xor_scalar_impl(self.primitive, other))
+    }
+
+    /// Applies the bitwise left shift operation with the integers in the tensor.
+    pub fn bitwise_left_shift(self, other: Self) -> Self {
+        Self::new(bitwise_left_shift_impl(self.primitive, other.primitive))
+    }
+
+    /// Applies the bitwise right shift operation with the integers in the tensor.
+    pub fn bitwise_right_shift(self, other: Self) -> Self {
+        Self::new(bitwise_right_shift_impl(self.primitive, other.primitive))
+    }
+
+    /// Applies the bitwise left shift operation with the scalar.
+    pub fn bitwise_left_shift_scalar(self, other: impl ElementConversion) -> Self {
+        let other = Scalar::new(other, &self.dtype());
+        Self::new(bitwise_left_shift_scalar_impl(self.primitive, other))
+    }
+
+    /// Applies the bitwise right shift operation with the scalar.
+    pub fn bitwise_right_shift_scalar(self, other: impl ElementConversion) -> Self {
+        let other = Scalar::new(other, &self.dtype());
+        Self::new(bitwise_right_shift_scalar_impl(self.primitive, other))
+    }
+
+    /// Converts a tensor to the specified data type.
+    ///
+    /// Supports both within-kind casting (e.g., `IntDType::I64`) and cross-kind casting
+    /// (e.g., `FloatDType::F32` to produce a float tensor).
+    ///
+    /// This is a no-op when casting to the current dtype within the same kind.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cortex_tensor::{Tensor, Int, IntDType, FloatDType};
+    ///
+    /// let device = Default::default();
+    /// let int_tensor = Tensor::<1, Int>::arange(0..5, &device);
+    ///
+    /// // Within-kind cast (int to int)
+    /// let i64_tensor = int_tensor.clone().cast(IntDType::I64);
+    ///
+    /// // Cross-kind cast (int to float)
+    /// let float_tensor = int_tensor.cast(FloatDType::F32);
+    /// ```
+    #[must_use]
+    pub fn cast<T: Cast<D, Int>>(self, dtype: T) -> Tensor<D, T::OutputKind> {
+        T::cast(self, dtype)
+    }
+}
+
+// =========================================================================
+// Non-generic implementation helpers (outlined from the generic API).
+// See the crate-level docs for the rationale behind this pattern.
+// =========================================================================
+
+fn arange_impl(range: Range<i64>, device: Device, dtype: cortex_std::DType) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::int_arange(
+        range,
+        device.as_dispatch(),
+        dtype.into(),
+    ))
+}
+
+fn arange_step_impl(
+    range: Range<i64>,
+    step: usize,
+    device: Device,
+    dtype: cortex_std::DType,
+) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::int_arange_step(
+        range,
+        step,
+        device.as_dispatch(),
+        dtype.into(),
+    ))
+}
+
+fn int_to_float_impl(p: BridgeTensor, device: Device) -> BridgeTensor {
+    let out_dtype = device.settings().float_dtype;
+    BridgeTensor::float(Dispatch::int_into_float(p.into(), out_dtype))
+}
+fn square_impl(tensor: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::int_square(tensor.into()))
+}
+fn bitwise_and_impl(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_and(lhs.into(), rhs.into()))
+}
+fn bitwise_or_impl(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_or(lhs.into(), rhs.into()))
+}
+fn bitwise_xor_impl(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_xor(lhs.into(), rhs.into()))
+}
+fn bitwise_not_impl(p: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_not(p.into()))
+}
+fn bitwise_and_scalar_impl(p: BridgeTensor, other: Scalar) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_and_scalar(p.into(), other))
+}
+fn bitwise_or_scalar_impl(p: BridgeTensor, other: Scalar) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_or_scalar(p.into(), other))
+}
+fn bitwise_xor_scalar_impl(p: BridgeTensor, other: Scalar) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_xor_scalar(p.into(), other))
+}
+fn bitwise_left_shift_impl(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_left_shift(lhs.into(), rhs.into()))
+}
+fn bitwise_right_shift_impl(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_right_shift(lhs.into(), rhs.into()))
+}
+fn bitwise_left_shift_scalar_impl(p: BridgeTensor, other: Scalar) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_left_shift_scalar(p.into(), other))
+}
+fn bitwise_right_shift_scalar_impl(p: BridgeTensor, other: Scalar) -> BridgeTensor {
+    BridgeTensor::int(Dispatch::bitwise_right_shift_scalar(p.into(), other))
+}

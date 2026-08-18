@@ -1,0 +1,166 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science", "no-std", "embedded", "wasm"]
+description = "Flexible and Comprehensive Deep Learning Framework in Rust"
+documentation = "https://docs.rs/burn"
+edition.workspace = true
+keywords = [
+    "deep-learning",
+    "machine-learning",
+    "tensor",
+    "pytorch",
+    "autodiff",
+]
+license.workspace = true
+name = "cortex"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn"
+rust-version = "1.95"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "rl",
+    "std",
+    "optim",
+    "cortex-core/default",
+    "cortex-train?/default",
+    "cortex-nn/default",
+    "cortex-optim?/default",
+    "cortex-autodiff?/default",
+    "cortex-vision?/default",
+]
+doc = [
+    "default",
+    "train",
+    "cortex-core/doc",
+    "cortex-train/doc",
+    "cortex-store?/std",
+    "cortex-nn/doc",
+    "cortex-optim?/doc",
+    "cortex-autodiff?/std",
+]
+std = [
+    "cortex-core/std",
+    "cortex-store?/std",
+    "cortex-nn/std",
+    "cortex-optim?/std",
+    "cortex-autodiff?/std",
+]
+tracing = [
+    "cubecl?/tracing",
+    "cortex-core/tracing",
+    "cortex-vision?/tracing",
+    "cortex-nn/tracing",
+    "cortex-optim?/tracing",
+]
+
+
+network = ["cortex-core/network"]
+
+# Training with full features
+train = ["cortex-train", "optim", "dataset"]
+
+## Includes the Text UI (progress bars, metric plots)
+tui = ["cortex-train?/tui"]
+
+##  Includes system info metrics (CPU/GPU usage, etc)
+metrics = ["cortex-train?/sys-metrics"]
+
+# Datasets
+dataset = ["cortex-core/dataset"]
+
+sqlite = ["cortex-core/sqlite"]
+sqlite-bundled = ["cortex-core/sqlite-bundled"]
+
+# Model storage and serialization (SafeTensors, PyTorch interop)
+store = ["cortex-store"]
+
+# Enable safetensors in cortex-store.
+safetensors = ["store", "cortex-store?/safetensors"]
+# Enable pytorch in cortex-store.
+pytorch = ["store", "cortex-store?/pytorch"]
+
+# CubeCL re-export
+cubecl = ["dep:cubecl"]
+
+audio = ["cortex-core/audio"]
+vision = ["cortex-core/vision", "cortex-vision"]
+rl = ["dep:cortex-rl", "cortex-train?/rl"]
+
+# Optimizer
+optim = ["cortex-optim", "autodiff"]
+
+# Backend
+ir = ["cortex-ir"]
+autodiff = ["cortex-core/autodiff", "cortex-autodiff"]
+fusion = ["ir", "cortex-core/fusion", "cortex-vision?/fusion"]
+
+## Backend features
+accelerate = ["cortex-candle?/accelerate", "cortex-ndarray?/blas-accelerate"]
+autotune = ["cortex-core/autotune"]
+autotune-checks = ["cortex-core/autotune-checks"]
+blas-netlib = ["cortex-ndarray?/blas-netlib"]
+openblas = ["cortex-ndarray?/blas-openblas"]
+openblas-system = ["cortex-ndarray?/blas-openblas-system"]
+simd = ["cortex-ndarray?/simd", "cortex-flex?/simd"]
+
+# cortex-flex opt-in CPU codegen paths.
+x86-v4 = ["cortex-flex?/x86-v4"]
+apple-amx = ["cortex-flex?/apple-amx"]
+
+template = ["cortex-wgpu?/template"]
+router = ["cortex-router", "ir"]
+remote = ["cortex-core/remote"]
+remote-server = ["cortex-core/remote-server"]
+remote-websocket = ["cortex-core/remote-websocket"]
+
+candle = ["cortex-candle"]
+candle-cuda = ["candle", "cortex-candle/cuda"]
+candle-metal = ["cortex-candle?/metal"]
+cuda = ["cortex-cuda", "cortex-core/cuda", "cortex-vision?/cuda"]
+rocm = ["cortex-rocm", "cortex-core/rocm", "cortex-vision?/rocm"]
+flex = ["cortex-flex", "cortex-core/flex", "cortex-vision?/flex"]
+ndarray = ["cortex-ndarray", "cortex-core/ndarray"]
+tch = ["cortex-tch", "cortex-core/tch", "cortex-vision?/tch"]
+vulkan = ["wgpu", "cortex-core/vulkan", "cortex-vision?/vulkan"]
+webgpu = ["wgpu", "cortex-core/webgpu", "cortex-vision?/webgpu"]
+metal = ["wgpu", "cortex-core/metal", "cortex-vision?/metal"]
+wgpu = ["cortex-wgpu", "cortex-core/wgpu", "cortex-vision?/wgpu"]
+cpu = ["cortex-cpu", "cortex-core/cpu", "cortex-vision?/cpu"]
+
+# Backend extensions
+extension = ["cortex-core/extension"]
+
+[dependencies]
+
+# ** Please make sure all dependencies support no_std when std is disabled **
+
+cortex-core = { workspace = true }
+cortex-train = { workspace = true, optional = true }
+cortex-store = { workspace = true, optional = true }
+cortex-nn = { workspace = true }
+cortex-optim = { workspace = true, optional = true }
+cortex-rl = { workspace = true, optional = true }
+cortex-vision = { workspace = true, optional = true }
+cortex-std = { workspace = true }
+
+# Backends
+# TODO: clean up from root; backends should be exposed from the extension
+cortex-candle = { workspace = true, optional = true, features = ["default"] }
+cortex-cuda = { workspace = true, optional = true }
+cortex-cpu = { workspace = true, optional = true }
+cortex-rocm = { workspace = true, optional = true }
+cortex-flex = { workspace = true, optional = true }
+cortex-ndarray = { workspace = true, optional = true }
+cortex-router = { workspace = true, optional = true }
+cortex-tch = { workspace = true, optional = true }
+cortex-wgpu = { workspace = true, optional = true }
+cortex-ir = { workspace = true, optional = true }
+cortex-autodiff = { workspace = true, optional = true }
+cortex-dispatch = { workspace = true, optional = true }
+
+cubecl = { workspace = true, optional = true }

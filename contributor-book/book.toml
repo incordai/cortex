@@ -6,11 +6,11 @@ authors = [
     "Dilshod Tadjibaev",
     "Guillaume Lagrange",
     "Joshua Ferguson",
-    "The Burn Community",
+    "The Cortex Community",
 ]
 language = "en"
 src = "src"
-title = "The Burn Contributor Book 🔥"
+title = "The Cortex Contributor Book 🔥"
 
 [output.html]
 mathjax-support = true

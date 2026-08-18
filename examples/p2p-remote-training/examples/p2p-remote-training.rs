@@ -5,11 +5,11 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("server") => {
-            let topic = args.get(2).map(String::as_str).unwrap_or("burn-default");
+            let topic = args.get(2).map(String::as_str).unwrap_or("cortex-default");
             run_server(topic).await;
         }
         Some("client") => {
-            let topic = args.get(2).map(String::as_str).unwrap_or("burn-default");
+            let topic = args.get(2).map(String::as_str).unwrap_or("cortex-default");
             run_client(topic).await;
         }
         _ => {

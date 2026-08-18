@@ -1,6 +1,6 @@
 # Asynchronous Execution
 
-Most Burn backends execute tensor operations in an asynchronous manner. However, the async notation
+Most Cortex backends execute tensor operations in an asynchronous manner. However, the async notation
 is often not required for most tensor operations, privileging the simplicity of sync Rust.
 
 There are only a few operations that trigger synchronization of the backend, and it is very
@@ -9,7 +9,7 @@ important to correctly handle those to optimize hardware utilization. Those oper
 triggering a synchronization, like `to_device` for some backends.
 
 There are several ways to minimize synchronization overhead, one of which is to batch sync
-operations into a single transaction. Burn provides a high-level composable API to build
+operations into a single transaction. Cortex provides a high-level composable API to build
 transactions, which will only trigger a single sync on the device.
 
 For instance, it is often used when collecting metrics during training:

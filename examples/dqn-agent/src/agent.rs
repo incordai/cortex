@@ -1,15 +1,15 @@
-use burn::module::Module;
-use burn::store::{ModuleRecord, RecordError};
-use burn::rl::{
+use cortex::module::Module;
+use cortex::store::{ModuleRecord, RecordError};
+use cortex::rl::{
     Batchable, LearnerTransitionBatch, Policy, PolicyLearner, PolicyState, RLTrainOutput,
     SliceAccess,
 };
-use burn::tensor::activation::softmax;
-use burn::tensor::{Bytes, Device, Int, Transaction};
-use burn::train::ItemLazy;
-use burn::train::checkpoint::{Checkpoint, CheckpointerError};
-use burn::train::metric::{Adaptor, LossInput};
-use burn::{
+use cortex::tensor::activation::softmax;
+use cortex::tensor::{Bytes, Device, Int, Transaction};
+use cortex::train::ItemLazy;
+use cortex::train::checkpoint::{Checkpoint, CheckpointerError};
+use cortex::train::metric::{Adaptor, LossInput};
+use cortex::{
     Tensor,
     config::Config,
     module::AutodiffModule,
@@ -371,7 +371,7 @@ impl<M: DiscreteActionModel> Policy for DQN<M> {
     }
 }
 
-/// The learner state, persisted as a single burnpack checkpoint file.
+/// The learner state, persisted as a single cortexpack checkpoint file.
 ///
 /// It bundles the policy and target [`ModuleRecord`]s together with the optimizer
 /// [`OptimizerRecord`]. All three are device-free; the optimizer tensors are re-materialized on a

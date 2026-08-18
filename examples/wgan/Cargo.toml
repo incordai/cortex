@@ -7,12 +7,12 @@ edition.workspace = true
 workspace = true
 
 [features]
-flex = ["burn/flex"]
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
-cuda = ["burn/cuda"]
+flex = ["cortex/flex"]
+tch-cpu = ["cortex/tch"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
+cuda = ["cortex/cuda"]
 
 [dependencies]
-burn = { workspace = true, features=["default", "train", "vision"] }
+cortex = { workspace = true, features=["default", "train", "vision"] }
 image = { workspace = true }

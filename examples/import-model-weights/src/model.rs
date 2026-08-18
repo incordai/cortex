@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     nn::{
         BatchNorm, BatchNormConfig, Linear, LinearConfig,
         conv::{Conv2d, Conv2dConfig},

@@ -10,15 +10,15 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["burn/dataset", "burn/sqlite-bundled"]
-flex = ["burn/flex"]
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
-remote = ["burn/remote"]
+default = ["cortex/dataset", "cortex/sqlite-bundled"]
+flex = ["cortex/flex"]
+tch-cpu = ["cortex/tch"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
+remote = ["cortex/remote"]
 
 [dependencies]
-burn = { workspace = true, features = ["default", "train"] }
+cortex = { workspace = true, features = ["default", "train"] }
 
 # Serialization
 log = { workspace = true }

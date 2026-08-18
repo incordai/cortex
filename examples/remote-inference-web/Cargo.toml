@@ -5,7 +5,7 @@ license = "MIT OR Apache-2.0"
 name = "remote-inference-web"
 publish = false
 version.workspace = true
-description = "Run a Burn model in the browser with computation executed on a remote Iroh GPU peer"
+description = "Run a Cortex model in the browser with computation executed on a remote Iroh GPU peer"
 
 [lints]
 workspace = true
@@ -17,10 +17,10 @@ crate-type = ["cdylib"]
 default = ["flex"]
 
 # Local fallback backend, only for a sensible `Device::default()`; compute runs on the remote.
-flex = ["burn/flex"]
+flex = ["cortex/flex"]
 
 [dependencies]
-burn = { workspace = true, features = ["extension", "remote"] }
+cortex = { workspace = true, features = ["extension", "remote"] }
 blake3 = { version = "1", default-features = false }
 console_error_panic_hook = { workspace = true }
 iroh = { workspace = true }

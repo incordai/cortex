@@ -1,11 +1,11 @@
-use burn::tensor::Device;
+use cortex::tensor::Device;
 use simple_regression::{inference, training};
 
-static ARTIFACT_DIR: &str = "/tmp/burn-example-regression";
+static ARTIFACT_DIR: &str = "/tmp/cortex-example-regression";
 
 #[cfg(feature = "flex")]
 mod flex {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         super::run(Device::flex());
@@ -14,7 +14,7 @@ mod flex {
 
 #[cfg(feature = "tch-gpu")]
 mod tch_gpu {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         #[cfg(not(target_os = "macos"))]
@@ -28,7 +28,7 @@ mod tch_gpu {
 
 #[cfg(feature = "wgpu")]
 mod wgpu {
-    use burn::tensor::{Device, DeviceKind};
+    use cortex::tensor::{Device, DeviceKind};
 
     pub fn run() {
         super::run(Device::wgpu(DeviceKind::DefaultDevice));
@@ -37,7 +37,7 @@ mod wgpu {
 
 #[cfg(feature = "tch-cpu")]
 mod tch_cpu {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
     pub fn run() {
         super::run(Device::libtorch());
     }
@@ -45,7 +45,7 @@ mod tch_cpu {
 
 // #[cfg(feature = "remote")]
 // mod remote {
-//     use burn::backend::{RemoteBackend, remote::RemoteDevice};
+//     use cortex::backend::{RemoteBackend, remote::RemoteDevice};
 
 //     pub fn run() {
 //         let device = RemoteDevice::default();

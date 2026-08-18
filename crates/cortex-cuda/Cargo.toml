@@ -1,0 +1,42 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "CUDA backend for the Cortex framework"
+documentation = "https://docs.rs/burn-cuda"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "gpu", "cuda"]
+license.workspace = true
+name = "cortex-cuda"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-cuda"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std", "fusion", "autotune", "cortex-cubecl/default", "cubecl/default"]
+doc = ["cortex-cubecl/doc"]
+std = ["cortex-cubecl/std", "cubecl/std"]
+tracing = [
+    "cortex-backend/tracing",
+    "cortex-cubecl/tracing",
+    "cortex-fusion?/tracing",
+    "cubecl/tracing",
+]
+
+fusion = ["cortex-fusion", "cortex-cubecl/fusion"]
+autotune = ["cortex-cubecl/autotune"]
+autotune-checks = ["cortex-cubecl/autotune-checks"]
+
+[dependencies]
+cortex-fusion = { workspace = true, optional = true, features = ["default"] }
+cortex-cubecl = { workspace = true }
+cortex-backend = { workspace = true, features = [
+    "cubecl-cuda",
+] }
+cubecl = { workspace = true, features = ["cuda"] }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     nn::{
         BatchNorm, PaddingConfig2d,
         pool::{MaxPool2d, MaxPool2dConfig},

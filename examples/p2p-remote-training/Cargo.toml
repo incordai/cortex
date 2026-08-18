@@ -11,7 +11,7 @@ description = "P2P distributed training via Iroh transport with topic-based disc
 workspace = true
 
 [dependencies]
-burn = { workspace = true, features = ["remote-server", "flex"] }
+cortex = { workspace = true, features = ["remote-server", "flex"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 iroh = { workspace = true }
 blake3 = "1"

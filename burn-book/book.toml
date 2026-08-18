@@ -10,7 +10,7 @@ authors = [
 ]
 language = "en"
 src = "src"
-title = "The Burn Book 🔥"
+title = "The Cortex Book 🔥"
 
 [output.html]
 mathjax-support = true

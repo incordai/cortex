@@ -1,14 +1,14 @@
 # Optimizer
 
-Optimizers update a module's trainable parameters from their gradients. Burn provides common
-optimizers such as SGD, Adam, AdamW, AdaGrad, RMSProp, Adan, and Muon in `burn-optim`, re-exported
-under `burn::optim`.
+Optimizers update a module's trainable parameters from their gradients. Cortex provides common
+optimizers such as SGD, Adam, AdamW, AdaGrad, RMSProp, Adan, and Muon in `cortex-optim`, re-exported
+under `cortex::optim`.
 
 Most applications interact with a [`ModuleOptimizer`](#moduleoptimizer). Create one from an
 optimizer configuration, then pass it to a `Learner` or call `step` in a custom training loop:
 
 ```rust, ignore
-use burn::optim::AdamConfig;
+use cortex::optim::AdamConfig;
 
 let optimizer = AdamConfig::new().init();
 let learner = Learner::new(model, optimizer, learning_rate);
@@ -18,7 +18,7 @@ Configuration builders expose optimizer-specific options such as momentum, weigh
 and gradient clipping. For example:
 
 ```rust, ignore
-use burn::optim::{AdamWConfig, grad_clipping::GradientClippingConfig};
+use cortex::optim::{AdamWConfig, grad_clipping::GradientClippingConfig};
 
 let optimizer = AdamWConfig::new()
     .with_weight_decay(5e-5)
@@ -33,7 +33,7 @@ parameter IDs. `ModuleOptimizer::step` consumes those gradients, updates its sta
 updated module:
 
 ```rust, ignore
-use burn::optim::{AdamConfig, GradientsParams};
+use cortex::optim::{AdamConfig, GradientsParams};
 
 let mut optimizer = AdamConfig::new().init();
 
@@ -45,7 +45,7 @@ let gradients = GradientsParams::from_grads(gradients, &model);
 model = optimizer.step(learning_rate.into(), model, gradients);
 ```
 
-Unlike optimizers that store gradients on every parameter, Burn returns gradients from `backward`.
+Unlike optimizers that store gradients on every parameter, Cortex returns gradients from `backward`.
 There is no separate `zero_grad` call: the gradient container is consumed by `step`. For gradient
 accumulation, use `GradientsAccumulator` before calling the optimizer.
 
@@ -85,7 +85,7 @@ Groups can be combined and can exclude another group. For example, this selects 
 for its biases:
 
 ```rust, ignore
-use burn::module::ParamGroup;
+use cortex::module::ParamGroup;
 
 let encoder = ParamGroup::from_predicate("encoder")
     .exclude(ParamGroup::from_predicate("bias"));
@@ -135,7 +135,7 @@ Optimizer authors implement the per-tensor `Optimizer` trait. Its associated sta
 the parameter rank and implements `RecordState`:
 
 ```rust, ignore
-use burn::{
+use cortex::{
     optim::{LearningRate, ModuleOptimizer, Optimizer, RecordState},
     tensor::{Device, Tensor},
 };

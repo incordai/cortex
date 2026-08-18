@@ -11,14 +11,14 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["burn/std", "burn/tui"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
-metal = ["burn/metal"]
-vulkan = ["burn/vulkan"]
+default = ["cortex/std", "cortex/tui"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
+metal = ["cortex/metal"]
+vulkan = ["cortex/vulkan"]
 
 [dependencies]
-burn = { workspace = true, features = ["train", "vision", "network"] }
+cortex = { workspace = true, features = ["train", "vision", "network"] }
 
 # File download
 flate2 = { workspace = true }

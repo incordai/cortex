@@ -11,11 +11,11 @@ workspace = true
 
 [features]
 default = ["webgpu"]
-cuda = ["burn/cuda"]
-webgpu = ["burn/webgpu"]
-vulkan = ["burn/vulkan"]
-rocm = ["burn/rocm"]
-flex = ["burn/flex"]
+cuda = ["cortex/cuda"]
+webgpu = ["cortex/webgpu"]
+vulkan = ["cortex/vulkan"]
+rocm = ["cortex/rocm"]
+flex = ["cortex/flex"]
 
 [dependencies]
-burn = { workspace = true, features = ["default", "remote-server", "remote-websocket"] }
+cortex = { workspace = true, features = ["default", "remote-server", "remote-websocket"] }

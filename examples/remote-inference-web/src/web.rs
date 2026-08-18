@@ -8,15 +8,15 @@ use alloc::vec::Vec;
 
 use wasm_bindgen::prelude::*;
 
-use burn::backend::remote::{EndpointId, RemoteSecret};
-use burn::module::Module;
-use burn::store::ModuleRecord;
-use burn::tensor::{Bytes, Device, Tensor, activation::softmax};
+use cortex::backend::remote::{EndpointId, RemoteSecret};
+use cortex::module::Module;
+use cortex::store::ModuleRecord;
+use cortex::tensor::{Bytes, Device, Tensor, activation::softmax};
 use iroh::{Endpoint, endpoint::presets};
 
 use crate::model::Model;
 
-/// Trained MNIST parameters in the burnpack format, produced by the `mnist` example.
+/// Trained MNIST parameters in the cortexpack format, produced by the `mnist` example.
 static STATE_ENCODED: &[u8] = include_bytes!("../model.bpk");
 
 #[wasm_bindgen(start)]
@@ -27,7 +27,7 @@ pub fn start() {
 /// Derive the server's identity from the shared topic; both ends compute the same id from the same
 /// string (a demo convenience; see the native example for the security note).
 fn server_id(topic: &str) -> EndpointId {
-    let hash = blake3::hash(format!("burn-p2p:{topic}").as_bytes());
+    let hash = blake3::hash(format!("cortex-p2p:{topic}").as_bytes());
     RemoteSecret::from_bytes(*hash.as_bytes()).id()
 }
 

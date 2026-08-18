@@ -8,7 +8,7 @@ struct whose responsibility is to apply an optimizer to the model. The output st
 metrics calculated during the training. Therefore it should include all the necessary information to
 calculate any metric that you want for a task.
 
-Burn provides two basic output types: `ClassificationOutput` and `RegressionOutput`. They implement
+Cortex provides two basic output types: `ClassificationOutput` and `RegressionOutput`. They implement
 the necessary trait to be used with metrics. It is possible to create your own item, but it is
 beyond the scope of this guide.
 
@@ -19,7 +19,7 @@ Since the MNIST task is a classification problem, we will use the `Classificatio
 #     data::{MnistBatch, MnistBatcher},
 #     model::{Model, ModelConfig},
 # };
-# use burn::{
+# use cortex::{
 #     data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
 #     nn::loss::CrossEntropyLossConfig,
 #     optim::AdamConfig,
@@ -64,7 +64,7 @@ for our model.
 #     data::{MnistBatch, MnistBatcher},
 #     model::{Model, ModelConfig},
 # };
-# use burn::{
+# use cortex::{
 #     data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
 #     nn::loss::CrossEntropyLossConfig,
 #     optim::AdamConfig,
@@ -129,7 +129,7 @@ this guide, the previous code snippet might be a lot to take in at first.
 
 In the example above, we implement the `TrainStep` and `InferenceStep` trait for our `Model` struct,
 which contains runtime-dispatched tensors as covered before. These traits are provided by
-`burn::train` and define a common `step` method that should be implemented for all structs. Since
+`cortex::train` and define a common `step` method that should be implemented for all structs. Since
 the trait is generic over the input and output types, the trait implementation must specify the
 concrete types used. This is where the additional type constraints appear
 `<MnistBatch, ClassificationOutput>`. As we saw previously, the concrete input type for the batch is
@@ -151,7 +151,7 @@ Let us move on to establishing the practical training configuration.
 #     data::{MnistBatch, MnistBatcher},
 #     model::{Model, ModelConfig},
 # };
-# use burn::{
+# use cortex::{
 #     data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
 #     nn::loss::CrossEntropyLossConfig,
 #     optim::AdamConfig,
@@ -271,7 +271,7 @@ selected runtime device is cloned and switched to autodiff mode before the model
 Next, we create a supervised training runner with the dataloaders for training and validation and we
 register the accuracy and loss metric on both training and validation steps. We also enable
 checkpointing with `with_default_checkpointers()`, which periodically saves the model, optimizer,
-and learning rate scheduler state to burnpack files under the experiment directory so training can
+and learning rate scheduler state to cortexpack files under the experiment directory so training can
 be resumed.
 
 For the sake of simplicity in this example, we employ the test set as the validation set; however,
@@ -290,6 +290,6 @@ Once the learner and supervised training instance are created, we can call `trai
 provide the learner.
 
 Finally, the trained model is returned by the `launch` method. The trained weights are then saved by
-taking a record with `into_record()` and calling `save`, which writes a burnpack (`.bpk`) file. A
+taking a record with `into_record()` and calling `save`, which writes a cortexpack (`.bpk`) file. A
 record holds plain tensor data, so any backend, regardless of precision, can load recorded weights
 of any kind.

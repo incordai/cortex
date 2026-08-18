@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use burn::data::dataloader::DataLoaderBuilder;
-use burn::data::dataset::transform::SamplerDataset;
-use burn::module::Lora;
-use burn::prelude::*;
-use burn::train::metric::{
+use cortex::data::dataloader::DataLoaderBuilder;
+use cortex::data::dataset::transform::SamplerDataset;
+use cortex::module::Lora;
+use cortex::prelude::*;
+use cortex::train::metric::{
     AccuracyMetric, CudaMetric, IterationSpeedMetric, LearningRateMetric, LossMetric,
 };
-use burn::train::{ExecutionStrategy, Learner, SupervisedTraining};
+use cortex::train::{ExecutionStrategy, Learner, SupervisedTraining};
 
 use crate::{
     TextClassificationDataset,

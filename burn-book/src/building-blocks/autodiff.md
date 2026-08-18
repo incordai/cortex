@@ -1,11 +1,11 @@
 # Autodiff
 
-Burn tensors support automatic differentiation, which is essential for training neural networks.
+Cortex tensors support automatic differentiation, which is essential for training neural networks.
 Autodiff is selected at runtime by creating an autodiff-enabled device rather than by adding an
 `Autodiff<B>` type parameter to tensors and modules.
 
 ```rust, ignore
-use burn::tensor::{Device, Tensor};
+use cortex::tensor::{Device, Tensor};
 
 let device = Device::wgpu(Default::default()).autodiff();
 let tensor = Tensor::<2>::ones([2, 2], &device).require_grad();
@@ -24,7 +24,7 @@ optimizations when a gradient is consumed only once.
 Note that some functions will always be available even if the tensor is not on an autodiff-enabled
 device. In such cases, those functions will do nothing.
 
-| Burn API                                | PyTorch Equivalent           |
+| Cortex API                                | PyTorch Equivalent           |
 | --------------------------------------- | ---------------------------- |
 | `tensor.detach()`                       | `tensor.detach()`            |
 | `tensor.require_grad()`                 | `tensor.requires_grad_()`    |
@@ -33,7 +33,7 @@ device. In such cases, those functions will do nothing.
 
 ## Difference with PyTorch
 
-The way Burn handles gradients is different from PyTorch. First, when calling `backward`, each
+The way Cortex handles gradients is different from PyTorch. First, when calling `backward`, each
 parameter doesn't have its `grad` field updated. Instead, the backward pass returns all the
 calculated gradients in a container. This approach offers numerous benefits, such as the ability to
 easily send gradients to other threads.
@@ -53,7 +53,7 @@ torch.no_grad():
    ...
 ```
 
-With Burn, tensors shouldn't be on an autodiff device for inference, and you can call
+With Cortex, tensors shouldn't be on an autodiff device for inference, and you can call
 `inner()` to obtain the inner tensor, which is useful for validation.
 
 ```rust, ignore
@@ -73,7 +73,7 @@ fn example_inference(tensor: Tensor<2>) {
 ## Gradients with Optimizers
 
 We've seen how gradients can be used with tensors, but the process is a bit different when working
-with optimizers from `burn-optim`. To work with the `Module` trait, a translation step is required to
+with optimizers from `cortex-optim`. To work with the `Module` trait, a translation step is required to
 link tensor parameters with their gradients. This step is necessary to easily support gradient
 accumulation and training on multiple devices, where each module can be forked and run on different
 devices in parallel. The [Optimizer](./optimizer.md) section explains how those gradients update

@@ -1,0 +1,45 @@
+[package]
+authors = [
+    "laggui <lagrange.guillaume.1@gmail.com>",
+    "nathanielsimard <nathaniel.simard.42@gmail.com>",
+]
+categories = ["science"]
+description = "Multi-backend router decorator for the Cortex framework"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "data"]
+license.workspace = true
+name = "cortex-router"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-router"
+documentation = "https://docs.rs/burn-router"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = ["cortex-backend/std", "cortex-std/std", "cortex-ir/std"]
+# Client-side operation fusion / caching for router backends (e.g. the remote backend). Requires
+# std (the fusion engine uses threads).
+fusion = ["std", "dep:cortex-fusion", "dep:serde"]
+doc = ["default"]
+tracing = ["cortex-backend/tracing", "cortex-ir/tracing", "cortex-std/tracing"]
+
+[dependencies]
+cortex-ir = { workspace = true }
+cortex-backend = { workspace = true }
+cortex-fusion = { workspace = true, optional = true }
+cortex-std = { workspace = true }
+hashbrown = { workspace = true }
+spin = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Use path instead of workspace dep (which specifies a version, creating a circular publish dependency chain)
+cortex-flex = { path = "../cortex-flex", features = ["default"] }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

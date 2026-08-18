@@ -1,7 +1,7 @@
 use crate::FloatTensor;
 
 use super::Backend;
-use burn::{
+use cortex::{
     backend::{
         TensorMetadata,
         autodiff::{
@@ -56,7 +56,7 @@ impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
                 let shape_rhs = rhs.shape();
 
                 // Compute the gradient of the output using the already existing `relu_backward`
-                // function in the basic Burn backend trait.
+                // function in the basic Cortex backend trait.
                 let grad_output = B::relu_backward(output, grad);
 
                 // Compute the lhs gradient, which is the derivative of matmul with support for

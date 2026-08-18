@@ -12,14 +12,14 @@ use crate::NO_STD_CRATES;
 use std::os::unix::process::ExitStatusExt;
 
 #[macros::extend_command_args(TestCmdArgs, Target, TestSubCommand)]
-pub struct BurnTestCmdArgs {
+pub struct CortexTestCmdArgs {
     /// Test in CI mode which excludes unsupported crates.
     #[arg(long)]
     pub ci: CiTestType,
 }
 
 // `cargo check` for examples
-impl std::convert::TryInto<CompileCmdArgs> for BurnTestCmdArgs {
+impl std::convert::TryInto<CompileCmdArgs> for CortexTestCmdArgs {
     type Error = anyhow::Error;
     fn try_into(self) -> Result<CompileCmdArgs, Self::Error> {
         Ok(CompileCmdArgs {
@@ -64,10 +64,10 @@ enum TestBackend {
     Ndarray,
 }
 
-fn set_burn_device(device: &str) {
+fn set_cortex_device(device: &str) {
     // SAFETY: This is called in a single-threaded context within the xtask before spawning child processes.
     unsafe {
-        std::env::set_var("BURN_DEVICE", device);
+        std::env::set_var("CORTEX_DEVICE", device);
     }
 }
 
@@ -77,7 +77,7 @@ fn handle_backend_tests(
     context: Context,
 ) -> anyhow::Result<()> {
     let backend_name = backend.to_string();
-    set_burn_device(&backend_name); // default device
+    set_cortex_device(&backend_name); // default device
 
     let mut test_args = vec!["--no-default-features", "--features", &backend_name];
     if !matches!(context, Context::NoStd) {
@@ -96,7 +96,7 @@ fn handle_backend_tests(
         fusion_args.extend(["--features", "fusion"]);
 
         helpers::custom_crates_tests(
-            vec!["burn-backend-tests"],
+            vec!["cortex-backend-tests"],
             handle_test_args(&fusion_args, args.release),
             None,
             None,
@@ -107,7 +107,7 @@ fn handle_backend_tests(
 
     // base_commands::test::handle_command(args, env, context)
     helpers::custom_crates_tests(
-        vec!["burn-backend-tests"],
+        vec!["cortex-backend-tests"],
         handle_test_args(&test_args, args.release),
         None,
         None,
@@ -149,19 +149,19 @@ fn handle_wgpu_test(member: &str, args: &TestCmdArgs) -> anyhow::Result<()> {
 }
 
 const EXCLUDE_CRATES: &[&str] = &[
-    "burn-cpu",
-    "burn-cuda",
-    "burn-rocm",
-    // "burn-router" uses "burn-wgpu" for the tests.
-    "burn-router",
-    "burn-tch",
-    "burn-wgpu",
+    "cortex-cpu",
+    "cortex-cuda",
+    "cortex-rocm",
+    // "cortex-router" uses "cortex-wgpu" for the tests.
+    "cortex-router",
+    "cortex-tch",
+    "cortex-wgpu",
     // Requires wgpu runtime
-    "burn-cubecl-fusion",
+    "cortex-cubecl-fusion",
     // Backends are tested individually
-    "burn-backend-tests",
-    "burn-ndarray",
-    "burn-flex",
+    "cortex-backend-tests",
+    "cortex-ndarray",
+    "cortex-flex",
 ];
 
 fn enumerate_examples() -> anyhow::Result<Vec<String>> {
@@ -182,13 +182,13 @@ fn enumerate_examples() -> anyhow::Result<Vec<String>> {
 }
 
 pub(crate) fn handle_command(
-    mut args: BurnTestCmdArgs,
+    mut args: CortexTestCmdArgs,
     env: Environment,
     context: Context,
 ) -> anyhow::Result<()> {
     match context {
         Context::NoStd => {
-            // burn-flex's unit tests use `std::f32::consts` and bare `vec!`
+            // cortex-flex's unit tests use `std::f32::consts` and bare `vec!`
             // macros directly in test modules, so they only compile under std.
             // The build step (`xtask build --no-std`) still validates that
             // the crate itself compiles as no_std via `cargo build`, which
@@ -196,7 +196,7 @@ pub(crate) fn handle_command(
             let no_std_test_crates: Vec<&str> = NO_STD_CRATES
                 .iter()
                 .copied()
-                .filter(|&c| c != "burn-flex")
+                .filter(|&c| c != "cortex-flex")
                 .collect();
             ["Default"].iter().try_for_each(|test_target| {
                 let mut test_args = vec!["--no-default-features"];
@@ -240,7 +240,7 @@ pub(crate) fn handle_command(
                     // Backend crates
                     args.target = Target::AllPackages;
                     args.only
-                        .extend(["burn-ndarray".to_string(), "burn-flex".to_string()]);
+                        .extend(["cortex-ndarray".to_string(), "cortex-flex".to_string()]);
                     base_commands::test::handle_command(
                         args.clone().try_into().unwrap(),
                         env.clone(),
@@ -256,13 +256,13 @@ pub(crate) fn handle_command(
                     // workspace feature unification will cause binary bloat with examples default features
                     args.exclude.extend(enumerate_examples()?);
 
-                    // Burn remote tests don't work on windows for now
+                    // Cortex remote tests don't work on windows for now
                     #[cfg(target_os = "windows")]
                     {
-                        args.exclude.extend(vec!["burn-remote".to_string()]);
+                        args.exclude.extend(vec!["cortex-remote".to_string()]);
                     };
 
-                    set_burn_device("flex"); // default device for base tests
+                    set_cortex_device("flex"); // default device for base tests
                     base_commands::test::handle_command(
                         args.clone().try_into().unwrap(),
                         env.clone(),
@@ -288,7 +288,7 @@ pub(crate) fn handle_command(
                     )?;
 
                     args.target = Target::AllPackages;
-                    args.only.push("burn-wgpu".to_string());
+                    args.only.push("cortex-wgpu".to_string());
                     args.features
                         .get_or_insert_with(Vec::new)
                         .push("metal".to_string());
@@ -321,17 +321,17 @@ pub(crate) fn handle_command(
                         .push("vulkan".to_string());
 
                     let args_vulkan = args_vulkan.try_into().unwrap();
-                    handle_wgpu_test("burn-wgpu", &args_vulkan)?;
-                    handle_wgpu_test("burn-core", &args_vulkan)?;
-                    handle_wgpu_test("burn-vision", &args_vulkan)?;
+                    handle_wgpu_test("cortex-wgpu", &args_vulkan)?;
+                    handle_wgpu_test("cortex-core", &args_vulkan)?;
+                    handle_wgpu_test("cortex-vision", &args_vulkan)?;
 
-                    // Enable burn-core/vulkan
+                    // Enable cortex-core/vulkan
                     args.features
                         .get_or_insert_with(Vec::new)
-                        .push("burn-core/vulkan".to_string());
+                        .push("cortex-core/vulkan".to_string());
                     let args_vulkan = args.clone().try_into().unwrap();
-                    handle_wgpu_test("burn-optim", &args_vulkan)?;
-                    handle_wgpu_test("burn-nn", &args_vulkan)?;
+                    handle_wgpu_test("cortex-optim", &args_vulkan)?;
+                    handle_wgpu_test("cortex-nn", &args_vulkan)?;
                 }
                 CiTestType::GcpWgpuRunner => {
                     handle_backend_tests(
@@ -340,7 +340,7 @@ pub(crate) fn handle_command(
                         context,
                     )?;
                     args.target = Target::AllPackages;
-                    handle_wgpu_test("burn-cubecl-fusion", &args.clone().try_into().unwrap())?;
+                    handle_wgpu_test("cortex-cubecl-fusion", &args.clone().try_into().unwrap())?;
 
                     let mut args_wgpu = args.clone();
                     args_wgpu
@@ -349,17 +349,17 @@ pub(crate) fn handle_command(
                         .push("webgpu".to_string());
 
                     let args_wgpu = args_wgpu.try_into().unwrap();
-                    handle_wgpu_test("burn-wgpu", &args_wgpu)?;
-                    handle_wgpu_test("burn-core", &args_wgpu)?;
-                    handle_wgpu_test("burn-vision", &args_wgpu)?;
+                    handle_wgpu_test("cortex-wgpu", &args_wgpu)?;
+                    handle_wgpu_test("cortex-core", &args_wgpu)?;
+                    handle_wgpu_test("cortex-vision", &args_wgpu)?;
 
-                    // Enable burn-core/webgpu
+                    // Enable cortex-core/webgpu
                     args.features
                         .get_or_insert_with(Vec::new)
-                        .push("burn-core/webgpu".to_string());
+                        .push("cortex-core/webgpu".to_string());
                     let args_wgpu = args.clone().try_into().unwrap();
-                    handle_wgpu_test("burn-optim", &args_wgpu)?;
-                    handle_wgpu_test("burn-nn", &args_wgpu)?;
+                    handle_wgpu_test("cortex-optim", &args_wgpu)?;
+                    handle_wgpu_test("cortex-nn", &args_wgpu)?;
                 }
             }
 
@@ -369,43 +369,43 @@ pub(crate) fn handle_command(
                 CiTestType::Backends | CiTestType::GithubRunner => (),
                 CiTestType::Examples => (),
                 CiTestType::Crates => {
-                    // burn-dataset
+                    // cortex-dataset
                     helpers::custom_crates_tests(
-                        vec!["burn-dataset"],
+                        vec!["cortex-dataset"],
                         handle_test_args(&["--all-features"], args.release),
                         None,
                         None,
                         "std all features",
                     )?;
 
-                    // burn-core
-                    set_burn_device("tch"); // test-tch
+                    // cortex-core
+                    set_cortex_device("tch"); // test-tch
                     helpers::custom_crates_tests(
-                        vec!["burn-core"],
+                        vec!["cortex-core"],
                         handle_test_args(&["--features", "tch"], args.release),
                         None,
                         None,
                         "std with features: tch",
                     )?;
 
-                    // burn-nn (pretrained and local tests)
+                    // cortex-nn (pretrained and local tests)
                     // If the "CI" environment variable is missing, we are running locally.
                     // if std::env::var("CI").is_err() {
                     //     nn_features.push_str(",test-local");
                     // }
-                    // burn-vision
-                    set_burn_device("flex");
+                    // cortex-vision
+                    set_cortex_device("flex");
                     helpers::custom_crates_tests(
-                        vec!["burn-vision"],
+                        vec!["cortex-vision"],
                         handle_test_args(&["--features", "flex", "loss"], args.release),
                         None,
                         None,
                         "std cpu (flex)",
                     )?;
 
-                    // burn-train vision (LPIPS, DISTS metrics)
+                    // cortex-train vision (LPIPS, DISTS metrics)
                     helpers::custom_crates_tests(
-                        vec!["burn-train"],
+                        vec!["cortex-train"],
                         handle_test_args(&["--features", "vision"], args.release),
                         None,
                         None,
@@ -415,25 +415,25 @@ pub(crate) fn handle_command(
                 CiTestType::GcpCudaRunner => (),
                 CiTestType::GcpVulkanRunner | CiTestType::GcpWgpuRunner => (), // handled in tests above
                 CiTestType::GithubMacRunner => {
-                    // burn-ndarray
+                    // cortex-ndarray
                     helpers::custom_crates_tests(
-                        vec!["burn-ndarray"],
+                        vec!["cortex-ndarray"],
                         handle_test_args(&["--features", "blas-accelerate"], args.release),
                         None,
                         None,
                         "std blas-accelerate",
                     )?;
 
-                    set_burn_device("metal");
+                    set_cortex_device("metal");
                     helpers::custom_crates_tests(
-                        vec!["burn-core"],
+                        vec!["cortex-core"],
                         handle_test_args(&["--features", "metal"], args.release),
                         None,
                         None,
                         "std metal",
                     )?;
                     helpers::custom_crates_tests(
-                        vec!["burn-vision"],
+                        vec!["cortex-vision"],
                         handle_test_args(&["--features", "metal"], args.release),
                         None,
                         None,
@@ -448,7 +448,7 @@ pub(crate) fn handle_command(
             .filter(|ctx| **ctx != Context::All)
             .try_for_each(|ctx| {
                 handle_command(
-                    BurnTestCmdArgs {
+                    CortexTestCmdArgs {
                         command: args.command.clone(),
                         target: args.target.clone(),
                         exclude: args.exclude.clone(),

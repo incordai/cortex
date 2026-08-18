@@ -9,7 +9,7 @@ use crate::{
     model::TextClassificationModelConfig,
     training::ExperimentConfig,
 };
-use burn::{data::dataloader::batcher::Batcher, prelude::*, store::ModuleRecord};
+use cortex::{data::dataloader::batcher::Batcher, prelude::*, store::ModuleRecord};
 use std::sync::Arc;
 
 // Define inference function

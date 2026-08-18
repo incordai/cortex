@@ -1,0 +1,72 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "Training crate for the Cortex framework"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+license.workspace = true
+name = "cortex-train"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-train"
+documentation = "https://docs.rs/burn-train"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["sys-metrics", "tui", "rl"]
+doc = ["default"]
+vision = ["cortex-nn", "cortex-store/pytorch", "cortex-std/network", "dirs"]
+tracing = ["cortex-core/tracing", "cortex-optim/tracing"]
+
+
+sys-metrics = ["nvml-wrapper", "sysinfo", "systemstat"]
+tui = ["ratatui", "unicode-width"]
+rl = ["cortex-rl"]
+
+[dependencies]
+cortex-core = { workspace = true, features = [
+    "dataset",
+    "std",
+    "flex",    # RL loop
+] }
+cortex-optim = { workspace = true, features = ["std"] }
+cortex-rl = { workspace = true, optional = true }
+cortex-nn = { workspace = true, optional = true, features = ["std"] }
+cortex-store = { workspace = true, optional = true, features = ["std"] }
+cortex-std = { workspace = true, default-features = false, features = ["std"] }
+dirs = { workspace = true, optional = true }
+
+log = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-core = { workspace = true }
+
+# System Metrics
+nvml-wrapper = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
+systemstat = { workspace = true, optional = true }
+
+# Text UI
+ratatui = { workspace = true, optional = true, features = [
+    "all-widgets",
+    "crossterm",
+] }
+unicode-width = { workspace = true, optional = true }
+
+# Utilities
+derive-new = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+async-channel = { workspace = true }
+cortex-flex = { workspace = true, features = ["default"] }
+rstest.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

@@ -11,7 +11,7 @@ to your types, allowing you to define default values with ease. Additionally, al
 serialized, reducing potential bugs when upgrading versions and improving reproducibility.
 
 ```rust , ignore
-use burn::config::Config;
+use cortex::config::Config;
 
 #[derive(Config)]
 pub struct MyModuleConfig {
@@ -58,7 +58,7 @@ impl MyModuleConfig {
 Then we could add this line to the above `main`:
 
 ```rust, ignore
-use burn::backend::Wgpu;
+use cortex::backend::Wgpu;
 let device = Default::default();
 let my_module = config.init::<Wgpu>(&device);
 ```

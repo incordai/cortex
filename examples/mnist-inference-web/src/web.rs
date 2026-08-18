@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 use crate::model::Model;
 use crate::state::build_and_load_model;
 
-use burn::tensor::Tensor;
+use cortex::tensor::Tensor;
 
 #[cfg_attr(target_family = "wasm", wasm_bindgen(start))]
 pub fn start() {
@@ -65,7 +65,7 @@ impl Mnist {
         let output: Tensor<2> = model.forward(input);
 
         // Convert the model output into probability distribution using softmax formula
-        let output = burn::tensor::activation::softmax(output, 1);
+        let output = cortex::tensor::activation::softmax(output, 1);
 
         // Flatten output tensor with [1, 10] shape into boxed slice of [f32]
         let output = output.into_data_async().await.unwrap();

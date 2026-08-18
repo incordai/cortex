@@ -1,11 +1,11 @@
 # Custom Training Loops
 
-Even though Burn comes with a project dedicated to simplifying training, it doesn't mean that you
+Even though Cortex comes with a project dedicated to simplifying training, it doesn't mean that you
 have to use it. Sometimes you may have special needs for your training, and it might be faster to
 just reimplement the training loop yourself. Also, you may just prefer implementing your own
 training loop instead of using a pre-built one in general.
 
-Burn's got you covered!
+Cortex's got you covered!
 
 We will start from the same example shown in the [basic workflow](./basic-workflow) section, but
 without using the `Learner` struct.

@@ -11,16 +11,16 @@ workspace = true
 
 [dependencies]
 
-burn = { workspace = true, features = [
+cortex = { workspace = true, features = [
     "default",
     "flex",
     "dataset",
     "vision",
 ] }
 
-burn-store = { workspace = true, features = [
+cortex-store = { workspace = true, features = [
     "std",
     "pytorch",
     "safetensors",
-    "burnpack",
+    "cortexpack",
 ] }

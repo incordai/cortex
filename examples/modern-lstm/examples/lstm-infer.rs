@@ -1,4 +1,4 @@
-use burn::tensor::Device;
+use cortex::tensor::Device;
 
 pub fn launch(device: Device) {
     modern_lstm::inference::infer("/tmp/modern-lstm", device);
@@ -6,7 +6,7 @@ pub fn launch(device: Device) {
 
 #[cfg(feature = "flex")]
 mod flex {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         crate::launch(Device::flex());
@@ -15,7 +15,7 @@ mod flex {
 
 #[cfg(feature = "tch-gpu")]
 mod tch_gpu {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         #[cfg(not(target_os = "macos"))]
@@ -29,7 +29,7 @@ mod tch_gpu {
 
 #[cfg(feature = "tch-cpu")]
 mod tch_cpu {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         crate::launch(Device::libtorch());
@@ -38,7 +38,7 @@ mod tch_cpu {
 
 #[cfg(feature = "wgpu")]
 mod wgpu {
-    use burn::tensor::{Device, DeviceKind};
+    use cortex::tensor::{Device, DeviceKind};
 
     pub fn run() {
         crate::launch(Device::wgpu(DeviceKind::DefaultDevice));
@@ -47,7 +47,7 @@ mod wgpu {
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         crate::launch(Device::cuda(DeviceIndex::Default));

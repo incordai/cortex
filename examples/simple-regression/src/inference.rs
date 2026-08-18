@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     data::{dataloader::batcher::Batcher, dataset::Dataset},
     module::Module,
     store::ModuleRecord,

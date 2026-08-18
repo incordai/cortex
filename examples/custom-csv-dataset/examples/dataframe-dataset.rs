@@ -1,4 +1,4 @@
-use burn::data::dataset::Dataset;
+use cortex::data::dataset::Dataset;
 use custom_csv_dataset::dataframe_dataset::DiabetesDataframeDataset;
 
 fn main() {

@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     grad_clipping::GradientClippingConfig,
     optim::AdamWConfig,
     tensor::Device,
@@ -13,7 +13,7 @@ use crate::{
     env::CartPoleWrapper,
 };
 
-static ARTIFACT_DIR: &str = "/tmp/burn-example-dqn-agent";
+static ARTIFACT_DIR: &str = "/tmp/cortex-example-dqn-agent";
 
 pub fn run(device: Device) {
     let dqn_config = DqnAgentConfig {
@@ -54,7 +54,7 @@ pub fn run(device: Device) {
         .metrics_episode((EpisodeLengthMetric::new(), CumulativeRewardMetric::new()))
         .with_checkpointer()
         .num_steps(40_000)
-        .with_learning_strategy(burn::train::RLStrategies::OffPolicyStrategy(
+        .with_learning_strategy(cortex::train::RLStrategies::OffPolicyStrategy(
             learning_config,
         ))
         .with_inference_device(Device::flex())

@@ -1,0 +1,79 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science", "no-std", "embedded", "wasm"]
+description = "Tensor library with user-friendly APIs and automatic differentiation support"
+documentation = "https://docs.rs/burn-tensor"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+license.workspace = true
+name = "cortex-tensor"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-tensor"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std", "cortex-dispatch/default"]
+doc = ["default"]
+std = [
+    "num-traits/std",
+    "cortex-std/std",
+    "cortex-backend/std",
+    "cortex-dispatch/std",
+    "colored",
+]
+tracing = ["cortex-std/tracing", "cortex-backend/tracing", "cortex-dispatch/tracing"]
+
+cubecl = ["cortex-backend/cubecl", "cortex-dispatch/cubecl"]
+cubecl-cuda = ["cortex-backend/cubecl-cuda"]
+cubecl-hip = ["cortex-backend/cubecl-hip"]
+cubecl-wgpu = ["cortex-backend/cubecl-wgpu"]
+cubecl-metal = ["cortex-backend/cubecl-metal"]
+cubecl-vulkan = ["cortex-backend/cubecl-vulkan"]
+cubecl-webgpu = ["cortex-backend/cubecl-webgpu"]
+cubecl-cpu = ["cortex-backend/cubecl-cpu"]
+
+# Backends
+cuda = ["cortex-dispatch/cuda", "cubecl-cuda", "cubecl"]
+rocm = ["cortex-dispatch/rocm", "cubecl-hip", "cubecl"]
+flex = ["cortex-dispatch/flex"]
+ndarray = ["cortex-dispatch/ndarray"]
+tch = ["cortex-dispatch/tch"]
+wgpu = ["cortex-dispatch/wgpu", "cubecl-wgpu", "cubecl"]
+vulkan = ["wgpu", "cortex-dispatch/vulkan", "cubecl-vulkan"]
+webgpu = ["wgpu", "cortex-dispatch/webgpu", "cubecl-webgpu"]
+metal = ["wgpu", "cortex-dispatch/metal", "cubecl-metal"]
+cpu = ["cortex-dispatch/cpu", "cubecl-cpu", "cubecl"]
+autodiff = ["cortex-dispatch/autodiff"]
+# Remote compute client over Iroh.
+remote = ["std", "cortex-dispatch/remote"]
+# Host a remote compute server over Iroh. Wasm-compatible.
+remote-server = ["remote", "cortex-dispatch/remote-server"]
+# Add the legacy WebSocket transport.
+remote-websocket = ["remote", "cortex-dispatch/remote-websocket"]
+
+# For backend extensions
+extension = []
+
+# Backend features
+autotune = ["cortex-dispatch/autotune"]
+autotune-checks = ["cortex-dispatch/autotune-checks"]
+fusion = ["cortex-dispatch/fusion"]
+
+[dependencies]
+cortex-std = { workspace = true }
+cortex-backend = { workspace = true }
+cortex-dispatch = { workspace = true }
+
+colored = { workspace = true, optional = true }
+derive-new = { workspace = true }
+num-traits = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs", "--html-in-header", "katex-header.html"]

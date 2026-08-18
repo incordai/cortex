@@ -1,0 +1,75 @@
+[package]
+authors = [
+    "nathanielsimard <nathaniel.simard.42@gmail.com>",
+    "wingertge <wingertge@gmail.com>",
+]
+categories = ["science"]
+description = "Vision processing operations for cortex tensors"
+documentation = "https://docs.rs/burn-vision"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "gpu"]
+license.workspace = true
+name = "cortex-vision"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-vision"
+version.workspace = true
+
+[lints]
+workspace = true
+
+
+[features]
+default = ["cortex-core/default", "flex", "cubecl-backend", "fusion", "std"]
+std = ["aligned-vec/std", "cortex-core/std", "cortex-store?/std"]
+tracing = [
+    "cortex-cubecl?/tracing",
+    "cortex-fusion?/tracing",
+    "cortex-ir/tracing",
+    "cortex-core/tracing",
+    "cubecl/tracing",
+]
+
+cubecl-backend = ["cubecl", "cortex-cubecl"]
+fusion = ["cortex-fusion", "cortex-core/fusion"]
+
+cuda = ["cubecl-backend", "cortex-core/cuda"]
+rocm = ["cubecl-backend", "cortex-core/rocm"]
+wgpu = ["cubecl-backend", "cortex-core/wgpu"]
+vulkan = ["cubecl-backend", "cortex-core/vulkan"]
+webgpu = ["cubecl-backend", "cortex-core/webgpu"]
+metal = ["cubecl-backend", "cortex-core/metal"]
+cpu = ["cubecl-backend", "cortex-core/cpu"]
+flex = ["cortex-core/flex"]
+tch = ["cortex-core/tch"]
+
+# TODO: move somewhere else
+loss = ["std", "cortex-store/pytorch", "cortex-core/network", "dirs"]
+
+[dependencies]
+cortex-cubecl = { workspace = true, optional = true, features = ["default"]}
+cortex-fusion = { workspace = true, optional = true, features = ["default"]}
+cortex-ir = { workspace = true, features = ["default"]}
+cortex-core = { workspace = true, features = [
+    "extension",
+] }
+
+# TODO: requires cortex-backend. The `extension` feature should expose this from `cortex-core`.
+
+aligned-vec = { version = "0.6", default-features = false }
+bon = { workspace = true }
+
+# For loss functions requiring pretrained models (e.g., Gram Matrix Loss)
+cortex-store = { workspace = true, optional = true }
+dirs = { workspace = true, optional = true }
+
+bytemuck = { workspace = true }
+cubecl = { workspace = true, optional = true }
+derive-new = { workspace = true }
+half = { workspace = true }
+image = { version = "0.25" }
+macerator = { workspace = true }
+ndarray = { workspace = true }
+num-traits = { workspace = true }
+paste = { workspace = true }
+serde = { workspace = true }
+

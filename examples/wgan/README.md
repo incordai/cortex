@@ -1,6 +1,6 @@
 # Wasserstein Generative Adversarial Network
 
-A burn implementation of an example WGAN model to generate MNIST digits inspired by
+A cortex implementation of an example WGAN model to generate MNIST digits inspired by
 [the PyTorch implementation](https://bytepawn.com/training-a-pytorch-wasserstain-mnist-gan-on-google-colab.html).
 Please note that better performance maybe gained by adopting a convolution layer in
 [some other models](https://github.com/Lornatang/WassersteinGAN-PyTorch).

@@ -1,9 +1,9 @@
-# Jupyter Notebook Examples with Burn
+# Jupyter Notebook Examples with Cortex
 
-This directory includes Jupyter Notebook examples showcasing the usage of the Burn deep learning
+This directory includes Jupyter Notebook examples showcasing the usage of the Cortex deep learning
 framework in Rust through
 [Evcxr Jupyter](https://github.com/evcxr/evcxr/blob/main/evcxr_jupyter/README.md). The examples are
-systematically organized based on the specific Burn features they illustrate.
+systematically organized based on the specific Cortex features they illustrate.
 
 ## Viewing Options
 

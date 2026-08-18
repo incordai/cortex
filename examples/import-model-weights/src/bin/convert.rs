@@ -1,7 +1,7 @@
 use std::{env, path::Path, process};
 
-use burn_store::{
-    BurnpackStore, ModuleSnapshot, PyTorchToBurnAdapter, PytorchStore, SafetensorsStore,
+use cortex_store::{
+    CortexpackStore, ModuleSnapshot, PyTorchToCortexAdapter, PytorchStore, SafetensorsStore,
 };
 use import_model_weights::Model;
 
@@ -44,7 +44,7 @@ pub fn main() {
         "safetensors" => {
             println!("Loading Safetensors weights from '{SAFETENSORS_WEIGHTS_PATH}'...");
             let mut store = SafetensorsStore::from_file(SAFETENSORS_WEIGHTS_PATH)
-                .with_from_adapter(PyTorchToBurnAdapter);
+                .with_from_adapter(PyTorchToCortexAdapter);
             model.load_from(&mut store).unwrap_or_else(|e| {
                 panic!(
                     "Failed to load Safetensors model weights from '{SAFETENSORS_WEIGHTS_PATH}': {e}"
@@ -59,13 +59,13 @@ pub fn main() {
         }
     };
 
-    // Define the output path for the Burn model file
+    // Define the output path for the Cortex model file
     let output_file_path = output_directory.join(MODEL_OUTPUT_NAME);
 
     println!("Saving model to '{}.bpk'...", output_file_path.display());
 
-    // Save the model using BurnpackStore
-    let mut store = BurnpackStore::from_file(&output_file_path).overwrite(true);
+    // Save the model using CortexpackStore
+    let mut store = CortexpackStore::from_file(&output_file_path).overwrite(true);
     model.save_into(&mut store).unwrap_or_else(|e| {
         panic!(
             "Failed to save model to '{}.bpk': {e}",

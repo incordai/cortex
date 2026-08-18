@@ -8,7 +8,7 @@ The example shows you how to:
   sklearn[datasets](https://scikit-learn.org/stable/datasets/real_world.html#california-housing-dataset).
 - Create a data pipeline from a raw dataset to a batched fast DataLoader with min-max feature
   scaling.
-- Define a Simple NN model for regression using Burn Modules.
+- Define a Simple NN model for regression using Cortex Modules.
 
 > **Note**  
 > This example makes use of the HuggingFace [`datasets`](https://huggingface.co/docs/datasets/index)
@@ -19,7 +19,7 @@ The example can be run like so:
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 # Use the --release flag to really speed up training.
 echo "Using flex backend"
 cargo run --example regression --release --features flex                   # CPU Flex Backend - f32

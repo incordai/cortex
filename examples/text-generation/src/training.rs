@@ -2,7 +2,7 @@ use crate::{
     data::{Gpt2Tokenizer, TextGenerationBatcher, TextGenerationItem, Tokenizer},
     model::TextGenerationModelConfig,
 };
-use burn::{
+use cortex::{
     data::{
         dataloader::DataLoaderBuilder,
         dataset::{Dataset, transform::SamplerDataset},

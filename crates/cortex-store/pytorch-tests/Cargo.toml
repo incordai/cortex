@@ -1,0 +1,11 @@
+[package]
+name = "pytorch-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+cortex = { workspace = true, features = ["default", "flex"] }
+cortex-store = { workspace = true, features = ["default", "std", "pytorch"] }
+serde = { workspace = true }
+float-cmp = { workspace = true }

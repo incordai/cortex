@@ -4,7 +4,7 @@ use crate::dataset::{
     NOISE_LEVEL, NUM_SEQUENCES, RANDOM_SEED, SEQ_LENGTH, SequenceBatcher, SequenceDataset,
 };
 use crate::model::LstmNetworkConfig;
-use burn::{
+use cortex::{
     data::dataloader::DataLoaderBuilder,
     module::AutodiffModule,
     nn::loss::{MseLoss, Reduction::Mean},

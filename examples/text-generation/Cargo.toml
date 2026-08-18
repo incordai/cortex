@@ -10,22 +10,22 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["burn/dataset", "burn/sqlite-bundled"]
+default = ["cortex/dataset", "cortex/sqlite-bundled"]
 f16 = []
 flex32 = []
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
-vulkan = ["burn/vulkan"]
-metal = ["burn/metal"]
-flex = ["burn/flex"]
-remote = ["burn/remote-websocket"]
-cuda = ["burn/cuda"]
-rocm = ["burn/rocm"]
+tch-cpu = ["cortex/tch"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
+vulkan = ["cortex/vulkan"]
+metal = ["cortex/metal"]
+flex = ["cortex/flex"]
+remote = ["cortex/remote-websocket"]
+cuda = ["cortex/cuda"]
+rocm = ["cortex/rocm"]
 
 [dependencies]
-# Burn
-burn = { workspace = true, features = ["default", "train"] }
+# Cortex
+cortex = { workspace = true, features = ["default", "train"] }
 
 # Tokenizer
 tokenizers = { version = "0.22.2", default-features = false, features = [

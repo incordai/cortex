@@ -1,12 +1,12 @@
 # Remote MNIST Inference on the Web
 
-This example runs a Burn model **in the browser** while executing every tensor operation on a
+This example runs a Cortex model **in the browser** while executing every tensor operation on a
 **remote compute peer** reached over [Iroh](https://iroh.computer/). The browser holds only the
 model definition and weights; convolutions, matrix multiplies and everything else run on the
 peer's backend (CPU or GPU). Only the 28x28 input and the 10 output probabilities cross the wire.
 
 It mirrors the [`mnist-inference-web`](../mnist-inference-web) demo, but swaps the local WebAssembly
-backend for the `burn-remote` Iroh client.
+backend for the `cortex-remote` Iroh client.
 
 ## Why this is interesting
 
@@ -36,16 +36,16 @@ The client then binds its own Iroh endpoint, opens an authenticated QUIC session
 CPU backend:
 
 ```sh
-cargo run -p remote-compute-peer -- burn-web
+cargo run -p remote-compute-peer -- cortex-web
 ```
 
 GPU backend (wgpu):
 
 ```sh
-cargo run -p remote-compute-peer --features wgpu -- burn-web
+cargo run -p remote-compute-peer --features wgpu -- cortex-web
 ```
 
-The argument (`burn-web`) is the topic; it must match what you type in the browser.
+The argument (`cortex-web`) is the topic; it must match what you type in the browser.
 
 ### 2. Build the web client
 

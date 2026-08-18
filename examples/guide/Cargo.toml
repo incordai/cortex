@@ -10,18 +10,18 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["burn/default", "burn/tui"]
+default = ["cortex/default", "cortex/tui"]
 # Opt-in for macOS users with the Vulkan SDK installed (enabled by default on other platforms)
-vulkan = ["burn/vulkan"]
+vulkan = ["cortex/vulkan"]
 
 [dependencies]
-burn = { workspace = true, features = [
+cortex = { workspace = true, features = [
     "wgpu",
     "train",
     "vision",
 ] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-burn = { workspace = true, features = ["default", "vulkan"] }
+cortex = { workspace = true, features = ["default", "vulkan"] }
 
 log = { workspace = true }

@@ -11,12 +11,12 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["burn/dataset"]
-dataframe = ["dep:burn-dataset", "polars"]
+default = ["cortex/dataset"]
+dataframe = ["dep:cortex-dataset", "polars"]
 
 [dependencies]
-burn = {workspace = true, features = ["default"] }
-burn-dataset = { workspace = true, features = ["default", "dataframe"], optional = true }
+cortex = {workspace = true, features = ["default"] }
+cortex-dataset = { workspace = true, features = ["default", "dataframe"], optional = true }
 
 # File download
 reqwest = {workspace = true, features = ["blocking"] }

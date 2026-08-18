@@ -2,10 +2,10 @@
 
 Saving your trained machine learning model is quite easy. As mentioned in the
 [Record](./building-blocks/record.md) section, a module's parameters are captured in a
-`ModuleRecord` and serialized to the [burnpack](./building-blocks/record.md) format (`.bpk`).
+`ModuleRecord` and serialized to the [cortexpack](./building-blocks/record.md) format (`.bpk`).
 
 ```rust, ignore
-use burn::store::ModuleRecord;
+use cortex::store::ModuleRecord;
 
 // Take a record of the model's parameters and save it to disk.
 model
@@ -20,7 +20,7 @@ file path and base name need to be provided.
 Now that you have a trained model saved to your disk, you can just as easily load it back.
 
 ```rust, ignore
-// Load the record from the burnpack file.
+// Load the record from the cortexpack file.
 let record = ModuleRecord::load(model_path)
     .expect("Should be able to load the model weights from the provided file");
 
@@ -41,13 +41,13 @@ executed before the module is used. This means that you can use `init(device)` f
 `load_record(record)` without any meaningful performance cost.
 
 ```rust, ignore
-use burn::store::ModuleRecord;
+use cortex::store::ModuleRecord;
 
 // Create a dummy initialized model to save.
 let device = Default::default();
 let model = Model::init(&device);
 
-// Save its parameters to a burnpack file.
+// Save its parameters to a cortexpack file.
 model
     .into_record()
     .save(model_path)
@@ -57,7 +57,7 @@ model
 Afterwards, the model can just as easily be loaded from the record saved on disk.
 
 ```rust, ignore
-// Load the model record from the burnpack file.
+// Load the model record from the cortexpack file.
 let record = ModuleRecord::load(model_path)
     .expect("Could not load model weights");
 
@@ -71,8 +71,8 @@ loading.
 
 ## Model Weight Store
 
-While the `ModuleRecord` API above works well for basic saving and loading, the `burn-store` crate
-adds memory efficiency and flexibility on top of the same burnpack format. It provides zero-copy
+While the `ModuleRecord` API above works well for basic saving and loading, the `cortex-store` crate
+adds memory efficiency and flexibility on top of the same cortexpack format. It provides zero-copy
 memory-mapped loading, cross-framework interoperability (PyTorch and SafeTensors), key remapping,
 partial loading, and filtering.
 
@@ -80,21 +80,21 @@ partial loading, and filtering.
 
 | Format          | Extension      | Description                                                                               |
 | --------------- | -------------- | ----------------------------------------------------------------------------------------- |
-| **Burnpack**    | `.bpk`         | Burn's native format with fast loading, zero-copy support, and training state persistence |
+| **Cortexpack**    | `.bpk`         | Cortex's native format with fast loading, zero-copy support, and training state persistence |
 | **SafeTensors** | `.safetensors` | Industry-standard format from Hugging Face for secure tensor serialization                |
 | **PyTorch**     | `.pt`, `.pth`  | Direct loading of PyTorch model weights (read-only)                                       |
 
 ### Saving a Model
 
 ```rust, ignore
-use burn_store::{ModuleSnapshot, BurnpackStore};
+use cortex_store::{ModuleSnapshot, CortexpackStore};
 
-// Save to Burnpack (recommended)
-let mut store = BurnpackStore::from_file("model.bpk");
+// Save to Cortexpack (recommended)
+let mut store = CortexpackStore::from_file("model.bpk");
 model.save_into(&mut store)?;
 
 // Or save to SafeTensors
-use burn_store::SafetensorsStore;
+use cortex_store::SafetensorsStore;
 let mut store = SafetensorsStore::from_file("model.safetensors");
 model.save_into(&mut store)?;
 ```
@@ -102,13 +102,13 @@ model.save_into(&mut store)?;
 ### Loading a Model
 
 ```rust, ignore
-use burn_store::{ModuleSnapshot, BurnpackStore};
+use cortex_store::{ModuleSnapshot, CortexpackStore};
 
 let device = Default::default();
 let mut model = MyModel::init(&device);
 
-// Load from Burnpack
-let mut store = BurnpackStore::from_file("model.bpk");
+// Load from Cortexpack
+let mut store = CortexpackStore::from_file("model.bpk");
 model.load_from(&mut store)?;
 ```
 
@@ -117,7 +117,7 @@ model.load_from(&mut store)?;
 You can load weights directly from PyTorch `.pt` files:
 
 ```rust, ignore
-use burn_store::{ModuleSnapshot, PytorchStore};
+use cortex_store::{ModuleSnapshot, PytorchStore};
 
 let mut model = MyModel::init(&device);
 let mut store = PytorchStore::from_file("pytorch_model.pt");
@@ -161,15 +161,15 @@ model.load_from(&mut store)?;
 For SafeTensors files exported from PyTorch, use the adapter for proper weight transformation:
 
 ```rust, ignore
-use burn_store::{ModuleSnapshot, PyTorchToBurnAdapter, SafetensorsStore};
+use cortex_store::{ModuleSnapshot, PyTorchToCortexAdapter, SafetensorsStore};
 
 let mut model = MyModel::init(&device);
 let mut store = SafetensorsStore::from_file("model.safetensors")
-    .with_from_adapter(PyTorchToBurnAdapter);
+    .with_from_adapter(PyTorchToCortexAdapter);
 model.load_from(&mut store)?;
 ```
 
-For SafeTensors files created by Burn, no adapter is needed:
+For SafeTensors files created by Cortex, no adapter is needed:
 
 ```rust, ignore
 let mut store = SafetensorsStore::from_file("model.safetensors");
@@ -190,10 +190,10 @@ save_file(model.state_dict(), "model.safetensors")
 Use the adapter when saving for PyTorch consumption:
 
 ```rust, ignore
-use burn_store::{BurnToPyTorchAdapter, SafetensorsStore};
+use cortex_store::{CortexToPyTorchAdapter, SafetensorsStore};
 
 let mut store = SafetensorsStore::from_file("for_pytorch.safetensors")
-    .with_to_adapter(BurnToPyTorchAdapter)
+    .with_to_adapter(CortexToPyTorchAdapter)
     .skip_enum_variants(true);
 model.save_into(&mut store)?;
 ```
@@ -237,10 +237,10 @@ match model.load_from(&mut store) {
 
 ### Adding Metadata
 
-Burnpack and SafeTensors support custom metadata:
+Cortexpack and SafeTensors support custom metadata:
 
 ```rust, ignore
-let mut store = BurnpackStore::from_file("model.bpk")
+let mut store = CortexpackStore::from_file("model.bpk")
     .metadata("version", "1.0")
     .metadata("description", "My trained model")
     .metadata("epochs", "100");
@@ -265,7 +265,7 @@ model.load_from(&mut store)?;
 For complex remapping:
 
 ```rust, ignore
-use burn_store::KeyRemapper;
+use cortex_store::KeyRemapper;
 
 let remapper = KeyRemapper::new()
     .add_pattern(r"^transformer\.h\.(\d+)\.", "transformer.layer$1.")?
@@ -316,7 +316,7 @@ automatically remaps these:
 
 ```
 PyTorch: fc.0.weight, fc.2.weight, fc.4.weight  (gaps from ReLU layers)
-Burn:    fc.0.weight, fc.1.weight, fc.2.weight  (contiguous)
+Cortex:    fc.0.weight, fc.1.weight, fc.2.weight  (contiguous)
 ```
 
 This is enabled by default. Disable if needed:
@@ -333,11 +333,11 @@ For embedded models or large files, use zero-copy loading to avoid memory copies
 ```rust, ignore
 // Embedded model (compile-time)
 static MODEL_DATA: &[u8] = include_bytes!("model.bpk");
-let mut store = BurnpackStore::from_static(MODEL_DATA);
+let mut store = CortexpackStore::from_static(MODEL_DATA);
 model.load_from(&mut store)?;
 
 // Large file (memory-mapped)
-let mut store = BurnpackStore::from_file("large_model.bpk")
+let mut store = CortexpackStore::from_file("large_model.bpk")
     .zero_copy(true);
 model.load_from(&mut store)?;
 ```
@@ -347,17 +347,17 @@ model.load_from(&mut store)?;
 Save models at half precision (F16) to reduce file size by ~50%, then load back at full precision:
 
 ```rust, ignore
-use burn_store::{ModuleSnapshot, BurnpackStore, HalfPrecisionAdapter};
+use cortex_store::{ModuleSnapshot, CortexpackStore, HalfPrecisionAdapter};
 
 let adapter = HalfPrecisionAdapter::new();
 
 // Save: F32 -> F16 (same adapter for both directions)
-let mut store = BurnpackStore::from_file("model_f16.bpk")
+let mut store = CortexpackStore::from_file("model_f16.bpk")
     .with_to_adapter(adapter.clone());
 model.save_into(&mut store)?;
 
 // Load: F16 -> F32
-let mut store = BurnpackStore::from_file("model_f16.bpk")
+let mut store = CortexpackStore::from_file("model_f16.bpk")
     .with_from_adapter(adapter);
 model.load_from(&mut store)?;
 ```
@@ -381,7 +381,7 @@ let adapter = HalfPrecisionAdapter::new()
 Inspect tensors without loading into a model:
 
 ```rust, ignore
-use burn_store::ModuleStore;
+use cortex_store::ModuleStore;
 
 let mut store = PytorchStore::from_file("model.pt");
 
@@ -399,7 +399,7 @@ if let Some(snapshot) = store.get_snapshot("encoder.layer0.weight")? {
 Transfer weights between models:
 
 ```rust, ignore
-use burn_store::{ModuleSnapshot, PathFilter};
+use cortex_store::{ModuleSnapshot, PathFilter};
 
 // Transfer all weights
 let snapshots = model1.collect(None, None, false);
@@ -447,7 +447,7 @@ model2.apply(snapshots, Some(filter), None, false);
 1. **"Missing source values" error**: You saved the entire PyTorch model instead of the state_dict.
    Re-export with `torch.save(model.state_dict(), "model.pt")`.
 
-2. **Shape mismatch**: Your Burn model doesn't match the source architecture. Verify layer
+2. **Shape mismatch**: Your Cortex model doesn't match the source architecture. Verify layer
    configurations (channels, kernel sizes, bias settings).
 
 3. **Key not found**: Parameter names don't match. Use `with_key_remapping()` or inspect keys:
@@ -461,8 +461,8 @@ model2.apply(snapshots, Some(filter), None, false);
 
 Use [Netron](https://github.com/lutzroeder/netron) to visualize `.pt` and `.safetensors` files.
 
-For Burnpack files:
+For Cortexpack files:
 
 ```bash
-cargo run --example burnpack_inspect model.bpk
+cargo run --example cortexpack_inspect model.bpk
 ```

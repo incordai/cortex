@@ -1,16 +1,16 @@
 # Model
 
-The first step is to create a project and add the different Burn dependencies. Start by creating a
+The first step is to create a project and add the different Cortex dependencies. Start by creating a
 new project with Cargo:
 
 ```console
 cargo new guide
 ```
 
-As [mentioned previously](../getting-started.md#creating-a-burn-application), this will initialize
+As [mentioned previously](../getting-started.md#creating-a-cortex-application), this will initialize
 your `guide` project directory with a `Cargo.toml` and a `src/main.rs` file.
 
-In the `Cargo.toml` file, add the `burn` dependency with `train`, `vision` and `wgpu` features. The
+In the `Cargo.toml` file, add the `cortex` dependency with `train`, `vision` and `wgpu` features. The
 default features automatically enable `tui` (for the dashboard), `fusion` and `autotune` for wgpu,
 among other defaults. Then run `cargo build` to build the project and import all the dependencies.
 
@@ -21,7 +21,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { version = "~0.22", features = ["train", "vision", "wgpu"] }
+cortex = { version = "~0.22", features = ["train", "vision", "wgpu"] }
 ```
 
 Our goal will be to create a basic convolutional neural network used for image classification. We
@@ -31,7 +31,7 @@ pooling and ReLU activations. We will also use dropout to improve training perfo
 Let us start by defining our model struct in a new file `src/model.rs`.
 
 ```rust , ignore
-use burn::{
+use cortex::{
     nn::{
         conv::{Conv2d, Conv2dConfig},
         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
@@ -103,7 +103,7 @@ There are two major things going on in this code sample.
    ```
 
    The basic `Debug` implementation is provided by the compiler to format a value using the `{:?}`
-   formatter. For ease of use, the `Module` trait implementation is automatically handled by Burn so
+   formatter. For ease of use, the `Module` trait implementation is automatically handled by Cortex so
    you don't have to do anything special. It essentially acts as parameter container.
 
    For more details on derivable traits, take a look at the Rust
@@ -113,7 +113,7 @@ There are two major things going on in this code sample.
    </details><br>
 
 2. The model and its layers don't have a backend type parameter. Tensors carry a runtime
-   [`Device`](../building-blocks/backend.md), and Burn routes their operations through its Tensor →
+   [`Device`](../building-blocks/backend.md), and Cortex routes their operations through its Tensor →
    Bridge → Dispatch → Backend execution stack. This keeps models portable across backends without
    exposing backend generics in the user API. The device used to initialize the parameters
    determines where the model starts executing.
@@ -132,7 +132,7 @@ mod model;
 Next, we need to instantiate the model for training.
 
 ```rust , ignore
-# use burn::{
+# use cortex::{
 #     nn::{
 #         conv::{Conv2d, Conv2dConfig},
 #         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
@@ -183,7 +183,7 @@ At a glance, you can view the model configuration by printing the model instance
 mod model;
 
 use crate::model::ModelConfig;
-use burn::tensor::Device;
+use cortex::tensor::Device;
 
 fn main() {
     let device = Device::wgpu(Default::default());
@@ -267,7 +267,7 @@ which we will flatten in the forward pass to have a 1024 (16 _ 8 _ 8) resulting 
 Now let's see how the forward pass is defined.
 
 ```rust , ignore
-# use burn::{
+# use cortex::{
 #     nn::{
 #         conv::{Conv2d, Conv2dConfig},
 #         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
@@ -341,7 +341,7 @@ impl Model {
 For former PyTorch users, this might feel very intuitive, as each module is directly incorporated
 into the code using an eager API. Note that no abstraction is imposed for the forward method. You
 are free to define multiple forward functions with the names of your liking. Most of the neural
-network modules already built with Burn use the `forward` nomenclature, simply because it is
+network modules already built with Cortex use the `forward` nomenclature, simply because it is
 standard in the field.
 
 The [`Tensor`](../building-blocks/tensor.md) struct takes its dimensionality and, optionally, its

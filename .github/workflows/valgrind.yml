@@ -11,7 +11,7 @@ concurrency:
 jobs:
   valgrind:
     runs-on: [
-      '@id:burn-linux-valgrind-${{ github.run_id }}-${{ github.run_attempt }}',
+      '@id:cortex-linux-valgrind-${{ github.run_id }}-${{ github.run_attempt }}',
       '@image-family:ubuntu-2404-lts-amd64',
       '@image-project:ubuntu-os-cloud',
       '@disk-size:100',

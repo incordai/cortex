@@ -2,7 +2,7 @@
 
 In this section, you will learn how to create your own custom operation by writing your own kernel
 with the WGPU backend. We will take the example of a common workflow in the deep learning field,
-where we create a kernel to fuse multiple operations together. Note that `burn` does this
+where we create a kernel to fuse multiple operations together. Note that `cortex` does this
 automatically, but a manual implementation might be more efficient in some cases. We will fuse a
 matmul kernel followed by an addition and the ReLU activation function, which is commonly found in
 various models. All the code can be found under the
@@ -16,9 +16,9 @@ encapsulates the underlying tensor implementation of the backend, we will use a 
 the ugly disambiguation with associated types.
 
 ```rust, ignore
-/// We create our own Backend trait that extends the Burn backend trait.
+/// We create our own Backend trait that extends the Cortex backend trait.
 #[backend_extension(Autodiff, Wgpu)]
-pub trait Backend: burn::backend::Backend {
+pub trait Backend: cortex::backend::Backend {
     fn fused_matmul_add_relu(
         lhs: FloatTensor<Self>,
         rhs: FloatTensor<Self>,
@@ -26,12 +26,12 @@ pub trait Backend: burn::backend::Backend {
     ) -> FloatTensor<Self>;
 }
 
-/// We create our own AutodiffBackend trait that extends the Burn autodiff backend trait.
-pub trait AutodiffBackend: Backend + burn::backend::AutodiffBackend {}
+/// We create our own AutodiffBackend trait that extends the Cortex autodiff backend trait.
+pub trait AutodiffBackend: Backend + cortex::backend::AutodiffBackend {}
 ```
 
 In our project, we can use these traits instead of the
-`burn::backend::{Backend, AutodiffBackend}` traits provided by Burn. Burn's user APIs
+`cortex::backend::{Backend, AutodiffBackend}` traits provided by Cortex. Cortex's user APIs
 typically make use of the `Tensor` struct rather than dealing directly with primitive tensor types.
 Therefore, we can encapsulate our newly defined backend traits with functions that expose new
 operations while maintaining a consistent API.
@@ -163,7 +163,7 @@ Now, let's move on to the next step, which involves implementing the remaining c
 kernel. The initial part entails loading the template and populating it with the appropriate
 variables. The `register(name, value)` method simply replaces occurrences of `{{ name }}` in the
 above WGSL code with some other string before it is compiled. In order to use templating utilities,
-you will have to activate the `template` feature of Burn in your `cargo.toml`.
+you will have to activate the `template` feature of Cortex in your `cargo.toml`.
 
 ```rust, ignore
 // Source the kernel written in WGSL.
@@ -294,7 +294,7 @@ Now that the custom backend trait is implemented for the WGPU backend, you can u
 If your use case does not extend beyond inference, there is no need to implement any of the
 following code.
 
-For the backward pass, we will leverage the backend implementation from `burn-autodiff`, which is
+For the backward pass, we will leverage the backend implementation from `cortex-autodiff`, which is
 actually generic over the backend. Instead of crafting our own WGSL kernel for the backward pass, we
 will use our fused kernel only for the forward pass, and compute the gradient using basic
 operations.
@@ -346,7 +346,7 @@ impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
                 let shape_rhs = rhs.shape();
 
                 // Compute the gradient of the output using the already existing `relu_backward`
-                // function in the basic Burn backend trait.
+                // function in the basic Cortex backend trait.
                 let grad_output = B::relu_backward(output, grad);
 
                 // Compute the lhs gradient, which is the derivative of matmul with support for
@@ -456,5 +456,5 @@ While extending a backend may be harder than working with straightforward tensor
 be worth it. This approach enables the crafting of custom models with greater control over
 execution, which can potentially greatly enhance the performance of your models.
 
-As we conclude this guide, we hope that you have gained insights into Burn's world of backend
+As we conclude this guide, we hope that you have gained insights into Cortex's world of backend
 extensions, and that it will help you to unleash the full potential of your projects.

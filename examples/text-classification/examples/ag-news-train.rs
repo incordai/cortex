@@ -3,8 +3,8 @@
 // Only the CUDA `launch_multi` path uses these at the top level; the remote module imports
 // them locally. Gating on both features avoids an unused-import warning for `remote,ddp`.
 #[cfg(all(feature = "ddp", feature = "cuda"))]
-use burn::tensor::distributed::{DistributedConfig, ReduceOperation};
-use burn::{
+use cortex::tensor::distributed::{DistributedConfig, ReduceOperation};
+use cortex::{
     nn::transformer::TransformerEncoderConfig,
     optim::{AdamConfig, decay::WeightDecayConfig},
     tensor::{Device, DeviceConfig, Element},
@@ -17,26 +17,26 @@ use text_classification::{AgNewsDataset, training::ExperimentConfig};
 #[allow(unused)]
 type ElemType = f32;
 #[cfg(feature = "f16")]
-type ElemType = burn::tensor::f16;
+type ElemType = cortex::tensor::f16;
 #[cfg(feature = "flex32")]
-type ElemType = burn::tensor::flex32;
+type ElemType = cortex::tensor::flex32;
 
 #[cfg(all(feature = "cuda", not(feature = "ddp")))]
 pub fn launch_multi() {
-    let mut devices = Device::enumerate(burn::tensor::DeviceType::Cuda);
+    let mut devices = Device::enumerate(cortex::tensor::DeviceType::Cuda);
     devices
         .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
         .unwrap();
 
     launch(ExecutionStrategy::MultiDevice(
         devices.into_vec(),
-        burn::train::MultiDeviceOptim::OptimSharded,
+        cortex::train::MultiDeviceOptim::OptimSharded,
     ))
 }
 
 #[cfg(all(feature = "cuda", feature = "ddp"))]
 pub fn launch_multi() {
-    let mut devices = Device::enumerate(burn::tensor::DeviceType::Cuda);
+    let mut devices = Device::enumerate(cortex::tensor::DeviceType::Cuda);
     devices
         .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
         .unwrap();
@@ -76,7 +76,7 @@ pub fn launch(strategy: ExecutionStrategy) {
 
 #[cfg(feature = "tch-gpu")]
 mod tch_gpu {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         #[cfg(not(target_os = "macos"))]
@@ -90,7 +90,7 @@ mod tch_gpu {
 
 #[cfg(feature = "tch-cpu")]
 mod tch_cpu {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         crate::launch_single(Device::libtorch());
@@ -99,7 +99,7 @@ mod tch_cpu {
 
 #[cfg(any(feature = "wgpu", feature = "vulkan", feature = "metal"))]
 mod wgpu {
-    use burn::tensor::{Device, DeviceKind};
+    use cortex::tensor::{Device, DeviceKind};
 
     pub fn run() {
         crate::launch_single(Device::wgpu(DeviceKind::DefaultDevice));
@@ -111,21 +111,21 @@ mod remote {
     #[cfg(feature = "ddp")]
     use crate::ElemType;
     #[cfg(feature = "ddp")]
-    use burn::tensor::distributed::{DistributedConfig, ReduceOperation};
-    use burn::tensor::{Device, DeviceType};
+    use cortex::tensor::distributed::{DistributedConfig, ReduceOperation};
+    use cortex::tensor::{Device, DeviceType};
     #[cfg(feature = "ddp")]
-    use burn::tensor::{DeviceConfig, Element};
+    use cortex::tensor::{DeviceConfig, Element};
     #[cfg(feature = "ddp")]
-    use burn::train::ExecutionStrategy;
+    use cortex::train::ExecutionStrategy;
 
-    /// Address of the `burn-remote` server to train against.
+    /// Address of the `cortex-remote` server to train against.
     const ADDRESS: &str = "ws://localhost:3000";
 
     /// Train on a single one of the devices the remote server hosts.
     ///
     /// `launch_single` configures the device it receives, so don't configure the enumerated
     /// set here too — doing both locks the device's settings twice and returns
-    /// [`DeviceError::AlreadyInitialized`](burn::tensor::DeviceError::AlreadyInitialized).
+    /// [`DeviceError::AlreadyInitialized`](cortex::tensor::DeviceError::AlreadyInitialized).
     #[cfg(not(feature = "ddp"))]
     pub fn run() {
         let devices = Device::enumerate(DeviceType::remote_websocket(ADDRESS));
@@ -158,7 +158,7 @@ mod cuda {
 
 #[cfg(feature = "rocm")]
 mod rocm {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         crate::launch_single(Device::rocm(DeviceIndex::Default));
@@ -167,7 +167,7 @@ mod rocm {
 
 #[cfg(feature = "flex")]
 mod flex {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         crate::launch_single(Device::flex());

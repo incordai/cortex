@@ -1,0 +1,60 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "Provide optimizations that can be used with cubecl based backends."
+documentation = "https://docs.rs/burn-cubecl-fusion"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "gpu"]
+license.workspace = true
+name = "cortex-cubecl-fusion"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-cubecl-fusion"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["autotune", "std", "cubecl/default", "cortex-fusion/default"]
+
+autotune = []
+autotune-checks = ["cubecl/autotune-checks", "half"]
+doc = ["default"]
+test-util = []
+std = ["cubecl/std", "cortex-backend/std", "cortex-fusion/std"]
+tracing = [
+    "cubecl/tracing",
+    "cortex-std/tracing",
+    "cortex-backend/tracing",
+    "cortex-fusion/tracing",
+]
+
+[dependencies]
+cortex-fusion = { workspace = true }
+cortex-ir = { workspace = true }
+cortex-std = { workspace = true, features = ["default"] }
+cubecl = { workspace = true }
+cubek = { workspace = true, features = [
+    "matmul",
+    "reduce",
+    "quantization",
+    "stdlib",
+] }
+half = { workspace = true, optional = true }
+
+# Needed for the cubecl dtype helpers (`cortex_backend::cubecl::*`).
+cortex-backend = { workspace = true, features = ["cubecl"] }
+
+derive-new = { workspace = true }
+hashbrown = { workspace = true }
+rmp-serde = { workspace = true }
+serde = { workspace = true }
+spin = { workspace = true }
+
+[dev-dependencies]
+cubecl = { workspace = true, features = ["test-runtime"] }
+half = { workspace = true }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

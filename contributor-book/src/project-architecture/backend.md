@@ -33,7 +33,7 @@ be accomplished with a generic parameter (e.g. `LibTorch<f32>`).
 To be as general as possible, tensor operations are implemented as plain functions. There is no
 object or self, just functions that take tensors as input and often return tensors as output as
 well. Backend implementations are free to use their own patterns to implement these kernels. Note
-that Burn is a dynamic graph deep learning framework, so backends may have to implement asynchronous
+that Cortex is a dynamic graph deep learning framework, so backends may have to implement asynchronous
 kernel executions for performance reasons.
 
 ## Autodiff

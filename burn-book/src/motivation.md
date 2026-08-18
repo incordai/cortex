@@ -1,12 +1,12 @@
-# Why Burn?
+# Why Cortex?
 
 Why bother with the effort of creating an entirely new deep learning framework from scratch when
-PyTorch, TensorFlow, and other frameworks already exist? Spoiler alert: Burn isn't merely a
+PyTorch, TensorFlow, and other frameworks already exist? Spoiler alert: Cortex isn't merely a
 replication of PyTorch or TensorFlow in Rust. It represents a novel approach, placing significant
 emphasis on making the right compromises in the right areas to facilitate exceptional flexibility,
-high performance, and a seamless developer experience. Burn isn’t a framework specialized for only
+high performance, and a seamless developer experience. Cortex isn’t a framework specialized for only
 one type of application, it is designed to serve as a versatile framework suitable for a wide range
-of research and production uses. The foundation of Burn's design revolves around three key user
+of research and production uses. The foundation of Cortex's design revolves around three key user
 profiles:
 
 **Machine Learning Researchers** require tools to construct and execute experiments efficiently.
@@ -25,4 +25,4 @@ models as fast as possible to gain competitive advantage. This endeavor involves
 hardware-specific features such as Tensor Core for Nvidia. Since they are mostly working at a system
 level, they want to have absolute control over how the computation will be executed.
 
-The goal of Burn is to satisfy all of those personas!
+The goal of Cortex is to satisfy all of those personas!

@@ -1,7 +1,7 @@
 use crate::model::Model;
-use burn::{module::Module, prelude::Device, store::ModuleRecord, tensor::Bytes};
+use cortex::{module::Module, prelude::Device, store::ModuleRecord, tensor::Bytes};
 
-// Trained parameters in the burnpack format, produced by the `mnist` example
+// Trained parameters in the cortexpack format, produced by the `mnist` example
 // (`model.into_record().save(..)`) and copied here. Regenerate with the same command if the
 // model architecture changes.
 static STATE_ENCODED: &[u8] = include_bytes!("../model.bpk");
@@ -32,7 +32,7 @@ mod tests {
         // `load_record` validates that every model parameter is present with a matching shape; a
         // stale/mismatched asset would panic here.
         let record = ModuleRecord::from_bytes(Bytes::from_bytes_vec(STATE_ENCODED.to_vec()))
-            .expect("Embedded model.bpk should decode as burnpack");
+            .expect("Embedded model.bpk should decode as cortexpack");
         let _model = model.load_record(record);
     }
 }

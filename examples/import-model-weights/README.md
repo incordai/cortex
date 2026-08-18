@@ -1,12 +1,12 @@
 # Import Model Weights
 
-This crate provides examples for importing model weights from different formats to Burn.
+This crate provides examples for importing model weights from different formats to Cortex.
 
 ## Examples
 
 ### PyTorch
 
-Imports weights from a PyTorch `.pt` file using `burn-store`.
+Imports weights from a PyTorch `.pt` file using `cortex-store`.
 
 ```bash
 cargo run --bin pytorch -- <image_index>
@@ -27,7 +27,7 @@ https://huggingface.co/datasets/ylecun/mnist/viewer/mnist/test?row=15
 
 ### Safetensors
 
-Imports weights from a Safetensors file using `burn-store`.
+Imports weights from a Safetensors file using `cortex-store`.
 
 ```bash
 cargo run --bin safetensors -- <image_index>
@@ -48,7 +48,7 @@ https://huggingface.co/datasets/ylecun/mnist/viewer/mnist/test?row=42
 
 ### Convert
 
-Converts between different weight formats (PyTorch or Safetensors) to Burn's native Burnpack format.
+Converts between different weight formats (PyTorch or Safetensors) to Cortex's native Cortexpack format.
 
 ```bash
 cargo run --bin convert -- <format> <output_directory>
@@ -60,28 +60,28 @@ Where:
 
 Example with PyTorch:
 ```bash
-cargo run --bin convert -- pytorch /tmp/burn-convert
+cargo run --bin convert -- pytorch /tmp/cortex-convert
 
 Loading PyTorch weights from 'weights/mnist.pt'...
-Saving model to '/tmp/burn-convert/mnist.bpk'...
-Model successfully saved to '/tmp/burn-convert/mnist.bpk'.
+Saving model to '/tmp/cortex-convert/mnist.bpk'...
+Model successfully saved to '/tmp/cortex-convert/mnist.bpk'.
 ```
 
 Example with Safetensors:
 ```bash
-cargo run --bin convert -- safetensors /tmp/burn-convert
+cargo run --bin convert -- safetensors /tmp/cortex-convert
 
 Loading Safetensors weights from 'weights/mnist.safetensors'...
-Saving model to '/tmp/burn-convert/mnist.bpk'...
-Model successfully saved to '/tmp/burn-convert/mnist.bpk'.
+Saving model to '/tmp/cortex-convert/mnist.bpk'...
+Model successfully saved to '/tmp/cortex-convert/mnist.bpk'.
 ```
 
-### Burnpack
+### Cortexpack
 
-Demonstrates loading and using a model from Burn's native Burnpack format.
+Demonstrates loading and using a model from Cortex's native Cortexpack format.
 
 ```bash
-cargo run --bin burnpack -- <image_index> <model_path>
+cargo run --bin cortexpack -- <image_index> <model_path>
 ```
 
 Where:
@@ -90,9 +90,9 @@ Where:
 
 Example:
 ```bash
-cargo run --bin burnpack -- 35 /tmp/burn-convert/mnist
+cargo run --bin cortexpack -- 35 /tmp/cortex-convert/mnist
 
-Loading model weights from file: /tmp/burn-convert/mnist.bpk
+Loading model weights from file: /tmp/cortex-convert/mnist.bpk
 Image index: 35
 Success!
 Predicted: 2
@@ -106,5 +106,5 @@ https://huggingface.co/datasets/ylecun/mnist/viewer/mnist/test?row=35
 A typical workflow using these examples:
 
 1. Start with pre-trained weights in either PyTorch or Safetensors format
-2. Use the `convert` example to convert to Burn's native Burnpack format
-3. Load and use the converted model with the `burnpack` example
+2. Use the `convert` example to convert to Cortex's native Cortexpack format
+3. Load and use the converted model with the `cortexpack` example

@@ -1,0 +1,133 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science", "no-std", "embedded", "wasm"]
+description = "Flexible and Comprehensive Deep Learning Framework in Rust"
+documentation = "https://docs.rs/burn-core"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+license.workspace = true
+name = "cortex-core"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-core"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "std",
+    "cortex-std/default",
+    "cortex-dataset?/default",
+    "cortex-tensor/default",
+]
+doc = [
+    "std",
+    "dataset",
+    "audio",
+    # Doc features
+    "cortex-std/doc",
+    "cortex-dataset/doc",
+    "cortex-tensor/doc",
+    "dep:regex"
+]
+tracing = ["cortex-std/tracing", "cortex-tensor/tracing", "cortex-dataset?/tracing"]
+
+dataset = ["cortex-dataset"]
+
+network = ["cortex-std/network"]
+sqlite = ["cortex-dataset?/sqlite"]
+sqlite-bundled = ["cortex-dataset?/sqlite-bundled"]
+std = [
+    "cortex-std/std",
+    "cortex-pack/std",
+    "cortex-tensor/std",
+    "half/std",
+    "log",
+    "rand/std",
+    "serde/std",
+    "serde_json/std",
+    "num-traits/std",
+]
+vision = ["cortex-dataset?/vision"]
+audio = ["cortex-dataset?/audio"]
+
+# Backends
+remote = ["cortex-tensor/remote"]
+remote-server = ["cortex-tensor/remote-server"]
+remote-websocket = ["cortex-tensor/remote-websocket"]
+cuda = ["cortex-tensor/cuda"]
+rocm = ["cortex-tensor/rocm"]
+flex = ["cortex-tensor/flex"]
+ndarray = ["cortex-tensor/ndarray"]
+tch = ["cortex-tensor/tch"]
+vulkan = ["cortex-tensor/vulkan"]
+webgpu = ["cortex-tensor/webgpu"]
+wgpu = ["cortex-tensor/wgpu"]
+metal = ["cortex-tensor/metal"]
+cpu = ["cortex-tensor/cpu"]
+autodiff = ["cortex-tensor/autodiff"]
+ir = ["cortex-ir"]
+
+# Backend features
+autotune = ["cortex-tensor/autotune"]
+autotune-checks = ["cortex-tensor/autotune-checks"]
+fusion = ["cortex-tensor/fusion"]
+
+# Backend extensions
+# cortex-dispatch features are enabled from cortex-tensor, we just re-export the public types
+extension = ["cortex-tensor/extension", "cortex-backend-extension", "cortex-dispatch", "cortex-backend"]
+
+[dependencies]
+
+# ** Please make sure all dependencies support no_std when std is disabled **
+
+cortex-std = { workspace = true }
+cortex-dataset = { workspace = true, optional = true }
+cortex-derive = { workspace = true }
+cortex-pack = { workspace = true, default-features = false }
+cortex-tensor = { workspace = true }
+
+# Backend extensions
+cortex-backend = { workspace = true, optional = true }
+cortex-dispatch = { workspace = true, optional = true }
+cortex-backend-extension = { workspace = true, optional = true }
+cortex-ir = { workspace = true, optional = true }
+
+derive-new = { workspace = true }
+log = { workspace = true, optional = true }
+rand = { workspace = true }
+
+# The same implementation of HashMap in std but with no_std support (only alloc crate is needed)
+hashbrown = { workspace = true, features = ["serde"] } # no_std compatible
+
+# Serialize Deserialize
+serde = { workspace = true, features = ["derive"] }
+
+ahash = { workspace = true }
+half = { workspace = true }
+num-traits = { workspace = true }
+serde_json = { workspace = true, features = ["alloc"] } #Default enables std
+spin = { workspace = true }                             # Using in place of use std::sync::Mutex when std is disabled
+thiserror = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+
+[target.'cfg(target_has_atomic = "ptr")'.dependencies]
+regex = { workspace = true }
+
+[target.'cfg(not(target_has_atomic = "ptr"))'.dependencies]
+portable-atomic-util = { workspace = true }
+portable-atomic = { workspace = true }
+
+[dev-dependencies]
+cortex-dataset = { workspace = true, features = ["fake"] }
+rstest = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+# Default device for tests
+cortex-tensor = { workspace = true, features = ["flex"] }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

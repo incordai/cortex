@@ -11,7 +11,7 @@ The example can be run like so:
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 export TORCH_CUDA_VERSION=cu128
@@ -22,7 +22,7 @@ cargo run --example text-generation --release
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 cargo run --example text-generation --release

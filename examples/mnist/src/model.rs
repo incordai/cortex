@@ -1,5 +1,5 @@
 use crate::data::MnistBatch;
-use burn::{
+use cortex::{
     nn::{
         BatchNorm, PaddingConfig2d,
         loss::CrossEntropyLossConfig,

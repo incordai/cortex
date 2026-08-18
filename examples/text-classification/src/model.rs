@@ -1,10 +1,10 @@
-// This is a basic text classification model implemented in Rust using the Burn framework.
+// This is a basic text classification model implemented in Rust using the Cortex framework.
 // It uses a Transformer as the base model and applies Linear and Embedding layers.
 // The model is then trained using Cross-Entropy loss. It contains methods for model initialization
 // (both with and without pre-trained weights), forward pass, inference, training, and validation.
 
 use crate::data::{TextClassificationInferenceBatch, TextClassificationTrainingBatch};
-use burn::{
+use cortex::{
     nn::{
         Embedding, EmbeddingConfig, Linear, LinearConfig,
         attention::SeqLengthOption,

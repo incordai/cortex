@@ -1,4 +1,4 @@
-use burn_store::{ModuleSnapshot, PytorchStore};
+use cortex_store::{ModuleSnapshot, PytorchStore};
 
 use import_model_weights::{Model, infer};
 

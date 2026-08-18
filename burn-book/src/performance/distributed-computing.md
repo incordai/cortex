@@ -1,13 +1,13 @@
 # Distributed Computing
 
-Burn supports data-parallel training across multiple devices and transparent execution on devices
+Cortex supports data-parallel training across multiple devices and transparent execution on devices
 hosted by another process. These capabilities can be used independently or together:
 
-- The types in `burn::tensor::distributed` provide collective tensor operations across a group of
+- The types in `cortex::tensor::distributed` provide collective tensor operations across a group of
   devices.
-- `burn::train::ExecutionStrategy::ddp` uses those collectives to synchronize gradients during
+- `cortex::train::ExecutionStrategy::ddp` uses those collectives to synchronize gradients during
   distributed data-parallel (DDP) training.
-- A remote `Device` sends normal tensor operations to a Burn compute server. A set of remote devices
+- A remote `Device` sends normal tensor operations to a Cortex compute server. A set of remote devices
   can also participate in DDP.
 
 ## Distributed Tensor Operations
@@ -26,7 +26,7 @@ Create a context before issuing collectives. Dropping the context closes its com
 so keep it alive for as long as the device group is active:
 
 ```rust, ignore
-use burn::tensor::{
+use cortex::tensor::{
     Device, DeviceType, Tensor,
     distributed::{
         CollectiveTensor, DistributedConfig, DistributedContext, ReduceOperation, all_reduce,
@@ -67,11 +67,11 @@ directly.
 ## Distributed Data Parallel Training
 
 DDP keeps one model replica on each device and splits training input across them. Each replica
-computes a forward and backward pass locally, then Burn all-reduces the gradients before applying
+computes a forward and backward pass locally, then Cortex all-reduces the gradients before applying
 the optimizer update. With `ReduceOperation::Mean`, every replica receives the mean gradient.
 
 ```rust, ignore
-use burn::{
+use cortex::{
     tensor::{Device, DeviceType, distributed::{DistributedConfig, ReduceOperation}},
     train::{ExecutionStrategy, Learner, SupervisedTraining},
 };
@@ -101,12 +101,12 @@ synchronization, and the lifetime of the `DistributedContext`.
 
 DDP differs from `ExecutionStrategy::MultiDevice`: DDP gives each device a model replica and uses
 collectives to synchronize gradients, whereas the multi-device strategy coordinates optimization
-through Burn's non-DDP multi-device training path.
+through Cortex's non-DDP multi-device training path.
 
 ## Remote Devices
 
 A remote device implements the same `Device` interface as a local CUDA, WGPU, or CPU device. Tensor
-creation and operations use the normal API, but execution happens on a device exposed by a Burn
+creation and operations use the normal API, but execution happens on a device exposed by a Cortex
 server:
 
 ```rust, ignore
@@ -162,6 +162,6 @@ across the selected server devices.
 - Use a single remote device when computation should run elsewhere but does not need data-parallel
   synchronization.
 - Use local DDP when several devices are directly available to the training process.
-- Use remote devices with DDP when a Burn server exposes several accelerators to a client.
+- Use remote devices with DDP when a Cortex server exposes several accelerators to a client.
 
 Distributed execution assumes that participating devices support the required collective operations.

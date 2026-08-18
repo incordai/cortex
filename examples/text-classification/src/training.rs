@@ -10,8 +10,8 @@ use crate::{
     model::TextClassificationModelConfig,
 };
 
-use burn::train::{ExecutionStrategy, Learner, SupervisedTraining};
-use burn::{
+use cortex::train::{ExecutionStrategy, Learner, SupervisedTraining};
+use cortex::{
     data::{dataloader::DataLoaderBuilder, dataset::transform::SamplerDataset},
     lr_scheduler::noam::NoamLrSchedulerConfig,
     nn::{attention::SeqLengthOption, transformer::TransformerEncoderConfig},

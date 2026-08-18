@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     nn::{
         Dropout, DropoutConfig, Linear, LinearConfig, PaddingConfig2d, Relu,
         conv::{Conv2d, Conv2dConfig},

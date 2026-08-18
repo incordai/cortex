@@ -15,11 +15,11 @@ crate-type = ["cdylib"]
 [features]
 default = ["flex"]
 
-flex = ["burn/flex"]
-wgpu = ["burn/wgpu"]
+flex = ["cortex/flex"]
+wgpu = ["cortex/wgpu"]
 
 [dependencies]
-burn = { workspace = true, features = ["extension"]}
+cortex = { workspace = true, features = ["extension"]}
 serde = { workspace = true }
 console_error_panic_hook = { workspace = true }
 

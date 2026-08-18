@@ -1,9 +1,9 @@
 # Examples
 
-In the [next chapter](./basic-workflow) you'll have the opportunity to implement the whole Burn
+In the [next chapter](./basic-workflow) you'll have the opportunity to implement the whole Cortex
 `guide` example yourself in a step by step manner.
 
-Many additional Burn examples are available in the
+Many additional Cortex examples are available in the
 [examples](https://github.com/tracel-ai/burn/tree/main/examples) directory. Burn examples are
 organized as library crates with one or more examples that are executable binaries. An example can
 then be executed using the following cargo command line in the root of the example's directory:
@@ -17,7 +17,7 @@ To learn more about crates and examples, read the Rust section below.
 <details>
 <summary><strong>🦀 About Rust crates</strong></summary>
 
-Each Burn example is a **package** which are subdirectories of the `examples` directory. A package
+Each Cortex example is a **package** which are subdirectories of the `examples` directory. A package
 is composed of one or more **crates**.
 
 A package is a bundle of one or more crates that provides a set of functionality. A package contains
@@ -45,16 +45,16 @@ crate, the compiler first looks in the crate root file (`src/lib.rs` for a libra
 `src/main.rs` for a binary crate). Any module declared in the crate root file will be inserted in
 the crate for compilation.
 
-All Burn examples are library crates and they can contain one or more executable examples that uses
-the library. We even have some Burn examples that uses the library crate of other examples.
+All Cortex examples are library crates and they can contain one or more executable examples that uses
+the library. We even have some Cortex examples that uses the library crate of other examples.
 
 The examples are unique files under the `examples` directory. Each file produces an executable file
 with the same name. Each example can then be executed with `cargo run --example <executable name>`.
 
-Below is a file tree of a typical Burn example package:
+Below is a file tree of a typical Cortex example package:
 
 ```
-examples/burn-example
+examples/cortex-example
 ├── Cargo.toml
 ├── examples
 │   ├── example1.rs      ---> compiled to example1 binary

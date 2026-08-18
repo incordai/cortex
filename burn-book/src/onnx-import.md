@@ -2,7 +2,7 @@
 
 ## Introduction
 
-As deep learning evolves, interoperability between frameworks becomes crucial. Burn provides robust
+As deep learning evolves, interoperability between frameworks becomes crucial. Cortex provides robust
 support for importing [ONNX (Open Neural Network Exchange)](https://onnx.ai/onnx/intro/index.html)
 models through the [`burn-onnx`](https://github.com/tracel-ai/burn-onnx) crate, enabling you to
 leverage pre-trained models in your Rust-based deep learning projects.
@@ -32,23 +32,23 @@ with these key features:
 This standardization allows seamless movement of models between different frameworks and deployment
 environments.
 
-## Burn's ONNX Support
+## Cortex's ONNX Support
 
-Burn's approach to ONNX import offers unique advantages:
+Cortex's approach to ONNX import offers unique advantages:
 
 1. **Native Rust code generation**: Translates ONNX models into Rust source code for deep
-   integration with Burn's ecosystem.
+   integration with Cortex's ecosystem.
 2. **Compile-time optimization**: Leverages the Rust compiler to optimize the generated code,
    potentially improving performance.
 3. **No runtime dependency**: Eliminates the need for an ONNX runtime, unlike many other solutions.
-4. **Trainability**: Allows imported models to be further trained or fine-tuned using Burn.
+4. **Trainability**: Allows imported models to be further trained or fine-tuned using Cortex.
 5. **Portability**: Enables compilation for various targets, including WebAssembly and embedded
    devices.
-6. **Backend flexibility**: Works with any of Burn's supported backends.
+6. **Backend flexibility**: Works with any of Cortex's supported backends.
 
 ## ONNX Compatibility
 
-Burn recommends ONNX models use **opset version 16 or higher** for best compatibility. While models
+Cortex recommends ONNX models use **opset version 16 or higher** for best compatibility. While models
 with older opset versions may work, opset 16+ ensures access to all supported operators and their
 latest behavior. If you encounter issues with an older model, consider upgrading it using the ONNX
 version converter.
@@ -84,7 +84,7 @@ onnx.save(inferred_model, 'upgraded_model.onnx')
 
 ## Step-by-Step Guide
 
-Follow these steps to import an ONNX model into your Burn project:
+Follow these steps to import an ONNX model into your Cortex project:
 
 ### Step 1: Update `Cargo.toml`
 
@@ -92,10 +92,10 @@ First, add the required dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-burn = { version = "~0.21", features = ["flex"] }
+cortex = { version = "~0.21", features = ["flex"] }
 
 [build-dependencies]
-burn-onnx = "~0.21"
+cortex-onnx = "~0.21"
 ```
 
 ### Step 2: Update `build.rs`
@@ -103,7 +103,7 @@ burn-onnx = "~0.21"
 In your `build.rs` file:
 
 ```rust, ignore
-use burn_onnx::ModelGen;
+use cortex_onnx::ModelGen;
 
 fn main() {
     ModelGen::new()
@@ -130,8 +130,8 @@ pub mod my_model {
 Now you can use the imported model in your code:
 
 ```rust, ignore
-use burn::tensor;
-use burn::backend::{Flex, flex::FlexDevice};
+use cortex::tensor;
+use cortex::backend::{Flex, flex::FlexDevice};
 use model::my_model::Model;
 
 fn main() {
@@ -155,7 +155,7 @@ fn main() {
 The `ModelGen` struct provides configuration options:
 
 ```rust, ignore
-use burn_onnx::{ModelGen, LoadStrategy};
+use cortex_onnx::{ModelGen, LoadStrategy};
 
 ModelGen::new()
     .input("path/to/model.onnx")
@@ -171,7 +171,7 @@ ModelGen::new()
 - `load_strategy`: Controls which weight-loading constructors are generated on the `Model` struct
   (see below)
 
-Model weights are stored in Burnpack format (`.bpk`), which provides efficient serialization and
+Model weights are stored in Cortexpack format (`.bpk`), which provides efficient serialization and
 loading.
 
 ### Load Strategy
@@ -236,7 +236,7 @@ Common issues and solutions:
    [list of supported ONNX operators](https://github.com/tracel-ai/burn-onnx/blob/main/SUPPORTED-ONNX-OPS.md).
    You may need to simplify your model or wait for support.
 
-2. **Build errors**: Ensure your `burn-onnx` version matches your Burn version and verify the ONNX
+2. **Build errors**: Ensure your `cortex-onnx` version matches your Cortex version and verify the ONNX
    file path in `build.rs`.
 
 3. **Runtime errors**: Confirm that your input tensors match the expected shape and data type of
@@ -260,7 +260,7 @@ For practical examples, check out the
 3. [Raspberry Pi Pico](https://github.com/tracel-ai/burn-onnx/tree/main/examples/raspberry-pi-pico) -
    Embedded deployment example
 
-These demonstrate real-world usage of ONNX import in Burn projects.
+These demonstrate real-world usage of ONNX import in Cortex projects.
 
 For contributors looking to add support for new ONNX operators:
 
@@ -269,10 +269,10 @@ For contributors looking to add support for new ONNX operators:
 
 ## Conclusion
 
-Importing ONNX models into Burn combines the vast ecosystem of pre-trained models with Burn's
+Importing ONNX models into Cortex combines the vast ecosystem of pre-trained models with Cortex's
 performance and Rust's safety features. Following this guide, you can seamlessly integrate ONNX
-models into your Burn projects for inference, fine-tuning, or further development.
+models into your Cortex projects for inference, fine-tuning, or further development.
 
-The `burn-onnx` crate is actively developed, with ongoing work to support more ONNX operators and
+The `cortex-onnx` crate is actively developed, with ongoing work to support more ONNX operators and
 improve performance. Visit the [burn-onnx repository](https://github.com/tracel-ai/burn-onnx) for
 updates and to contribute!

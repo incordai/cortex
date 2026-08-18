@@ -1,4 +1,4 @@
-use burn::data::dataset::{
+use cortex::data::dataset::{
     Dataset, DatasetError, SqliteDataset, source::huggingface::HuggingfaceDatasetLoader,
 };
 

@@ -10,8 +10,8 @@ pub struct BooksArgs {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum BookKind {
-    ///  Burn Book, a.k.a. the guide, made for the Burn users.
-    Burn(BookKindArgs),
+    ///  Cortex Book, a.k.a. the guide, made for the Cortex users.
+    Cortex(BookKindArgs),
     /// Contributor book, made for people willing to get all the technical understanding and advice to contribute actively to the project.
     Contributor(BookKindArgs),
 }
@@ -50,18 +50,18 @@ impl BooksArgs {
 }
 
 impl Book {
-    const BURN_BOOK_NAME: &'static str = "Burn Book";
-    const BURN_BOOK_PATH: &'static str = "./burn-book";
+    const CORTEX_BOOK_NAME: &'static str = "Cortex Book";
+    const CORTEX_BOOK_PATH: &'static str = "./cortex-book";
 
     const CONTRIBUTOR_BOOK_NAME: &'static str = "Contributor Book";
     const CONTRIBUTOR_BOOK_PATH: &'static str = "./contributor-book";
 
     pub(crate) fn run(book_arg: &BookKind) -> anyhow::Result<()> {
         let (book, command) = match book_arg {
-            BookKind::Burn(args) => (
+            BookKind::Cortex(args) => (
                 Self {
-                    name: Self::BURN_BOOK_NAME,
-                    path: Path::new(Self::BURN_BOOK_PATH),
+                    name: Self::CORTEX_BOOK_NAME,
+                    path: Path::new(Self::CORTEX_BOOK_PATH),
                 },
                 &args.command,
             ),

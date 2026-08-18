@@ -19,12 +19,12 @@ to get you started. Pre-trained weights are available for every supported archit
 collection. You will also find a spotlight of
 [community contributed models](https://github.com/tracel-ai/models?tab=readme-ov-file#community-contributions).
 
-## Burn-LM (alpha)
+## Cortex-LM (alpha)
 
 [`Burn-LM`](https://github.com/tracel-ai/burn-lm) is an LLM inference engine built on Burn. It
 provides access to large language models with open-source pre-trained weights and supports running,
-fine-tuning, and experimenting with them on any Burn backend.
+fine-tuning, and experimenting with them on any Cortex backend.
 
-Unlike tools focused solely on inference, Burn-LM is designed to work in a unified way across
+Unlike tools focused solely on inference, Cortex-LM is designed to work in a unified way across
 different models and tasks, making it easier to explore both inference and training workflows within
 the same framework.

@@ -1,12 +1,12 @@
 use text_classification::DbPediaDataset;
 
-use burn::tensor::{Device, DeviceConfig, Element};
+use cortex::tensor::{Device, DeviceConfig, Element};
 
 #[cfg(not(feature = "f16"))]
 #[allow(dead_code)]
 type ElemType = f32;
 #[cfg(feature = "f16")]
-type ElemType = burn::tensor::f16;
+type ElemType = cortex::tensor::f16;
 
 pub fn launch(mut device: Device) {
     device
@@ -33,7 +33,7 @@ pub fn launch(mut device: Device) {
 
 #[cfg(feature = "flex")]
 mod flex {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         crate::launch(Device::flex());
@@ -42,7 +42,7 @@ mod flex {
 
 #[cfg(feature = "tch-gpu")]
 mod tch_gpu {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         #[cfg(not(target_os = "macos"))]
@@ -56,7 +56,7 @@ mod tch_gpu {
 
 #[cfg(feature = "tch-cpu")]
 mod tch_cpu {
-    use burn::tensor::Device;
+    use cortex::tensor::Device;
 
     pub fn run() {
         crate::launch(Device::libtorch());
@@ -65,7 +65,7 @@ mod tch_cpu {
 
 #[cfg(feature = "wgpu")]
 mod wgpu {
-    use burn::tensor::{Device, DeviceKind};
+    use cortex::tensor::{Device, DeviceKind};
 
     pub fn run() {
         crate::launch(Device::wgpu(DeviceKind::DefaultDevice));
@@ -74,7 +74,7 @@ mod wgpu {
 
 #[cfg(feature = "metal")]
 mod metal {
-    use burn::tensor::{Device, DeviceKind};
+    use cortex::tensor::{Device, DeviceKind};
 
     pub fn run() {
         crate::launch(Device::wgpu(DeviceKind::DefaultDevice));
@@ -83,7 +83,7 @@ mod metal {
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use burn::tensor::{Device, DeviceIndex};
+    use cortex::tensor::{Device, DeviceIndex};
 
     pub fn run() {
         crate::launch(Device::cuda(DeviceIndex::Default));

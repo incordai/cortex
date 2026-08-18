@@ -3,7 +3,7 @@
 Now that we have trained our model, the next natural step is to use it for inference.
 
 You need two things in order to load weights for a model: the model's record and the model's config.
-Since parameters in Burn are lazy initialized, no allocation and GPU/CPU kernels are executed by the
+Since parameters in Cortex are lazy initialized, no allocation and GPU/CPU kernels are executed by the
 `ModelConfig::init` function. The weights are initialized when used for the first time, therefore
 you can safely use `config.init(device).load_record(record)` without any meaningful performance
 cost. Let's create a simple `infer` method in a new file `src/inference.rs` which we will use to
@@ -11,7 +11,7 @@ load our trained model.
 
 ```rust , ignore
 # use crate::{data::MnistBatcher, training::TrainingConfig};
-# use burn::{
+# use cortex::{
 #     data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
 #     prelude::*,
 #     store::ModuleRecord,
@@ -37,7 +37,7 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>, item: MnistItem) {
 ```
 
 The first step is to load the configuration of the training to fetch the correct model
-configuration. Then we can load the saved record from its burnpack file. Finally we can init the
+configuration. Then we can load the saved record from its cortexpack file. Finally we can init the
 model with the configuration and apply the record. For simplicity we can use the
 same batcher used during the training to pass from a MnistItem to a tensor.
 
@@ -52,7 +52,7 @@ Add the call to `infer` to the `main.rs` file after the `train` function call:
 # mod model;
 # mod training;
 #
-# use burn::{data::dataset::Dataset, optim::AdamConfig, prelude::*};
+# use cortex::{data::dataset::Dataset, optim::AdamConfig, prelude::*};
 # use crate::{model::ModelConfig, training::TrainingConfig};
 #
 # fn main() {
@@ -66,7 +66,7 @@ Add the call to `infer` to the `main.rs` file after the `train` function call:
     crate::inference::infer(
         artifact_dir,
         device,
-        burn::data::dataset::vision::MnistDataset::test()
+        cortex::data::dataset::vision::MnistDataset::test()
             .get(42)
             .unwrap(),
     );
@@ -79,5 +79,5 @@ using this [MNIST viewer](https://observablehq.com/@davidalber/mnist-viewer).
 ---
 
 In this short guide, we've introduced you to the fundamental building blocks for getting started
-with Burn. While there's still plenty to explore, our goal has been to provide you with the
+with Cortex. While there's still plenty to explore, our goal has been to provide you with the
 essential knowledge to kickstart your productivity within the framework.

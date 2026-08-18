@@ -1,5 +1,5 @@
 - [Overview](./overview.md)
-- [Why Burn?](./motivation.md)
+- [Why Cortex?](./motivation.md)
 - [Getting started](./getting-started.md)
   - [Examples](./examples.md)
 - [Basic Workflow: From Training to Inference](./basic-workflow/README.md)

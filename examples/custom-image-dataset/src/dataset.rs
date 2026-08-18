@@ -2,7 +2,7 @@ use flate2::read::GzDecoder;
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
-use burn::data::{dataset::vision::ImageFolderDataset, network::downloader};
+use cortex::data::{dataset::vision::ImageFolderDataset, network::downloader};
 
 /// CIFAR-10 mirror from [fastai](https://github.com/fastai/fastai/blob/master/fastai/data/external.py#L44).
 /// Licensed under the [Apache License](https://github.com/fastai/fastai/blob/master/LICENSE).

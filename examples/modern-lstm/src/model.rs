@@ -1,5 +1,5 @@
-use burn::nn::LstmState;
-use burn::{
+use cortex::nn::LstmState;
+use cortex::{
     nn::{
         Dropout, DropoutConfig, Initializer, LayerNorm, LayerNormConfig, Linear, LinearConfig,
         Sigmoid, Tanh,
@@ -51,7 +51,7 @@ pub struct LstmCellConfig {
 
 impl LstmCellConfig {
     // Initialize parameters using best practices:
-    // 1. Orthogonal initialization for better gradient flow (here we use Xavier because of the lack of Orthogonal in burn)
+    // 1. Orthogonal initialization for better gradient flow (here we use Xavier because of the lack of Orthogonal in cortex)
     // 2. Initialize forget gate bias to 1.0 to prevent forgetting at start of training
     #[allow(clippy::single_range_in_vec_init)]
     pub fn init(&self, device: &Device) -> LstmCell {

@@ -1,5 +1,5 @@
 use crate::data::TrainingTextGenerationBatch;
-use burn::{
+use cortex::{
     nn::{
         Embedding, EmbeddingConfig, Linear, LinearConfig,
         attention::generate_autoregressive_mask,

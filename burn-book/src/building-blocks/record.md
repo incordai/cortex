@@ -1,17 +1,17 @@
 # Record
 
-Records are how training state is saved and loaded with Burn. A record holds plain tensor data
+Records are how training state is saved and loaded with Cortex. A record holds plain tensor data
 (decoupled from the backend in use), so weights saved with one backend can be loaded on another, and
 parameter initialization stays lazy.
 
-All records serialize to the **burnpack** format (`.bpk`), Burn's compact binary container
-implemented by the `burn-pack` crate.
+All records serialize to the **cortexpack** format (`.bpk`), Cortex's compact binary container
+implemented by the `cortex-pack` crate.
 
-## The burnpack format
+## The cortexpack format
 
-A burnpack file has three parts:
+A cortexpack file has three parts:
 
-- a small fixed-size **header** (a `"BURN"` magic number, a format version, and the metadata length);
+- a small fixed-size **header** (a `"CORTEX"` magic number, a format version, and the metadata length);
 - a **metadata** blob (CBOR) describing each tensor (name, dtype, shape, data offsets, optional
   parameter id), any named **typed scalars**, and user key/value pairs;
 - a **tensor data section** where each tensor's bytes start on a 256-byte boundary, so the data can
@@ -34,11 +34,11 @@ deployment where the bytes are embedded with the compiled code).
 
 ### `ModuleRecord`
 
-`ModuleRecord` (in `burn::store`) holds a module's parameters keyed by their path within the module.
+`ModuleRecord` (in `cortex::store`) holds a module's parameters keyed by their path within the module.
 It is produced and applied through the `Module` trait itself:
 
 ```rust, ignore
-use burn::store::ModuleRecord;
+use cortex::store::ModuleRecord;
 
 // Take a record and save it.
 model.into_record().save("model")?; // writes model.bpk
@@ -81,5 +81,5 @@ see [Learner](./learner.md).
 ## Cross-framework formats
 
 To import weights from other ecosystems (PyTorch `.pt`, SafeTensors) or to use the more advanced
-store features (key remapping, filtering, half-precision storage), use the `burn-store` crate. See
+store features (key remapping, filtering, half-precision storage), use the `cortex-store` crate. See
 [Saving and Loading Models](../saving-and-loading.md) for examples.

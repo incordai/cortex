@@ -10,7 +10,7 @@ The example can be run like so:
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 # Use the --release flag to really speed up training.
 echo "Using flex backend"
 cargo run --example mnist --release --features flex                   # CPU Flex Backend - f32

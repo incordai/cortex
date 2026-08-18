@@ -1,9 +1,9 @@
-use burn::prelude::*;
+use cortex::prelude::*;
 
 use std::env::args;
 
-use burn::data::dataloader::Dataset;
-use burn::data::dataset::vision::MnistDataset;
+use cortex::data::dataloader::Dataset;
+use cortex::data::dataset::vision::MnistDataset;
 
 use crate::model::Model;
 

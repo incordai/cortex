@@ -1,6 +1,6 @@
 # Performance - Best Practices
 
-This section provides valuable insights into the performance characteristics of Burn and guides
+This section provides valuable insights into the performance characteristics of Cortex and guides
 users on how to effectively leverage them for optimal results.
 
 It includes several sections, each offering relevant details. While understanding these concepts can

@@ -11,7 +11,7 @@ entrypoint of our program, namely the `main` function defined in `src/main.rs`.
 # mod training;
 #
 use crate::{model::ModelConfig, training::TrainingConfig};
-use burn::{
+use cortex::{
     prelude::*,
 #     data::dataset::Dataset,
     optim::AdamConfig,
@@ -32,7 +32,7 @@ fn main() {
 ```
 
 In this code snippet, we select a WGPU device, which is compatible with any operating system and
-uses the GPU. For other options, see the Burn README. The model itself remains backend-agnostic:
+uses the GPU. For other options, see the Cortex README. The model itself remains backend-agnostic:
 tensor operations are dispatched according to their device. The training function creates an
 autodiff-enabled device internally.
 

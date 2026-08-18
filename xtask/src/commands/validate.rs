@@ -1,8 +1,8 @@
 use tracel_xtask::prelude::*;
 
 use crate::commands::{
-    build::BurnBuildCmdArgs,
-    test::{BurnTestCmdArgs, CiTestType},
+    build::CortexBuildCmdArgs,
+    test::{CortexTestCmdArgs, CiTestType},
 };
 
 pub fn handle_command(
@@ -24,7 +24,7 @@ pub fn handle_command(
         {
             // build
             super::build::handle_command(
-                BurnBuildCmdArgs {
+                CortexBuildCmdArgs {
                     target: target.clone(),
                     exclude: exclude.clone(),
                     only: only.clone(),
@@ -39,7 +39,7 @@ pub fn handle_command(
 
             // tests
             super::test::handle_command(
-                BurnTestCmdArgs {
+                CortexTestCmdArgs {
                     target: target.clone(),
                     exclude: exclude.clone(),
                     only: only.clone(),
@@ -94,7 +94,7 @@ pub fn handle_command(
 
         // build
         super::build::handle_command(
-            BurnBuildCmdArgs {
+            CortexBuildCmdArgs {
                 target: target.clone(),
                 exclude: exclude.clone(),
                 only: only.clone(),
@@ -109,14 +109,14 @@ pub fn handle_command(
 
         // tests
         super::test::handle_command(
-            BurnTestCmdArgs {
+            CortexTestCmdArgs {
                 target: target.clone(),
                 exclude: exclude.clone(),
                 only: only.clone(),
                 threads: None,
                 jobs: None,
                 command: Some(TestSubCommand::All),
-                // NOTE: this will only run `CiTestType::Backends` (burn-backend-tests)
+                // NOTE: this will only run `CiTestType::Backends` (cortex-backend-tests)
                 // for local sanity checks this is a quick approach to validating after no-std tests + cargo build
                 ci: CiTestType::GithubRunner,
                 features: None,

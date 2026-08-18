@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     module::{Module, ModuleMapper, Param},
     prelude::*,
 };

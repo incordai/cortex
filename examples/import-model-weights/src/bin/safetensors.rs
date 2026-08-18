@@ -1,4 +1,4 @@
-use burn_store::{ModuleSnapshot, PyTorchToBurnAdapter, SafetensorsStore};
+use cortex_store::{ModuleSnapshot, PyTorchToCortexAdapter, SafetensorsStore};
 
 use import_model_weights::{Model, infer};
 
@@ -13,7 +13,7 @@ pub fn main() {
 
     // Load Safetensors weights into the model (using PyTorch adapter since weights were exported from PyTorch)
     let mut store =
-        SafetensorsStore::from_file(WEIGHTS_FILE).with_from_adapter(PyTorchToBurnAdapter);
+        SafetensorsStore::from_file(WEIGHTS_FILE).with_from_adapter(PyTorchToCortexAdapter);
     model
         .load_from(&mut store)
         .expect("Failed to load Safetensors model weights");

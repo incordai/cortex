@@ -21,12 +21,12 @@ this is where quantization-aware training (QAT) can be used: during training, fa
 modules are inserted in the forward and backward passes to simulate quantization effects, allowing
 the model to learn representations that are more robust to reduced precision.
 
-Burn does not currently support QAT. Only post-training quantization (PTQ) is implemented at this
+Cortex does not currently support QAT. Only post-training quantization (PTQ) is implemented at this
 time.
 
 <div class="warning">
 
-Quantization support in Burn is currently in active development.
+Quantization support in Cortex is currently in active development.
 
 It supports the following PTQ modes on some backends:
 
@@ -44,8 +44,8 @@ tensors and can collect their statistics, such as the min and max value when usi
 `MinMaxCalibration`, to compute the quantization parameters.
 
 ```rust , ignore
-# use burn::module::Quantizer;
-# use burn::tensor::quantization::{Calibration, QuantLevel, QuantParam, QuantScheme, QuantValue};
+# use cortex::module::Quantizer;
+# use cortex::tensor::quantization::{Calibration, QuantLevel, QuantParam, QuantScheme, QuantValue};
 #
 // Quantization config
 let scheme = QuantScheme::default()
@@ -67,7 +67,7 @@ Calibration is the step during quantization where the range of all floating-poin
 computed. This is pretty straightforward for weights since the actual range is known at
 _quantization-time_ (weights are static), but activations require more attention.
 
-To compute the quantization parameters, Burn supports the following `Calibration` methods.
+To compute the quantization parameters, Cortex supports the following `Calibration` methods.
 
 | Method   | Description                                                                      |
 | :------- | :------------------------------------------------------------------------------- |

@@ -1,5 +1,5 @@
 use crate::dataset::{HousingBatch, NUM_FEATURES};
-use burn::{
+use cortex::{
     nn::{
         Linear, LinearConfig, Relu,
         loss::{MseLoss, Reduction::Mean},

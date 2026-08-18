@@ -24,12 +24,12 @@ This crate demonstrates how to run an MNIST-trained model in the browser for inf
 
 ## Design
 
-The inference components of `burn` with the `flex` backend can be built with `#![no_std]`. This
+The inference components of `cortex` with the `flex` backend can be built with `#![no_std]`. This
 makes it possible to build and run the model with the `wasm32-unknown-unknown` target without a
 special system library, such as [WASI](https://wasi.dev/). (See [Cargo.toml](./Cargo.toml) on how to
-include burn dependencies without `std`).
+include cortex dependencies without `std`).
 
-For this demo, we use trained parameters (`model.bpk`, in the burnpack format) and model
+For this demo, we use trained parameters (`model.bpk`, in the cortexpack format) and model
 (`model.rs`) from the
 [`burn` MNIST example](https://github.com/tracel-ai/burn/tree/main/examples/mnist).
 
@@ -67,9 +67,9 @@ The main differentiating factor of this example's approach (compiling rust model
 other popular tools, such as [TensorFlow.js](https://www.tensorflow.org/js),
 [ONNX Runtime JS](https://onnxruntime.ai/docs/tutorials/web/) and
 [TVM Web](https://github.com/apache/tvm/tree/main/web) is the absence of runtime code. The rust
-compiler optimizes and includes only used `burn` routines. 1,509,747 bytes out of Wasm's 1,866,491
+compiler optimizes and includes only used `cortex` routines. 1,509,747 bytes out of Wasm's 1,866,491
 byte file is the model's parameters. The rest of 356,744 bytes contain all the code (including
-`burn`'s `nn` components, the data deserialization library, and math operations).
+`cortex`'s `nn` components, the data deserialization library, and math operations).
 
 ## Future Improvements
 

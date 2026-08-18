@@ -1,4 +1,4 @@
-use burn::prelude::*;
+use cortex::prelude::*;
 use guide::model::ModelConfig;
 
 fn main() {

@@ -6,7 +6,7 @@ use crate::{
     model::LstmNetwork,
     training::TrainingConfig,
 };
-use burn::{
+use cortex::{
     data::{dataloader::batcher::Batcher, dataset::Dataset},
     prelude::*,
     store::ModuleRecord,

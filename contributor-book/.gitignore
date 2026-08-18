@@ -7,7 +7,7 @@ book-test
 guide/book
 
 .vscode
-tests/burn-book/book/
+tests/cortex-book/book/
 book/
 
 # Ignore Jetbrains specific files.

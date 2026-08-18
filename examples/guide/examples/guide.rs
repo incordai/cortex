@@ -1,5 +1,5 @@
 //
-// Note: If you are following the Burn Book guide this file can be ignored.
+// Note: If you are following the Cortex Book guide this file can be ignored.
 //
 // This example file is added only for convenience and consistency so that
 // the guide example can be executed like any other examples using:

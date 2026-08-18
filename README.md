@@ -13,7 +13,7 @@
 
 ---
 
-**Burn is both a tensor library and a deep learning framework, optimized for <br /> numerical
+**Cortex is both a tensor library and a deep learning framework, optimized for <br /> numerical
 computing, training and inference.**
 
 <br/>
@@ -26,19 +26,19 @@ exported to an open format like ONNX or optimized for production engines like vL
 TensorRT. This export step is often brittle and lossy, ruling out complex architectures and advanced
 deployment use cases.
 
-Burn unifies the two. By executing multi-platform tensor operations via a single, unified API, the
+Cortex unifies the two. By executing multi-platform tensor operations via a single, unified API, the
 exact code used for training is the exact code that runs in production. This makes workloads like
 on-device personalization and federated learning straightforward, while enabling teams to go from
 prototype to deployment in a single codebase.
 
-Burn preserves the intuitive ergonomics of PyTorch, with dynamic shapes and graphs, but JIT-compiles
+Cortex preserves the intuitive ergonomics of PyTorch, with dynamic shapes and graphs, but JIT-compiles
 streams of tensor operations, performing automatic kernel fusion. You get the flexibility of dynamic
 graphs without the performance drop.
 
 ## Rust for Research?
 
 Rust used to be a tough sell for research: long compilation times disrupted the fast
-edit-compile-run loop that draws researchers to Python. Burn changes this paradigm. Designed around
+edit-compile-run loop that draws researchers to Python. Cortex changes this paradigm. Designed around
 incremental compilation, modifying model code recompiles in under 5 seconds, even in release mode.
 This delivers a Python-like feedback loop with the speed and safety of Rust.
 
@@ -47,7 +47,7 @@ This delivers a Python-like feedback loop with the speed and safety of Rust.
 <div align="left">
 <img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-blazingly-fast.png" height="96px"/>
 
-Burn is the core of a growing, fully open-source Rust AI ecosystem. You are not adopting a single
+Cortex is the core of a growing, fully open-source Rust AI ecosystem. You are not adopting a single
 library, you are joining a stack that spans GPU compute, model interop and domain toolkits, with
 plenty of room to help shape what comes next.
 
@@ -57,10 +57,10 @@ plenty of room to help shape what comes next.
 | ------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Compute       | [CubeCL](https://github.com/tracel-ai/cubecl)         | GPU compute language and compiler behind Burn's accelerated backends. Write kernels once in Rust, run on CUDA, ROCm, Metal, Vulkan and WebGPU. Usable standalone. |
 | Model interop | [burn-onnx](https://github.com/tracel-ai/burn-onnx)   | Import ONNX models into Burn as native Rust code                                                                                                                  |
-|               | `burn-store`                                          | Save, load and import model weights, including PyTorch and Safetensors                                                                                            |
-| Domains       | `burn-vision`                                         | Computer vision operators and building blocks                                                                                                                     |
-|               | `burn-rl`                                             | Reinforcement learning building blocks                                                                                                                            |
-|               | `burn-dataset`                                        | Dataset loading, transforms and ready-made sources                                                                                                                |
+|               | `cortex-store`                                          | Save, load and import model weights, including PyTorch and Safetensors                                                                                            |
+| Domains       | `cortex-vision`                                         | Computer vision operators and building blocks                                                                                                                     |
+|               | `cortex-rl`                                             | Reinforcement learning building blocks                                                                                                                            |
+|               | `cortex-dataset`                                        | Dataset loading, transforms and ready-made sources                                                                                                                |
 | Models        | [models](https://github.com/tracel-ai/models)         | Curated pre-trained models and examples built with Burn                                                                                                           |
 | Tooling       | [burn-bench](https://github.com/tracel-ai/burn-bench) | Benchmark and compare backends, tracking performance over time                                                                                                    |
 
@@ -117,7 +117,7 @@ fits? Open a PR to add it!
 <div align="left">
 <img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/backend-chip.png" height="96px"/>
 
-Burn strives to be as fast as possible on as many hardwares as possible, with robust
+Cortex strives to be as fast as possible on as many hardwares as possible, with robust
 implementations. We believe this flexibility is crucial for modern needs where you may train your
 models in the cloud, then deploy on customer hardwares, which vary from user to user.
 
@@ -149,8 +149,8 @@ Most backends support all operating systems, so we don't mention them in the tab
 
 <br />
 
-Compared to other frameworks, Burn has a very different approach to supporting many backends. By
-design, most code is generic over the Backend trait, which allows us to build Burn with swappable
+Compared to other frameworks, Cortex has a very different approach to supporting many backends. By
+design, most code is generic over the Backend trait, which allows us to build Cortex with swappable
 backends. This makes composing backend possible, augmenting them with additional functionalities
 such as autodifferentiation and automatic kernel fusion.
 
@@ -167,8 +167,8 @@ The simple act of wrapping a base backend with Autodiff transparently equips it 
 autodifferentiation support, making it possible to call backward on your model.
 
 ```rust
-use burn::backend::{Autodiff, Wgpu};
-use burn::tensor::{Distribution, Tensor};
+use cortex::backend::{Autodiff, Wgpu};
+use cortex::tensor::{Distribution, Tensor};
 
 fn main() {
     type Backend = Autodiff<Wgpu>;
@@ -192,7 +192,7 @@ Of note, it is impossible to make the mistake of calling backward on a model tha
 that does not support autodiff (for inference), as this method is only offered by an Autodiff
 backend.
 
-See the [Autodiff Backend README](./crates/burn-autodiff/README.md) for more details.
+See the [Autodiff Backend README](./crates/cortex-autodiff/README.md) for more details.
 
 </details>
 
@@ -204,7 +204,7 @@ Fusion: Backend decorator that brings kernel fusion to all first-party backends
 
 This backend decorator enhances a backend with kernel fusion, provided that the inner backend
 supports it. Note that you can compose this backend with other backend decorators such as Autodiff.
-All first-party accelerated backends (like WGPU and CUDA) use Fusion by default (`burn/fusion`
+All first-party accelerated backends (like WGPU and CUDA) use Fusion by default (`cortex/fusion`
 feature flag), so you typically don't need to apply it manually.
 
 ```rust
@@ -212,14 +212,14 @@ feature flag), so you typically don't need to apply it manually.
 pub type Cuda<F = f32, I = i32> = CubeBackend<CudaRuntime, F, I, u8>;
 
 #[cfg(feature = "fusion")]
-pub type Cuda<F = f32, I = i32> = burn_fusion::Fusion<CubeBackend<CudaRuntime, F, I, u8>>;
+pub type Cuda<F = f32, I = i32> = cortex_fusion::Fusion<CubeBackend<CudaRuntime, F, I, u8>>;
 ```
 
 Of note, we plan to implement automatic gradient checkpointing based on compute bound and memory
 bound operations, which will work gracefully with the fusion backend to make your code run even
 faster during training, see [this issue](https://github.com/tracel-ai/burn/issues/936).
 
-See the [Fusion Backend README](./crates/burn-fusion/README.md) for more details.
+See the [Fusion Backend README](./crates/cortex-fusion/README.md) for more details.
 
 </details>
 
@@ -236,12 +236,12 @@ of code:
 ```rust
 fn main_server() {
     // Start a server on port 3000.
-    burn::server::start::<burn::backend::Cuda>(Default::default(), 3000);
+    cortex::server::start::<cortex::backend::Cuda>(Default::default(), 3000);
 }
 
 fn main_client() {
     // Create a client that communicate with the server on port 3000.
-    use burn::backend::{Autodiff, RemoteBackend};
+    use cortex::backend::{Autodiff, RemoteBackend};
 
     type Backend = Autodiff<RemoteDevice>;
 
@@ -261,12 +261,12 @@ fn main_client() {
 <div align="left">
 <img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-wall.png" height="96px"/>
 
-The whole deep learning workflow is made easy with Burn, as you can monitor your training progress
+The whole deep learning workflow is made easy with Cortex, as you can monitor your training progress
 with an ergonomic dashboard, and run inference everywhere from embedded devices to large GPU
 clusters.
 
-Burn was built from the ground up with training and inference in mind. It's also worth noting how
-Burn, in comparison to frameworks like PyTorch, simplifies the transition from training to
+Cortex was built from the ground up with training and inference in mind. It's also worth noting how
+Cortex, in comparison to frameworks like PyTorch, simplifies the transition from training to
 deployment, eliminating the need for code changes.
 
 </div>
@@ -307,11 +307,11 @@ ONNX Support 🐫
 </summary>
 <br />
 
-Burn supports importing ONNX (Open Neural Network Exchange) models through the
+Cortex supports importing ONNX (Open Neural Network Exchange) models through the
 [burn-onnx](https://github.com/tracel-ai/burn-onnx) crate, allowing you to easily port models from
-TensorFlow or PyTorch to Burn. The ONNX model is converted into Rust code that uses Burn's native
-APIs, enabling the imported model to run on any Burn backend (CPU, GPU, WebAssembly) and benefit
-from all of Burn's optimizations like automatic kernel fusion.
+TensorFlow or PyTorch to Cortex. The ONNX model is converted into Rust code that uses Cortex's native
+APIs, enabling the imported model to run on any Cortex backend (CPU, GPU, WebAssembly) and benefit
+from all of Cortex's optimizations like automatic kernel fusion.
 
 Our ONNX support is further described in
 [this section of the Burn Book 🔥](https://burn.dev/books/burn/onnx-import.html).
@@ -327,12 +327,12 @@ Importing PyTorch or Safetensors Models 🚚
 </summary>
 <br />
 
-You can load weights from PyTorch or Safetensors formats directly into your Burn-defined models.
-This makes it easy to reuse existing models while benefiting from Burn's performance and deployment
+You can load weights from PyTorch or Safetensors formats directly into your Cortex-defined models.
+This makes it easy to reuse existing models while benefiting from Cortex's performance and deployment
 features.
 
 Learn more in the [Saving & Loading Models](https://burn.dev/books/burn/saving-and-loading.html)
-section of the Burn Book.
+section of the Cortex Book.
 
 </details>
 
@@ -392,18 +392,18 @@ Run and compare benchmarks using [burn-bench](https://github.com/tracel-ai/burn-
 <div align="left">
 <img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-walking.png" height="96px"/>
 
-Just heard of Burn? You are at the right place! Just continue reading this section and we hope you
+Just heard of Cortex? You are at the right place! Just continue reading this section and we hope you
 can get on board really quickly.
 
 </div>
 
 <details>
 <summary>
-The Burn Book 🔥
+The Cortex Book 🔥
 </summary>
 <br />
 
-To begin working effectively with Burn, it is crucial to understand its key components and
+To begin working effectively with Cortex, it is crucial to understand its key components and
 philosophy. This is why we highly recommend new users to read the first sections of
 [The Burn Book 🔥](https://burn.dev/books/burn/). It provides detailed examples and explanations
 covering every facet of the framework, including building blocks like tensors, modules, and
@@ -425,9 +425,9 @@ Let's start with a code snippet that shows how intuitive the framework is to use
 we declare a neural network module with some parameters along with its forward pass.
 
 ```rust
-use burn::nn;
-use burn::module::Module;
-use burn::tensor::backend::Backend;
+use cortex::nn;
+use cortex::module::Module;
+use cortex::tensor::backend::Backend;
 
 #[derive(Module, Debug)]
 pub struct PositionWiseFeedForward<B: Backend> {
@@ -471,13 +471,13 @@ Additional examples:
 - [Custom Renderer](./examples/custom-renderer) : Implements a custom renderer to display the
   [`Learner`](./building-blocks/learner.md) progress.
 - [Image Classification Web](./examples/image-classification-web) : Image classification web browser
-  demo using Burn, WGPU and WebAssembly.
+  demo using Cortex, WGPU and WebAssembly.
 - [MNIST Inference on Web](./examples/mnist-inference-web) : An interactive MNIST inference demo in
   the browser. The demo is available [online](https://burn.dev/demo/).
 - [MNIST Training](./examples/mnist) : Demonstrates how to train a custom `Module` (MLP) with the
   `Learner` configured to log metrics and keep training checkpoints.
 - [PyTorch Import Inference](./examples/import-model-weights) : Imports a PyTorch model pre-trained
-  on MNIST to perform inference on a sample image with Burn.
+  on MNIST to perform inference on a sample image with Cortex.
 - [Text Classification](./examples/text-classification) : Trains a text classification transformer
   model on the AG News or DbPedia dataset. The trained model can then be used to classify a text
   sample.
@@ -497,11 +497,11 @@ Pre-trained Models 🤖
 </summary>
 <br />
 
-We keep an updated and curated list of models and examples built with Burn, see the
+We keep an updated and curated list of models and examples built with Cortex, see the
 [tracel-ai/models repository](https://github.com/tracel-ai/models) for more details.
 
 Don't see the model you want? Don't hesitate to open an issue, and we may prioritize it. Built a
-model using Burn and want to share it? You can also open a Pull Request and add your model under the
+model using Cortex and want to share it? You can also open a Pull Request and add your model under the
 community section!
 
 </details>
@@ -543,7 +543,7 @@ runtime to ship, running from servers down to `no_std` embedded targets.
 
 <!-- >
 > In the event that you are trying to load a model record saved in a previous version, make sure to
-> enable the `record-backward-compat` feature using a previous version of burn (<=0.16.0). Otherwise,
+> enable the `record-backward-compat` feature using a previous version of cortex (<=0.16.0). Otherwise,
 > the record won't be deserialized correctly and you will get an error message (which will also point
 > you to the backward compatible feature flag). The backward compatibility was maintained for
 > deserialization (loading), so as soon as you have saved the record again it will be saved according
@@ -601,12 +601,12 @@ covers architecture, environment setup, and guides for common tasks.
 
 ## Status
 
-Burn is currently in active development, and there will be breaking changes. While any resulting
+Cortex is currently in active development, and there will be breaking changes. While any resulting
 issues are likely to be easy to fix, there are no guarantees at this stage.
 
 ## License
 
-Burn is distributed under the terms of both the MIT license and the Apache License (Version 2.0).
+Cortex is distributed under the terms of both the MIT license and the Apache License (Version 2.0).
 See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details. Opening a pull
 request is assumed to signal agreement with these licensing terms.
 

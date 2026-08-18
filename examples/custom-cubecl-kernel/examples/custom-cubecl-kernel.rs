@@ -1,4 +1,4 @@
-use burn::tensor::{Device, Distribution, Tensor, Tolerance};
+use cortex::tensor::{Device, Distribution, Tensor, Tolerance};
 use custom_cubecl_kernel::{matmul_add_relu_custom, matmul_add_relu_reference};
 
 fn inference(device: &Device) {

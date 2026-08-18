@@ -1,7 +1,7 @@
 # Backend Extension
 
-Burn aims to be the most flexible deep learning framework. While it's crucial to maintain
-compatibility with a wide variety of backends, Burn provides the ability to extend the functionality
+Cortex aims to be the most flexible deep learning framework. While it's crucial to maintain
+compatibility with a wide variety of backends, Cortex provides the ability to extend the functionality
 of a backend implementation to suit your modeling requirements. This versatility is advantageous in
 numerous ways, such as supporting custom operations like flash attention or manually fusing
 operations for enhanced performance.
@@ -10,16 +10,16 @@ In this section, we will go into the process of extending a backend, providing m
 But before we proceed, let's establish the fundamental principles that will empower you to craft
 your own backend extensions.
 
-Burn's user-facing tensors and modules are runtime-dispatched and don't expose a backend generic.
+Cortex's user-facing tensors and modules are runtime-dispatched and don't expose a backend generic.
 Backend traits remain part of the lower layer, where they define primitive operations that can
 be registered with the Tensor → Bridge → Dispatch → Backend stack. To create an extension, define a
 backend trait specifying the new primitive operation, implement it for the backends you support,
 and expose a backend-independent `Tensor` function that calls through `Dispatch`.
 
 ```rust, ignore
-pub trait Backend: burn::backend::Backend {
+pub trait Backend: cortex::backend::Backend {
     fn my_new_function(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        // You can define a basic implementation reusing the Burn Backend API.
+        // You can define a basic implementation reusing the Cortex Backend API.
         // This can be useful since all backends will now automatically support
         // your model. But performance can be improved for this new
         // operation by implementing this block in specific backends.
@@ -30,13 +30,13 @@ pub trait Backend: burn::backend::Backend {
 You can then implement your new custom backend trait for any backend that you want to support:
 
 ```rust, ignore
-impl Backend for burn_tch::LibTorch {
+impl Backend for cortex_tch::LibTorch {
    fn my_new_function(tensor: TchTensor) -> TchTensor {
       // My Tch implementation
    }
 }
 
-impl Backend for burn_flex::Flex {
+impl Backend for cortex_flex::Flex {
     // No specific implementation, but the backend can still be used.
 }
 ```
@@ -44,13 +44,13 @@ impl Backend for burn_flex::Flex {
 You can support the backward pass using the same pattern.
 
 ```rust, ignore
-impl<B: Backend> Backend for burn_autodiff::Autodiff<B> {
+impl<B: Backend> Backend for cortex_autodiff::Autodiff<B> {
     // No specific implementation; autodiff will work with the default
     // implementation. Useful if you still want to train your model, but
     // observe performance gains mostly during inference.
 }
 
-impl<B: Backend> Backend for burn_autodiff::Autodiff<B> {
+impl<B: Backend> Backend for cortex_autodiff::Autodiff<B> {
    fn my_new_function(tensor: AutodiffTensor) -> AutodiffTensor {
       // My own backward implementation, generic over my custom Backend trait.
       //
@@ -59,7 +59,7 @@ impl<B: Backend> Backend for burn_autodiff::Autodiff<B> {
    }
 }
 
-impl Backend for burn_autodiff::Autodiff<burn_tch::LibTorch> {
+impl Backend for cortex_autodiff::Autodiff<cortex_tch::LibTorch> {
    fn my_new_function(tensor: AutodiffTensor) -> AutodiffTensor {
       // My own backward implementation, generic over a backend implementation.
       //
@@ -74,7 +74,7 @@ impl Backend for burn_autodiff::Autodiff<burn_tch::LibTorch> {
 
 The specifics of each implementation will be covered by the examples provided in this section. The
 `cubecl` compiler frontend is the recommended method of implementing custom kernels, since it
-supports multiple backends, including `wgpu` and `CUDA`, and is the way first-party `burn` kernels
+supports multiple backends, including `wgpu` and `CUDA`, and is the way first-party `cortex` kernels
 are written.
 
 ## Passing structs and enums of tensors
@@ -85,7 +85,7 @@ fields are tensor primitives can be passed to and returned from an operation by 
 `ExtensionType` can be nested by annotating it with `#[extension_type]`.
 
 ```rust, ignore
-use burn::backend::{
+use cortex::backend::{
     ExtensionType, backend_extension,
     tensor::{FloatTensor, IntTensor},
 };
@@ -110,7 +110,7 @@ with `#[extension_type]`:
 
 ```rust, ignore
 #[backend_extension(Wgpu, Cuda, Autodiff)]
-pub trait Backend: burn::backend::Backend {
+pub trait Backend: cortex::backend::Backend {
     // Struct as an output.
     fn detect(image: FloatTensor<Self>) -> Boxes<Self>;
 

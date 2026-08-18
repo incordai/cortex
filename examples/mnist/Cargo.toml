@@ -10,19 +10,19 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["burn/default", "burn/tui"]
-flex = ["burn/flex"]
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
-metal = ["burn/metal"]
-cuda = ["burn/cuda"]
-vulkan = ["burn/vulkan"]
-rocm = ["burn/rocm"]
-remote = ["burn/remote-websocket"]
+default = ["cortex/default", "cortex/tui"]
+flex = ["cortex/flex"]
+tch-cpu = ["cortex/tch"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
+metal = ["cortex/metal"]
+cuda = ["cortex/cuda"]
+vulkan = ["cortex/vulkan"]
+rocm = ["cortex/rocm"]
+remote = ["cortex/remote-websocket"]
 
 [dependencies]
-burn = { workspace = true, features = [
+cortex = { workspace = true, features = [
     "train",
     "vision",
     "metrics",

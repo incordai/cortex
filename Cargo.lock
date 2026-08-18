@@ -722,617 +722,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "burn"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-autodiff",
- "burn-candle",
- "burn-core",
- "burn-cpu",
- "burn-cuda",
- "burn-dispatch",
- "burn-flex",
- "burn-ir",
- "burn-ndarray",
- "burn-nn",
- "burn-optim",
- "burn-rl",
- "burn-rocm",
- "burn-router",
- "burn-std",
- "burn-store",
- "burn-tch",
- "burn-train",
- "burn-vision",
- "burn-wgpu",
- "cubecl",
-]
-
-[[package]]
-name = "burn-autodiff"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-std",
- "derive-new",
- "hashbrown 0.16.1",
- "log",
- "num-traits",
- "parking_lot",
- "portable-atomic",
- "portable-atomic-util",
- "spin",
- "tracing",
-]
-
-[[package]]
-name = "burn-backend"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-std",
- "bytemuck",
- "cubecl",
- "derive-new",
- "enumset",
- "hashbrown 0.16.1",
- "num-traits",
- "oneshot",
- "paste",
- "portable-atomic-util",
- "rand 0.10.2",
- "rand_distr 0.6.0",
- "serde",
- "serde_json",
- "serial_test",
- "spin",
-]
-
-[[package]]
-name = "burn-backend-extension"
-version = "0.22.0-pre.2"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "burn-backend-tests"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-autodiff",
- "burn-backend",
- "burn-cubecl",
- "burn-cubecl-fusion",
- "burn-flex",
- "burn-fusion",
- "burn-ndarray",
- "burn-tensor",
- "ctor",
- "cubek",
- "divan",
- "num-traits",
- "proc-macro2",
- "quote",
- "rand 0.10.2",
- "serial_test",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "burn-candle"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-std",
- "candle-core",
- "derive-new",
-]
-
-[[package]]
-name = "burn-communication"
-version = "0.22.0-pre.2"
-dependencies = [
- "axum",
- "burn-backend",
- "burn-std",
- "bytes",
- "derive-new",
- "futures",
- "futures-util",
- "log",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "tracing-core",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "burn-core"
-version = "0.22.0-pre.2"
-dependencies = [
- "ahash",
- "burn-backend",
- "burn-backend-extension",
- "burn-dataset",
- "burn-derive",
- "burn-dispatch",
- "burn-ir",
- "burn-pack",
- "burn-std",
- "burn-tensor",
- "derive-new",
- "half",
- "hashbrown 0.16.1",
- "log",
- "num-traits",
- "portable-atomic",
- "portable-atomic-util",
- "rand 0.10.2",
- "regex",
- "rstest",
- "serde",
- "serde_json",
- "serial_test",
- "spin",
- "tempfile",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "burn-cpu"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-cubecl",
- "burn-fusion",
- "cubecl",
-]
-
-[[package]]
-name = "burn-cubecl"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-cubecl-fusion",
- "burn-fusion",
- "burn-ir",
- "burn-std",
- "cubecl",
- "cubek",
- "derive-new",
- "futures-lite",
- "log",
- "serde",
- "text_placeholder",
- "tracing",
-]
-
-[[package]]
-name = "burn-cubecl-fusion"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-fusion",
- "burn-ir",
- "burn-std",
- "cubecl",
- "cubek",
- "derive-new",
- "half",
- "hashbrown 0.16.1",
- "rmp-serde",
- "serde",
- "spin",
-]
-
-[[package]]
-name = "burn-cuda"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-cubecl",
- "burn-fusion",
- "cubecl",
-]
-
-[[package]]
-name = "burn-dataset"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-std",
- "csv",
- "derive-new",
- "dirs",
- "encoding_rs",
- "fake",
- "flate2",
- "gix-tempfile",
- "globwalk",
- "hound",
- "image",
- "planus",
- "polars",
- "r2d2",
- "r2d2_sqlite",
- "rand 0.10.2",
- "rayon",
- "rmp-serde",
- "rstest",
- "rusqlite",
- "sanitize-filename",
- "serde",
- "serde_json",
- "serde_rusqlite",
- "strum 0.28.0",
- "tar",
- "tempfile",
- "thiserror 2.0.19",
- "zip 8.6.0",
-]
-
-[[package]]
-name = "burn-derive"
-version = "0.22.0-pre.2"
-dependencies = [
- "derive-new",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "burn-dispatch"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-autodiff",
- "burn-backend",
- "burn-cpu",
- "burn-cuda",
- "burn-flex",
- "burn-ndarray",
- "burn-remote",
- "burn-rocm",
- "burn-tch",
- "burn-wgpu",
- "paste",
-]
-
-[[package]]
-name = "burn-flex"
-version = "0.22.0-pre.2"
-dependencies = [
- "aligned-vec",
- "burn-backend",
- "burn-ir",
- "burn-std",
- "bytemuck",
- "gemm 0.19.0",
- "half",
- "libm",
- "macerator",
- "num-traits",
- "once_cell",
- "portable-atomic",
- "portable-atomic-util",
- "rayon",
- "realfft",
-]
-
-[[package]]
-name = "burn-fusion"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-ir",
- "burn-std",
- "derive-new",
- "hashbrown 0.16.1",
- "log",
- "serde",
- "smallvec",
- "spin",
- "tracing",
-]
-
-[[package]]
-name = "burn-ir"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "hashbrown 0.16.1",
- "serde",
-]
-
-[[package]]
-name = "burn-ndarray"
-version = "0.22.0-pre.2"
-dependencies = [
- "atomic_float",
- "blas-src",
- "burn-backend",
- "burn-ir",
- "burn-std",
- "bytemuck",
- "bytes",
- "const-random",
- "itertools",
- "libm",
- "macerator",
- "matrixmultiply",
- "ndarray 0.17.2",
- "num-traits",
- "openblas-src",
- "paste",
- "portable-atomic",
- "portable-atomic-util",
- "rand 0.10.2",
- "rayon",
- "seq-macro",
-]
-
-[[package]]
-name = "burn-nn"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-core",
- "num-traits",
- "rstest",
-]
-
-[[package]]
-name = "burn-no-std-tests"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn",
- "burn-flex",
- "burn-store",
-]
-
-[[package]]
-name = "burn-optim"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-core",
- "burn-derive",
- "burn-nn",
- "burn-pack",
- "derive-new",
- "hashbrown 0.16.1",
- "log",
- "num-traits",
- "rstest",
- "serde",
-]
-
-[[package]]
-name = "burn-pack"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-std",
- "byteorder",
- "ciborium",
- "serde",
- "tempfile",
-]
-
-[[package]]
-name = "burn-remote"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-communication",
- "burn-flex",
- "burn-fusion",
- "burn-ir",
- "burn-router",
- "burn-std",
- "burn-tensor",
- "bytes",
- "futures-util",
- "gloo-timers",
- "iroh",
- "log",
- "rand 0.10.2",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "tokio",
- "tokio-util",
- "wasm-bindgen-futures",
-]
-
-[[package]]
-name = "burn-rl"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-core",
- "derive-new",
- "log",
- "rand 0.10.2",
-]
-
-[[package]]
-name = "burn-rocm"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-cubecl",
- "burn-fusion",
- "cubecl",
-]
-
-[[package]]
-name = "burn-router"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-flex",
- "burn-fusion",
- "burn-ir",
- "burn-std",
- "hashbrown 0.16.1",
- "log",
- "serde",
- "spin",
-]
-
-[[package]]
-name = "burn-std"
-version = "0.22.0-pre.2"
-dependencies = [
- "ahash",
- "bytemuck",
- "bytes",
- "cubecl-common",
- "cubecl-environment",
- "cubecl-zspace",
- "dashmap",
- "data-encoding",
- "derive-new",
- "enumset",
- "half",
- "hashbrown 0.16.1",
- "indicatif 0.18.6",
- "num-traits",
- "paste",
- "portable-atomic-util",
- "rand 0.10.2",
- "rand_distr 0.6.0",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serial_test",
- "smallvec",
- "spin",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "burn-store"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-core",
- "burn-nn",
- "burn-pack",
- "burn-tensor",
- "byteorder",
- "bytes",
- "ciborium",
- "divan",
- "half",
- "hashbrown 0.16.1",
- "lzma-rust2 0.16.5",
- "memmap2",
- "num-traits",
- "regex",
- "safetensors 0.7.0",
- "serde",
- "tar",
- "tempfile",
- "textdistance",
- "thiserror 2.0.19",
- "zip 8.6.0",
-]
-
-[[package]]
-name = "burn-tch"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "cc",
- "libc",
- "log",
- "tch",
- "torch-sys",
-]
-
-[[package]]
-name = "burn-tensor"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-dispatch",
- "burn-std",
- "colored 3.1.1",
- "derive-new",
- "num-traits",
- "serde",
-]
-
-[[package]]
-name = "burn-train"
-version = "0.22.0-pre.2"
-dependencies = [
- "async-channel",
- "burn-core",
- "burn-flex",
- "burn-nn",
- "burn-optim",
- "burn-rl",
- "burn-std",
- "burn-store",
- "derive-new",
- "dirs",
- "log",
- "nvml-wrapper",
- "rand 0.10.2",
- "ratatui",
- "rstest",
- "serde",
- "sysinfo 0.38.4",
- "systemstat",
- "tempfile",
- "thiserror 2.0.19",
- "tracing-appender",
- "tracing-core",
- "tracing-subscriber",
- "unicode-width",
-]
-
-[[package]]
-name = "burn-vision"
-version = "0.22.0-pre.2"
-dependencies = [
- "aligned-vec",
- "bon",
- "burn-core",
- "burn-cubecl",
- "burn-fusion",
- "burn-ir",
- "burn-store",
- "bytemuck",
- "cubecl",
- "derive-new",
- "dirs",
- "half",
- "image",
- "macerator",
- "ndarray 0.17.2",
- "num-traits",
- "paste",
- "serde",
-]
-
-[[package]]
-name = "burn-wgpu"
-version = "0.22.0-pre.2"
-dependencies = [
- "burn-backend",
- "burn-cubecl",
- "burn-fusion",
- "cubecl",
-]
-
-[[package]]
 name = "by_address"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2022,6 +1411,617 @@ dependencies = [
  "bitflags 1.3.2",
  "core-foundation 0.9.4",
  "libc",
+]
+
+[[package]]
+name = "cortex"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-autodiff",
+ "cortex-candle",
+ "cortex-core",
+ "cortex-cpu",
+ "cortex-cuda",
+ "cortex-dispatch",
+ "cortex-flex",
+ "cortex-ir",
+ "cortex-ndarray",
+ "cortex-nn",
+ "cortex-optim",
+ "cortex-rl",
+ "cortex-rocm",
+ "cortex-router",
+ "cortex-std",
+ "cortex-store",
+ "cortex-tch",
+ "cortex-train",
+ "cortex-vision",
+ "cortex-wgpu",
+ "cubecl",
+]
+
+[[package]]
+name = "cortex-autodiff"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-std",
+ "derive-new",
+ "hashbrown 0.16.1",
+ "log",
+ "num-traits",
+ "parking_lot",
+ "portable-atomic",
+ "portable-atomic-util",
+ "spin",
+ "tracing",
+]
+
+[[package]]
+name = "cortex-backend"
+version = "0.22.0-pre.2"
+dependencies = [
+ "bytemuck",
+ "cortex-std",
+ "cubecl",
+ "derive-new",
+ "enumset",
+ "hashbrown 0.16.1",
+ "num-traits",
+ "oneshot",
+ "paste",
+ "portable-atomic-util",
+ "rand 0.10.2",
+ "rand_distr 0.6.0",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "spin",
+]
+
+[[package]]
+name = "cortex-backend-extension"
+version = "0.22.0-pre.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cortex-backend-tests"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-autodiff",
+ "cortex-backend",
+ "cortex-cubecl",
+ "cortex-cubecl-fusion",
+ "cortex-flex",
+ "cortex-fusion",
+ "cortex-ndarray",
+ "cortex-tensor",
+ "ctor",
+ "cubek",
+ "divan",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "rand 0.10.2",
+ "serial_test",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cortex-candle"
+version = "0.22.0-pre.2"
+dependencies = [
+ "candle-core",
+ "cortex-backend",
+ "cortex-std",
+ "derive-new",
+]
+
+[[package]]
+name = "cortex-communication"
+version = "0.22.0-pre.2"
+dependencies = [
+ "axum",
+ "bytes",
+ "cortex-backend",
+ "cortex-std",
+ "derive-new",
+ "futures",
+ "futures-util",
+ "log",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "cortex-core"
+version = "0.22.0-pre.2"
+dependencies = [
+ "ahash",
+ "cortex-backend",
+ "cortex-backend-extension",
+ "cortex-dataset",
+ "cortex-derive",
+ "cortex-dispatch",
+ "cortex-ir",
+ "cortex-pack",
+ "cortex-std",
+ "cortex-tensor",
+ "derive-new",
+ "half",
+ "hashbrown 0.16.1",
+ "log",
+ "num-traits",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rand 0.10.2",
+ "regex",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "spin",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "cortex-cpu"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-cubecl",
+ "cortex-fusion",
+ "cubecl",
+]
+
+[[package]]
+name = "cortex-cubecl"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-cubecl-fusion",
+ "cortex-fusion",
+ "cortex-ir",
+ "cortex-std",
+ "cubecl",
+ "cubek",
+ "derive-new",
+ "futures-lite",
+ "log",
+ "serde",
+ "text_placeholder",
+ "tracing",
+]
+
+[[package]]
+name = "cortex-cubecl-fusion"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-fusion",
+ "cortex-ir",
+ "cortex-std",
+ "cubecl",
+ "cubek",
+ "derive-new",
+ "half",
+ "hashbrown 0.16.1",
+ "rmp-serde",
+ "serde",
+ "spin",
+]
+
+[[package]]
+name = "cortex-cuda"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-cubecl",
+ "cortex-fusion",
+ "cubecl",
+]
+
+[[package]]
+name = "cortex-dataset"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-std",
+ "csv",
+ "derive-new",
+ "dirs",
+ "encoding_rs",
+ "fake",
+ "flate2",
+ "gix-tempfile",
+ "globwalk",
+ "hound",
+ "image",
+ "planus",
+ "polars",
+ "r2d2",
+ "r2d2_sqlite",
+ "rand 0.10.2",
+ "rayon",
+ "rmp-serde",
+ "rstest",
+ "rusqlite",
+ "sanitize-filename",
+ "serde",
+ "serde_json",
+ "serde_rusqlite",
+ "strum 0.28.0",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.19",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "cortex-derive"
+version = "0.22.0-pre.2"
+dependencies = [
+ "derive-new",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cortex-dispatch"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-autodiff",
+ "cortex-backend",
+ "cortex-cpu",
+ "cortex-cuda",
+ "cortex-flex",
+ "cortex-ndarray",
+ "cortex-remote",
+ "cortex-rocm",
+ "cortex-tch",
+ "cortex-wgpu",
+ "paste",
+]
+
+[[package]]
+name = "cortex-flex"
+version = "0.22.0-pre.2"
+dependencies = [
+ "aligned-vec",
+ "bytemuck",
+ "cortex-backend",
+ "cortex-ir",
+ "cortex-std",
+ "gemm 0.19.0",
+ "half",
+ "libm",
+ "macerator",
+ "num-traits",
+ "once_cell",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rayon",
+ "realfft",
+]
+
+[[package]]
+name = "cortex-fusion"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-ir",
+ "cortex-std",
+ "derive-new",
+ "hashbrown 0.16.1",
+ "log",
+ "serde",
+ "smallvec",
+ "spin",
+ "tracing",
+]
+
+[[package]]
+name = "cortex-ir"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "hashbrown 0.16.1",
+ "serde",
+]
+
+[[package]]
+name = "cortex-ndarray"
+version = "0.22.0-pre.2"
+dependencies = [
+ "atomic_float",
+ "blas-src",
+ "bytemuck",
+ "bytes",
+ "const-random",
+ "cortex-backend",
+ "cortex-ir",
+ "cortex-std",
+ "itertools",
+ "libm",
+ "macerator",
+ "matrixmultiply",
+ "ndarray 0.17.2",
+ "num-traits",
+ "openblas-src",
+ "paste",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rand 0.10.2",
+ "rayon",
+ "seq-macro",
+]
+
+[[package]]
+name = "cortex-nn"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-core",
+ "num-traits",
+ "rstest",
+]
+
+[[package]]
+name = "cortex-no-std-tests"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex",
+ "cortex-flex",
+ "cortex-store",
+]
+
+[[package]]
+name = "cortex-optim"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-core",
+ "cortex-derive",
+ "cortex-nn",
+ "cortex-pack",
+ "derive-new",
+ "hashbrown 0.16.1",
+ "log",
+ "num-traits",
+ "rstest",
+ "serde",
+]
+
+[[package]]
+name = "cortex-pack"
+version = "0.22.0-pre.2"
+dependencies = [
+ "byteorder",
+ "ciborium",
+ "cortex-std",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
+name = "cortex-remote"
+version = "0.22.0-pre.2"
+dependencies = [
+ "bytes",
+ "cortex-backend",
+ "cortex-communication",
+ "cortex-flex",
+ "cortex-fusion",
+ "cortex-ir",
+ "cortex-router",
+ "cortex-std",
+ "cortex-tensor",
+ "futures-util",
+ "gloo-timers",
+ "iroh",
+ "log",
+ "rand 0.10.2",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "tokio",
+ "tokio-util",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "cortex-rl"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-core",
+ "derive-new",
+ "log",
+ "rand 0.10.2",
+]
+
+[[package]]
+name = "cortex-rocm"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-cubecl",
+ "cortex-fusion",
+ "cubecl",
+]
+
+[[package]]
+name = "cortex-router"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-flex",
+ "cortex-fusion",
+ "cortex-ir",
+ "cortex-std",
+ "hashbrown 0.16.1",
+ "log",
+ "serde",
+ "spin",
+]
+
+[[package]]
+name = "cortex-std"
+version = "0.22.0-pre.2"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "bytes",
+ "cubecl-common",
+ "cubecl-environment",
+ "cubecl-zspace",
+ "dashmap",
+ "data-encoding",
+ "derive-new",
+ "enumset",
+ "half",
+ "hashbrown 0.16.1",
+ "indicatif 0.18.6",
+ "num-traits",
+ "paste",
+ "portable-atomic-util",
+ "rand 0.10.2",
+ "rand_distr 0.6.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "smallvec",
+ "spin",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "cortex-store"
+version = "0.22.0-pre.2"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "ciborium",
+ "cortex-core",
+ "cortex-nn",
+ "cortex-pack",
+ "cortex-tensor",
+ "divan",
+ "half",
+ "hashbrown 0.16.1",
+ "lzma-rust2 0.16.5",
+ "memmap2",
+ "num-traits",
+ "regex",
+ "safetensors 0.7.0",
+ "serde",
+ "tar",
+ "tempfile",
+ "textdistance",
+ "thiserror 2.0.19",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "cortex-tch"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cc",
+ "cortex-backend",
+ "libc",
+ "log",
+ "tch",
+ "torch-sys",
+]
+
+[[package]]
+name = "cortex-tensor"
+version = "0.22.0-pre.2"
+dependencies = [
+ "colored 3.1.1",
+ "cortex-backend",
+ "cortex-dispatch",
+ "cortex-std",
+ "derive-new",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
+name = "cortex-train"
+version = "0.22.0-pre.2"
+dependencies = [
+ "async-channel",
+ "cortex-core",
+ "cortex-flex",
+ "cortex-nn",
+ "cortex-optim",
+ "cortex-rl",
+ "cortex-std",
+ "cortex-store",
+ "derive-new",
+ "dirs",
+ "log",
+ "nvml-wrapper",
+ "rand 0.10.2",
+ "ratatui",
+ "rstest",
+ "serde",
+ "sysinfo 0.38.4",
+ "systemstat",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tracing-appender",
+ "tracing-core",
+ "tracing-subscriber",
+ "unicode-width",
+]
+
+[[package]]
+name = "cortex-vision"
+version = "0.22.0-pre.2"
+dependencies = [
+ "aligned-vec",
+ "bon",
+ "bytemuck",
+ "cortex-core",
+ "cortex-cubecl",
+ "cortex-fusion",
+ "cortex-ir",
+ "cortex-store",
+ "cubecl",
+ "derive-new",
+ "dirs",
+ "half",
+ "image",
+ "macerator",
+ "ndarray 0.17.2",
+ "num-traits",
+ "paste",
+ "serde",
+]
+
+[[package]]
+name = "cortex-wgpu"
+version = "0.22.0-pre.2"
+dependencies = [
+ "cortex-backend",
+ "cortex-cubecl",
+ "cortex-fusion",
+ "cubecl",
 ]
 
 [[package]]
@@ -2878,8 +2878,8 @@ dependencies = [
 name = "custom-csv-dataset"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
- "burn-dataset",
+ "cortex",
+ "cortex-dataset",
  "csv",
  "polars",
  "reqwest 0.12.28",
@@ -2890,9 +2890,9 @@ dependencies = [
 name = "custom-cubecl-kernel"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
- "burn-cubecl",
- "burn-fusion",
+ "cortex",
+ "cortex-cubecl",
+ "cortex-fusion",
  "cubecl",
  "log",
  "serde",
@@ -2902,7 +2902,7 @@ dependencies = [
 name = "custom-image-dataset"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "flate2",
  "tar",
 ]
@@ -2911,7 +2911,7 @@ dependencies = [
 name = "custom-learning-strategy"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "guide",
  "log",
 ]
@@ -2920,7 +2920,7 @@ dependencies = [
 name = "custom-renderer"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "guide",
  "log",
 ]
@@ -2929,7 +2929,7 @@ dependencies = [
 name = "custom-training-loop"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "guide",
  "log",
 ]
@@ -2938,10 +2938,10 @@ dependencies = [
 name = "custom-wgpu-kernel"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
- "burn-cubecl",
- "burn-fusion",
  "bytemuck",
+ "cortex",
+ "cortex-cubecl",
+ "cortex-fusion",
  "cubecl",
  "derive-new",
  "log",
@@ -4596,7 +4596,7 @@ dependencies = [
 name = "guide"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "log",
 ]
 
@@ -5185,8 +5185,8 @@ checksum = "89194689a993ab15268672e99e7b0e19da2da3268ac682e8f02d29d4d1434cd7"
 name = "import-model-weights"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
- "burn-store",
+ "cortex",
+ "cortex-store",
 ]
 
 [[package]]
@@ -6119,7 +6119,7 @@ dependencies = [
 name = "mnist"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "log",
  "rand 0.10.2",
 ]
@@ -6128,8 +6128,8 @@ dependencies = [
 name = "mnist-inference-web"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
  "console_error_panic_hook",
+ "cortex",
  "js-sys",
  "serde",
  "wasm-bindgen",
@@ -6146,7 +6146,7 @@ checksum = "4a0b3262dc837d2513fe2ef31ff8461352ef932dcca31ba0c0abe33547cf6b9b"
 name = "modern-lstm"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "planus",
  "polars",
  "rand 0.10.2",
@@ -7122,7 +7122,7 @@ name = "p2p-remote-training"
 version = "0.22.0-pre.2"
 dependencies = [
  "blake3",
- "burn",
+ "cortex",
  "iroh",
  "tokio",
  "tracing",
@@ -8325,8 +8325,8 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 name = "pytorch-tests"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
- "burn-store",
+ "cortex",
+ "cortex-store",
  "float-cmp",
  "serde",
 ]
@@ -8891,8 +8891,8 @@ name = "remote-inference-web"
 version = "0.22.0-pre.2"
 dependencies = [
  "blake3",
- "burn",
  "console_error_panic_hook",
+ "cortex",
  "iroh",
  "js-sys",
  "wasm-bindgen",
@@ -9264,10 +9264,10 @@ dependencies = [
 name = "safetensors-tests"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
- "burn-autodiff",
- "burn-flex",
- "burn-store",
+ "cortex",
+ "cortex-autodiff",
+ "cortex-flex",
+ "cortex-store",
  "float-cmp",
  "serde",
 ]
@@ -9520,7 +9520,7 @@ dependencies = [
 name = "server"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
 ]
 
 [[package]]
@@ -9682,7 +9682,7 @@ dependencies = [
 name = "simple-regression"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "log",
  "rgb",
  "serde",
@@ -10232,7 +10232,7 @@ dependencies = [
 name = "text-classification"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "derive-new",
  "log",
  "serde",
@@ -10243,7 +10243,7 @@ dependencies = [
 name = "text-generation"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "derive-new",
  "log",
  "serde",
@@ -11546,7 +11546,7 @@ dependencies = [
 name = "wgan"
 version = "0.22.0-pre.2"
 dependencies = [
- "burn",
+ "cortex",
  "image",
 ]
 

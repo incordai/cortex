@@ -13,8 +13,8 @@ authors:
   - family-names: "Lagrange"
     given-names: "Guillaume"
     email: "lagrange.guillaume.1@gmail.com"
-  - name: "Burn Framework Contributors"
-title: "Burn"
+  - name: "Cortex Framework Contributors"
+title: "Cortex"
 version: 0.21.0
 date-released: 2026-05-07
 url: "https://burn.dev/"
@@ -22,7 +22,7 @@ repository-code: "https://github.com/tracel-ai/burn"
 license:
   - MIT
   - Apache-2.0
-abstract: "Burn is a new comprehensive dynamic Deep Learning Framework built using Rust with extreme flexibility, compute efficiency and portability as its primary goals."
+abstract: "Cortex is a new comprehensive dynamic Deep Learning Framework built using Rust with extreme flexibility, compute efficiency and portability as its primary goals."
 keywords:
   - scientific-computing
   - deep-learning

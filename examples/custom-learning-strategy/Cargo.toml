@@ -9,6 +9,6 @@ publish = false
 workspace = true
 
 [dependencies]
-burn = { workspace = true, features = ["autodiff", "wgpu", "vision"] }
+cortex = { workspace = true, features = ["autodiff", "wgpu", "vision"] }
 guide = { path = "../guide" }
 log = { workspace = true }

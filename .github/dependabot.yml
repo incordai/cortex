@@ -11,9 +11,9 @@ updates:
   - package-ecosystem: "cargo"
     directories:
       - "/"
-      - "crates/burn"
-      - "crates/burn-*"
-      - "crates/burn-import/*-tests"
+      - "crates/cortex"
+      - "crates/cortex-*"
+      - "crates/cortex-import/*-tests"
       - "examples/*"
       - "xtask"
     schedule:

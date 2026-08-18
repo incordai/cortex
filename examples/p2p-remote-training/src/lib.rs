@@ -1,11 +1,11 @@
-use burn::server::{Channel, RemoteSecret};
-use burn::tensor::{Device, Distribution, Tensor};
+use cortex::server::{Channel, RemoteSecret};
+use cortex::tensor::{Device, Distribution, Tensor};
 use iroh::{Endpoint, EndpointId, endpoint::presets};
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn init_logging() {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,burn_remote=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info,cortex_remote=debug"));
     fmt().with_env_filter(filter).init();
 }
 
@@ -14,7 +14,7 @@ fn init_logging() {
 /// this identity), which suits a demo; a real deployment would use `RemoteSecret::random()` and
 /// share its `id()`.
 fn topic_secret(topic: &str) -> RemoteSecret {
-    let hash = blake3::hash(format!("burn-p2p:{topic}").as_bytes());
+    let hash = blake3::hash(format!("cortex-p2p:{topic}").as_bytes());
     RemoteSecret::from_bytes(*hash.as_bytes())
 }
 
@@ -23,7 +23,7 @@ pub async fn run_server(topic: &str) {
     let secret = topic_secret(topic);
     tracing::info!(topic, server_id = %secret.id(), "server ready");
     tracing::info!("waiting for clients (press Ctrl-C to stop)");
-    burn::server::start_async(
+    cortex::server::start_async(
         Device::flex(),
         Channel::Iroh {
             secret: Box::new(secret),

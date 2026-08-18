@@ -1,5 +1,5 @@
 use crate::{diabetes_patient::DiabetesPatient, utils::download_csv_if_missing};
-use burn_dataset::{DataframeDataset, Dataset, DatasetError};
+use cortex_dataset::{DataframeDataset, Dataset, DatasetError};
 use polars::prelude::*;
 /// Diabetes dataset using Polars DataframeDataset as the backend.
 pub struct DiabetesDataframeDataset {

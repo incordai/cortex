@@ -1,8 +1,8 @@
 //! End-to-end validation for the remote backend.
 //!
 //! Builds the `server` example with a chosen backend, spawns it as a child process, waits
-//! for it to bind, then runs `burn-backend-tests --features remote` against it with
-//! `BURN_DEVICE=remote`. The child server is killed on exit regardless of how the test run
+//! for it to bind, then runs `cortex-backend-tests --features remote` against it with
+//! `CORTEX_DEVICE=remote`. The child server is killed on exit regardless of how the test run
 //! finishes.
 
 use std::{
@@ -118,7 +118,7 @@ fn run_remote_tests(port: u16, release: bool, filter: Option<&str>) -> anyhow::R
     let mut owned_args: Vec<String> = vec![
         "test".into(),
         "-p".into(),
-        "burn-backend-tests".into(),
+        "cortex-backend-tests".into(),
         "--features".into(),
         "remote".into(),
     ];
@@ -135,8 +135,8 @@ fn run_remote_tests(port: u16, release: bool, filter: Option<&str>) -> anyhow::R
     let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
 
     let envs = std::collections::HashMap::from([
-        ("BURN_DEVICE", "remote"),
-        ("BURN_REMOTE_ADDRESS", address.as_str()),
+        ("CORTEX_DEVICE", "remote"),
+        ("CORTEX_REMOTE_ADDRESS", address.as_str()),
     ]);
 
     run_process(
@@ -144,7 +144,7 @@ fn run_remote_tests(port: u16, release: bool, filter: Option<&str>) -> anyhow::R
         &args,
         Some(envs),
         None,
-        "burn-backend-tests failed against the remote backend",
+        "cortex-backend-tests failed against the remote backend",
     )
 }
 

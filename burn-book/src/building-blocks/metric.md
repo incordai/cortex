@@ -38,10 +38,10 @@ throughout the training process. We currently offer a restricted range of metric
 ## Using Metrics with the Learner
 
 In order to use a metric, the output of your training step must implement the `Adaptor` trait from 
-`burn-train::metric` for each metric's corresponding input type. The `Adaptor` trait simply converts 
+`cortex-train::metric` for each metric's corresponding input type. The `Adaptor` trait simply converts 
 your output struct into the input type the metric expects.
 
-Burn provides four built-in output structs that cover common tasks. Each one already implements 
+Cortex provides four built-in output structs that cover common tasks. Each one already implements 
 `Adaptor` for a set of metrics, so in many cases you can use them directly without writing any 
 adaptor code yourself.
 

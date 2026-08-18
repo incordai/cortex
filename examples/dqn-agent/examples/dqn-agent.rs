@@ -1,4 +1,4 @@
-use burn::tensor::Device;
+use cortex::tensor::Device;
 
 #[allow(unreachable_code)]
 fn select_device() -> Device {
@@ -14,7 +14,7 @@ fn select_device() -> Device {
     return Device::flex();
 
     #[cfg(all(feature = "tch-gpu", not(target_os = "macos")))]
-    return Device::libtorch_cuda(burn::tensor::DeviceIndex::Default);
+    return Device::libtorch_cuda(cortex::tensor::DeviceIndex::Default);
 
     #[cfg(all(feature = "tch-gpu", target_os = "macos"))]
     return Device::libtorch_mps();
@@ -23,13 +23,13 @@ fn select_device() -> Device {
     return Device::libtorch();
 
     #[cfg(any(feature = "wgpu", feature = "metal", feature = "vulkan"))]
-    return Device::wgpu(burn::tensor::DeviceKind::DefaultDevice);
+    return Device::wgpu(cortex::tensor::DeviceKind::DefaultDevice);
 
     #[cfg(feature = "cuda")]
-    return Device::cuda(burn::tensor::DeviceIndex::Default);
+    return Device::cuda(cortex::tensor::DeviceIndex::Default);
 
     #[cfg(feature = "rocm")]
-    return Device::rocm(burn::tensor::DeviceIndex::Default);
+    return Device::rocm(cortex::tensor::DeviceIndex::Default);
 
     unreachable!("At least one backend will be selected.")
 }

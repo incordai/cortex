@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use burn::train::logger::{EvaluationProgressLogger, TrainingProgressLogger};
+use cortex::train::logger::{EvaluationProgressLogger, TrainingProgressLogger};
 
 /// A progress logger that appends training progress to a file.
 ///

@@ -1,7 +1,7 @@
 # Text Classification
 
 This project provides an example implementation for training and inferencing text classification
-models on AG News and DbPedia datasets using the Rust-based Burn Deep Learning Library.
+models on AG News and DbPedia datasets using the Rust-based Cortex Deep Learning Library.
 It also provides an example of finetuning using [LoRA](https://arxiv.org/pdf/2106.09685) (See [this section](#finetuning-using-lora)).
 
 > **Note**  
@@ -25,7 +25,7 @@ It also provides an example of finetuning using [LoRA](https://arxiv.org/pdf/210
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 # Use the f16 feature if your CUDA device supports FP16 (half precision) operations. May not work well on every device.
@@ -45,7 +45,7 @@ cargo run --example db-pedia-infer --release --features tch-gpu  # Run inference
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 
@@ -62,7 +62,7 @@ cargo run --example db-pedia-infer --release --features tch-cpu  # Run inference
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 
@@ -79,7 +79,7 @@ cargo run --example db-pedia-infer --release --features flex  # Run inference db
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 
@@ -96,7 +96,7 @@ cargo run --example db-pedia-infer --release --features wgpu  # Run inference db
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 # Add the f16 feature to run in f16. 
@@ -110,7 +110,7 @@ cargo run --example ag-news-infer --release --features cuda   # Run inference on
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 # Add the f16 feature to run in f16. 
@@ -129,7 +129,7 @@ You can then run the finetuning example using any of the backends listed above. 
 
 ```bash
 git clone https://github.com/tracel-ai/burn.git
-cd burn
+cd cortex
 
 # Use the --release flag to really speed up training.
 

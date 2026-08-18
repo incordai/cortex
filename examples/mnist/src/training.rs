@@ -6,7 +6,7 @@ use crate::{
     model::Model,
 };
 
-use burn::{
+use cortex::{
     data::{
         dataloader::DataLoaderBuilder,
         dataset::{
@@ -28,9 +28,9 @@ use burn::{
         },
     },
 };
-use burn::{optim::AdamWConfig, train::SupervisedTraining};
+use cortex::{optim::AdamWConfig, train::SupervisedTraining};
 
-static ARTIFACT_DIR: &str = "/tmp/burn-example-mnist";
+static ARTIFACT_DIR: &str = "/tmp/cortex-example-mnist";
 
 #[derive(Config, Debug)]
 pub struct MnistTrainingConfig {

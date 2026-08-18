@@ -1,12 +1,12 @@
-# Submitting Examples to Burn
+# Submitting Examples to Cortex
 
-This guide explains how to create and submit new examples to the Burn repository. Examples are a great way to demonstrate Burn's capabilities and help users understand how to use the framework effectively.
+This guide explains how to create and submit new examples to the Cortex repository. Examples are a great way to demonstrate Cortex's capabilities and help users understand how to use the framework effectively.
 
 For a minimal working example, see the [simple-regression](https://github.com/tracel-ai/burn/blob/main/examples/simple-regression/examples/regression.rs) example in the repository.
 
 ## Repository Structure
 
-The Burn repository is set up as a workspace, with examples located in the `examples/` directory. Each example is a separate crate that can reuse workspace dependencies.
+The Cortex repository is set up as a workspace, with examples located in the `examples/` directory. Each example is a separate crate that can reuse workspace dependencies.
 
 ## Creating a New Example
 
@@ -34,7 +34,7 @@ The Burn repository is set up as a workspace, with examples located in the `exam
    # Reuse workspace dependencies when available
    serde = { workspace = true }
    # Add example-specific dependencies
-   burn = { path = "../../" }
+   cortex = { path = "../../" }
    ```
 
 ## Required Files and Structure

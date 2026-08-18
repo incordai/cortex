@@ -1,4 +1,4 @@
-# This example is excluded from the main Burn workspace because `gym-rs` pulls in native SDL2
+# This example is excluded from the main Cortex workspace because `gym-rs` pulls in native SDL2
 # dependencies that don't build in every environment (e.g. CI). The empty `[workspace]` table below
 # makes this crate its own workspace root, so it can be built standalone from this directory:
 #
@@ -15,18 +15,18 @@ version = "0.22.0-pre.2"
 publish = false
 
 [features]
-default = ["burn/default", "burn/tui"]
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-wgpu = ["burn/wgpu"]
-metal = ["burn/metal"]
-cuda = ["burn/cuda"]
-vulkan = ["burn/vulkan"]
-rocm = ["burn/rocm"]
+default = ["cortex/default", "cortex/tui"]
+tch-cpu = ["cortex/tch"]
+tch-gpu = ["cortex/tch"]
+wgpu = ["cortex/wgpu"]
+metal = ["cortex/metal"]
+cuda = ["cortex/cuda"]
+vulkan = ["cortex/vulkan"]
+rocm = ["cortex/rocm"]
 
 [dependencies]
 # Disable autotune default for now.
-burn = { path = "../../crates/burn", version = "0.22.0-pre.2", default-features = false, features = [
+cortex = { path = "../../crates/cortex", version = "0.22.0-pre.2", default-features = false, features = [
     "train",
     "metrics",
     "std",

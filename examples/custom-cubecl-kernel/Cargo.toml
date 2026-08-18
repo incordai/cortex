@@ -10,19 +10,19 @@ version.workspace = true
 workspace = true
 
 [dependencies]
-burn = { workspace = true, features = [
+cortex = { workspace = true, features = [
     "autodiff",
     "wgpu",
     "autotune",
     "template",
     "extension"
 ] }
-burn-cubecl = { workspace = true, features = ["default"] }
+cortex-cubecl = { workspace = true, features = ["default"] }
 cubecl = { workspace = true, features = ["wgpu"] }
 
 # TODO: for now it's just to shut up clippy and the rust-analyzer due to workspace features,
 # but the example should show how to add a custom up wrapper with fusion.
-burn-fusion = { workspace = true, features = ["default"] }
+cortex-fusion = { workspace = true, features = ["default"] }
 
 # Serialization
 log = { workspace = true }

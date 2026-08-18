@@ -1,6 +1,6 @@
-# Contributing to Burn
+# Contributing to Cortex
 
-Welcome to the Burn community! We're glad you're interested in contributing.
+Welcome to the Cortex community! We're glad you're interested in contributing.
 
 ## How to Contribute
 

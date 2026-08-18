@@ -1,7 +1,7 @@
 # Kernel Fusion
 
 An interesting property of async execution is that it allows performance optimizations like kernel
-fusion. Coupled with CubeCL and its Just-In-Time compiler, Burn can serialize tensor operations into
+fusion. Coupled with CubeCL and its Just-In-Time compiler, Cortex can serialize tensor operations into
 a symbolic graph, then optimize it for improved efficiency.
 
 Kernel fusion may reorder operations to reduce global memory reads, writes, and allocations. Being
@@ -38,7 +38,7 @@ in most cases. These operations include `slice`, `slice_assign`, `select`, `gath
 With fusion enabled, it is often not necessary to write custom kernels, as you can rely on our
 system to optimize most element-wise operations. However, most compute-bound kernels require many
 tricks and deep knowledge of GPU memory architectures, where automatic compiler optimizations often
-underperform compared to human-designed algorithms. This is why Burn’s approach to fusion is
+underperform compared to human-designed algorithms. This is why Cortex’s approach to fusion is
 centered around fuse-on-read and fuse-on-write. This means that complex compute-bound kernels that
 change the shapes of tensors can fuse a block of element-wise operations when reading the input
 tensor and when writing the output tensor. The implication is that multiple compute-bound operations

@@ -1,5 +1,5 @@
 #![recursion_limit = "131"]
-use burn::{data::dataset::Dataset, optim::AdamConfig, prelude::*};
+use cortex::{data::dataset::Dataset, optim::AdamConfig, prelude::*};
 use guide::{
     inference,
     model::ModelConfig,
@@ -24,7 +24,7 @@ fn main() {
     inference::infer(
         artifact_dir,
         device,
-        burn::data::dataset::vision::MnistDataset::test()
+        cortex::data::dataset::vision::MnistDataset::test()
             .get(42)
             .unwrap(),
     );

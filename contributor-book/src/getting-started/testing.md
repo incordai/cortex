@@ -5,7 +5,7 @@
 Test for tensor operations (generally of the form: given this input, expect it match or approximate
 this output) are defined only in
 [`crates/burn-tensor/src/test/ops`](https://github.com/tracel-ai/burn/tree/81a67b6a0992b9b5c33cda8b9784570143b67319/crates/burn-tensor/src/tests/ops)
-and not in the backends (with the exception of `burn-autodiff`). The tensor operation tests are
+and not in the backends (with the exception of `cortex-autodiff`). The tensor operation tests are
 added to the `testgen_all` macro rule in
 [`crates/burn-tensor/src/tests/mod.rs`](https://github.com/tracel-ai/burn/blob/81a67b6a0992b9b5c33cda8b9784570143b67319/crates/burn-tensor/src/tests/mod.rs).
 This is then propagated to the existing backends without any additional work.

@@ -5,7 +5,7 @@ use crate::{
     dataset::CIFAR10Loader,
     model::Cnn,
 };
-use burn::{
+use cortex::{
     data::{dataloader::DataLoaderBuilder, dataset::vision::ImageFolderDataset},
     nn::loss::CrossEntropyLossConfig,
     optim::SgdConfig,

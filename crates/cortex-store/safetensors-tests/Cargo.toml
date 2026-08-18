@@ -1,0 +1,13 @@
+[package]
+name = "safetensors-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+cortex = { workspace = true, features = ["default"] }
+cortex-flex = { workspace = true, features = ["default"] }
+cortex-autodiff = { workspace = true, features = ["default"] }
+cortex-store = { workspace = true, features = ["default", "std", "safetensors"] }
+serde = { workspace = true }
+float-cmp = { workspace = true }

@@ -1,0 +1,92 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "Generic backend that can be compiled just-in-time to any shader language target"
+documentation = "https://docs.rs/burn-cubecl"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "gpu"]
+license.workspace = true
+name = "cortex-cubecl"
+readme.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-cubecl"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "autotune",
+    "std",
+    "fusion",
+    "cubecl/default",
+    "cortex-backend/default",
+    "cortex-fusion?/default",
+    "cortex-cubecl-fusion?/default",
+]
+std = [
+    "cubecl/std",
+    "cortex-backend/std",
+    "cortex-fusion?/std",
+    "cortex-cubecl-fusion?/std",
+]
+doc = ["default"]
+
+tracing = [
+    "dep:tracing",
+    "cubecl/tracing",
+    "cortex-std/tracing",
+    "cortex-backend/tracing",
+    "cortex-fusion?/tracing",
+    "cortex-cubecl-fusion?/tracing",
+]
+
+autotune = ["cortex-cubecl-fusion?/autotune"]
+autotune-checks = [
+    "autotune",
+    "cubecl/autotune-checks",
+    "cortex-cubecl-fusion?/autotune-checks",
+]
+
+fusion = ["cortex-fusion", "cortex-cubecl-fusion"]
+fusion-experimental = ["fusion"]
+
+template = []
+
+
+[dependencies]
+cortex-cubecl-fusion = { workspace = true, optional = true }
+cortex-fusion = { workspace = true, optional = true }
+cortex-ir = { workspace = true }
+cortex-std = { workspace = true }
+cortex-backend = { workspace = true, features = [
+    "cubecl",
+] }
+cubecl = { workspace = true, features = ["stdlib"] }
+cubek = { workspace = true, features = [
+    "attention",
+    "matmul",
+    "convolution",
+    "interpolate",
+    "pool",
+    "reduce",
+    "random",
+    "quantization",
+    "stdlib",
+    "fft",
+] }
+tracing = { workspace = true, features = ["attributes"], optional = true }
+
+derive-new = { workspace = true }
+log = { workspace = true }
+
+# Async
+futures-lite = { workspace = true, features = ["std"] }
+
+# Template
+serde = { workspace = true }
+text_placeholder = { workspace = true, features = ["struct_context"] }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

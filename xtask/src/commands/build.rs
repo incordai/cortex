@@ -5,14 +5,14 @@ use tracel_xtask::prelude::{clap::ValueEnum, *};
 use crate::{ARM_NO_ATOMIC_PTR_TARGET, ARM_TARGET, NO_STD_CRATES, WASM32_TARGET};
 
 #[macros::extend_command_args(BuildCmdArgs, Target, None)]
-pub struct BurnBuildCmdArgs {
+pub struct CortexBuildCmdArgs {
     /// Build in CI mode which excludes unsupported crates.
     #[arg(long)]
     pub ci: bool,
 }
 
 pub(crate) fn handle_command(
-    mut args: BurnBuildCmdArgs,
+    mut args: CortexBuildCmdArgs,
     env: Environment,
     context: Context,
 ) -> anyhow::Result<()> {
@@ -36,10 +36,10 @@ pub(crate) fn handle_command(
 
                 if *build_target == ARM_NO_ATOMIC_PTR_TARGET {
                     // Only build a subset of crates which require `portable_atomic_unsafe_assume_single_core`.
-                    // Other crates build with `burn-flex` (default_backend) which requires the `critical-section`
-                    // feature (automatically enabled via `burn-dispatch` when `not(target_has_atomic = "ptr")`),
+                    // Other crates build with `cortex-flex` (default_backend) which requires the `critical-section`
+                    // feature (automatically enabled via `cortex-dispatch` when `not(target_has_atomic = "ptr")`),
                     // which is mutually exclusive with `portable_atomic_unsafe_assume_single_core` cfg.
-                    crates = vec!["burn-std", "burn-backend", "burn-ndarray"];
+                    crates = vec!["cortex-std", "cortex-backend", "cortex-ndarray"];
                     env_vars.insert(
                         "RUSTFLAGS",
                         "--cfg portable_atomic_unsafe_assume_single_core",
@@ -54,20 +54,20 @@ pub(crate) fn handle_command(
                 )?;
 
                 // Second pass for `thumbv6m-none-eabi`: crates with `critical-section` feature
-                // enabled so `once_cell` (transitively pulled from `burn-flex` -> `gemm`) uses
+                // enabled so `once_cell` (transitively pulled from `cortex-flex` -> `gemm`) uses
                 // portable-atomic for CAS emulation.
                 if *build_target == ARM_NO_ATOMIC_PTR_TARGET {
                     crates = NO_STD_CRATES.to_vec();
-                    // Remove `burn-autodiff` from building with the
+                    // Remove `cortex-autodiff` from building with the
                     // target `thumbv6m-none-eabi` as it requires enabling the
                     // `arbitrary_self_types` feature for the
                     // `clone_if_require_grad` method of
-                    // `burn-autodiff::graph::Node`.
+                    // `cortex-autodiff::graph::Node`.
                     crates.retain(|&v| {
-                        v != "burn-autodiff"
-                            && v != "burn-std"
-                            && v != "burn-ndarray"
-                            && v != "burn-backend"
+                        v != "cortex-autodiff"
+                            && v != "cortex-std"
+                            && v != "cortex-ndarray"
+                            && v != "cortex-backend"
                     });
 
                     helpers::custom_crates_build(
@@ -87,20 +87,20 @@ pub(crate) fn handle_command(
             if args.ci {
                 // Exclude crates that are not supported on CI
                 args.exclude.extend(vec![
-                    "burn-cuda".to_string(),
-                    "burn-rocm".to_string(),
-                    "burn-tch".to_string(),
+                    "cortex-cuda".to_string(),
+                    "cortex-rocm".to_string(),
+                    "cortex-tch".to_string(),
                 ]);
                 if std::env::var("DISABLE_WGPU").is_ok() {
-                    args.exclude.extend(vec!["burn-wgpu".to_string()]);
+                    args.exclude.extend(vec!["cortex-wgpu".to_string()]);
                 };
             }
             // Build workspace
             base_commands::build::handle_command(args.try_into().unwrap(), env, context)?;
             // Specific additional commands to test specific features
-            // burn-dataset
+            // cortex-dataset
             helpers::custom_crates_build(
-                vec!["burn-dataset"],
+                vec!["cortex-dataset"],
                 vec!["--all-features"],
                 None,
                 None,
@@ -113,7 +113,7 @@ pub(crate) fn handle_command(
             .filter(|ctx| **ctx != Context::All)
             .try_for_each(|ctx| {
                 handle_command(
-                    BurnBuildCmdArgs {
+                    CortexBuildCmdArgs {
                         target: args.target.clone(),
                         exclude: args.exclude.clone(),
                         only: args.only.clone(),

@@ -2,14 +2,14 @@ mod backward;
 mod forward;
 mod kernel;
 
-use burn::{
+use cortex::{
     backend::{Autodiff, Dispatch, Wgpu, backend_extension, tensor::FloatTensor},
     tensor::{Tensor, activation},
 };
 
-/// We create our own Backend trait that extends the Burn backend trait.
+/// We create our own Backend trait that extends the Cortex backend trait.
 #[backend_extension(Autodiff, Wgpu)]
-pub trait Backend: burn::backend::Backend {
+pub trait Backend: cortex::backend::Backend {
     fn fused_matmul_add_relu(
         lhs: FloatTensor<Self>,
         rhs: FloatTensor<Self>,

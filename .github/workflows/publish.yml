@@ -13,392 +13,392 @@ on:
         default: false
 
 jobs:
-  publish-burn-rl:
+  publish-cortex-rl:
     needs:
-      - publish-burn-core
+      - publish-cortex-core
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-rl
+      crate: cortex-rl
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-vision:
+  publish-cortex-vision:
     needs:
-      - publish-burn-fusion
-      - publish-burn-cubecl
-      - publish-burn-core
-      - publish-burn-ir
-      - publish-burn-store
+      - publish-cortex-fusion
+      - publish-cortex-cubecl
+      - publish-cortex-core
+      - publish-cortex-ir
+      - publish-cortex-store
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-vision
+      crate: cortex-vision
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-router:
+  publish-cortex-router:
     needs:
-      - publish-burn-ir
-      - publish-burn-std
-      - publish-burn-backend
-      - publish-burn-fusion
+      - publish-cortex-ir
+      - publish-cortex-std
+      - publish-cortex-backend
+      - publish-cortex-fusion
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-router
+      crate: cortex-router
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-remote:
+  publish-cortex-remote:
     needs:
-      - publish-burn-ir
-      - publish-burn-std
-      - publish-burn-backend
-      - publish-burn-fusion
-      - publish-burn-router
-      - publish-burn-communication
+      - publish-cortex-ir
+      - publish-cortex-std
+      - publish-cortex-backend
+      - publish-cortex-fusion
+      - publish-cortex-router
+      - publish-cortex-communication
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-remote
+      crate: cortex-remote
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-derive:
+  publish-cortex-derive:
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-derive
+      crate: cortex-derive
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-dataset:
+  publish-cortex-dataset:
     needs:
-      - publish-burn-std
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-dataset
+      crate: cortex-dataset
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-std:
+  publish-cortex-std:
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-std
+      crate: cortex-std
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-backend-extension:
+  publish-cortex-backend-extension:
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-backend-extension
+      crate: cortex-backend-extension
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-tensor:
+  publish-cortex-tensor:
     needs:
-      - publish-burn-std
-      - publish-burn-backend
-      - publish-burn-dispatch
-      - publish-burn-backend-extension
+      - publish-cortex-std
+      - publish-cortex-backend
+      - publish-cortex-dispatch
+      - publish-cortex-backend-extension
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-tensor
+      crate: cortex-tensor
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-backend:
+  publish-cortex-backend:
     needs:
-      - publish-burn-std
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-backend
+      crate: cortex-backend
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-ir:
+  publish-cortex-ir:
     needs:
-      - publish-burn-backend
+      - publish-cortex-backend
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-ir
+      crate: cortex-ir
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-fusion:
+  publish-cortex-fusion:
     needs:
-      - publish-burn-ir
-      - publish-burn-backend
-      - publish-burn-std
+      - publish-cortex-ir
+      - publish-cortex-backend
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-fusion
+      crate: cortex-fusion
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-cubecl-fusion:
+  publish-cortex-cubecl-fusion:
     needs:
-      - publish-burn-ir
-      - publish-burn-std
-      - publish-burn-fusion
-      - publish-burn-backend
+      - publish-cortex-ir
+      - publish-cortex-std
+      - publish-cortex-fusion
+      - publish-cortex-backend
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-cubecl-fusion
+      crate: cortex-cubecl-fusion
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-cubecl:
+  publish-cortex-cubecl:
     needs:
-      - publish-burn-ir
-      - publish-burn-std
-      - publish-burn-fusion
-      - publish-burn-cubecl-fusion
-      - publish-burn-backend
+      - publish-cortex-ir
+      - publish-cortex-std
+      - publish-cortex-fusion
+      - publish-cortex-cubecl-fusion
+      - publish-cortex-backend
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-cubecl
+      crate: cortex-cubecl
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-autodiff:
+  publish-cortex-autodiff:
     needs:
-      - publish-burn-backend
-      - publish-burn-std
+      - publish-cortex-backend
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-autodiff
+      crate: cortex-autodiff
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-tch:
+  publish-cortex-tch:
     needs:
-      - publish-burn-backend
+      - publish-cortex-backend
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-tch
+      crate: cortex-tch
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-ndarray:
+  publish-cortex-ndarray:
     needs:
-      - publish-burn-ir
-      - publish-burn-backend
-      - publish-burn-std
+      - publish-cortex-ir
+      - publish-cortex-backend
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-ndarray
+      crate: cortex-ndarray
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-flex:
+  publish-cortex-flex:
     needs:
-      - publish-burn-backend
-      - publish-burn-ir
-      - publish-burn-std
+      - publish-cortex-backend
+      - publish-cortex-ir
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-flex
+      crate: cortex-flex
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-wgpu:
+  publish-cortex-wgpu:
     needs:
-      - publish-burn-backend
-      - publish-burn-fusion
-      - publish-burn-cubecl
+      - publish-cortex-backend
+      - publish-cortex-fusion
+      - publish-cortex-cubecl
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-wgpu
+      crate: cortex-wgpu
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-cpu:
+  publish-cortex-cpu:
     needs:
-      - publish-burn-backend
-      - publish-burn-fusion
-      - publish-burn-cubecl
+      - publish-cortex-backend
+      - publish-cortex-fusion
+      - publish-cortex-cubecl
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-cpu
+      crate: cortex-cpu
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-cuda:
+  publish-cortex-cuda:
     needs:
-      - publish-burn-backend
-      - publish-burn-fusion
-      - publish-burn-cubecl
+      - publish-cortex-backend
+      - publish-cortex-fusion
+      - publish-cortex-cubecl
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-cuda
+      crate: cortex-cuda
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-rocm:
+  publish-cortex-rocm:
     needs:
-      - publish-burn-backend
-      - publish-burn-fusion
-      - publish-burn-cubecl
+      - publish-cortex-backend
+      - publish-cortex-fusion
+      - publish-cortex-cubecl
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-rocm
+      crate: cortex-rocm
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-candle:
+  publish-cortex-candle:
     needs:
-      - publish-burn-backend
-      - publish-burn-std
+      - publish-cortex-backend
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-candle
+      crate: cortex-candle
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-pack:
+  publish-cortex-pack:
     needs:
-      - publish-burn-std
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-pack
+      crate: cortex-pack
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-communication:
+  publish-cortex-communication:
     needs:
-      - publish-burn-std
-      - publish-burn-backend
+      - publish-cortex-std
+      - publish-cortex-backend
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-communication
+      crate: cortex-communication
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-core:
+  publish-cortex-core:
     needs:
-      - publish-burn-dataset
-      - publish-burn-std
-      - publish-burn-derive
-      - publish-burn-tensor
-      - publish-burn-pack
-      - publish-burn-ir
-      - publish-burn-dispatch
-      - publish-burn-backend-extension
+      - publish-cortex-dataset
+      - publish-cortex-std
+      - publish-cortex-derive
+      - publish-cortex-tensor
+      - publish-cortex-pack
+      - publish-cortex-ir
+      - publish-cortex-dispatch
+      - publish-cortex-backend-extension
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-core
+      crate: cortex-core
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-nn:
+  publish-cortex-nn:
     needs:
-      - publish-burn-core
+      - publish-cortex-core
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-nn
+      crate: cortex-nn
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-optim:
+  publish-cortex-optim:
     needs:
-      - publish-burn-core
-      - publish-burn-derive
-      - publish-burn-pack
+      - publish-cortex-core
+      - publish-cortex-derive
+      - publish-cortex-pack
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-optim
+      crate: cortex-optim
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-train:
+  publish-cortex-train:
     needs:
-      - publish-burn-core
-      - publish-burn-optim
-      - publish-burn-rl
-      - publish-burn-nn
-      - publish-burn-store
-      - publish-burn-std
+      - publish-cortex-core
+      - publish-cortex-optim
+      - publish-cortex-rl
+      - publish-cortex-nn
+      - publish-cortex-store
+      - publish-cortex-std
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-train
+      crate: cortex-train
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-dispatch:
+  publish-cortex-dispatch:
     needs:
-      - publish-burn-std
-      - publish-burn-backend
-      - publish-burn-autodiff
-      - publish-burn-cpu
-      - publish-burn-cuda
-      - publish-burn-rocm
-      - publish-burn-wgpu
-      - publish-burn-flex
-      - publish-burn-ndarray
-      - publish-burn-tch
-      - publish-burn-remote
+      - publish-cortex-std
+      - publish-cortex-backend
+      - publish-cortex-autodiff
+      - publish-cortex-cpu
+      - publish-cortex-cuda
+      - publish-cortex-rocm
+      - publish-cortex-wgpu
+      - publish-cortex-flex
+      - publish-cortex-ndarray
+      - publish-cortex-tch
+      - publish-cortex-remote
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-dispatch
+      crate: cortex-dispatch
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn:
+  publish-cortex:
     needs:
-      - publish-burn-core
-      - publish-burn-nn
-      - publish-burn-optim
-      - publish-burn-store
-      - publish-burn-train
-      - publish-burn-cpu
-      - publish-burn-dispatch
-      - publish-burn-flex
-      - publish-burn-vision
-      - publish-burn-store
-      - publish-burn-rl
+      - publish-cortex-core
+      - publish-cortex-nn
+      - publish-cortex-optim
+      - publish-cortex-store
+      - publish-cortex-train
+      - publish-cortex-cpu
+      - publish-cortex-dispatch
+      - publish-cortex-flex
+      - publish-cortex-vision
+      - publish-cortex-store
+      - publish-cortex-rl
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn
+      crate: cortex
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
-  publish-burn-store:
+  publish-cortex-store:
     needs:
-      - publish-burn-core
-      - publish-burn-pack
-      - publish-burn-tensor
-      - publish-burn-nn
+      - publish-cortex-core
+      - publish-cortex-pack
+      - publish-cortex-tensor
+      - publish-cortex-nn
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v9
     with:
-      crate: burn-store
+      crate: cortex-store
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}

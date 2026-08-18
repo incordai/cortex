@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use crate::dataset::{HousingBatcher, HousingDataset};
 use crate::model::RegressionModelConfig;
-use burn::optim::AdamConfig;
-use burn::train::{Learner, SupervisedTraining};
-use burn::{
+use cortex::optim::AdamConfig;
+use cortex::train::{Learner, SupervisedTraining};
+use cortex::{
     data::{dataloader::DataLoaderBuilder, dataset::Dataset},
     prelude::*,
     train::metric::LossMetric,

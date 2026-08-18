@@ -1,6 +1,6 @@
 # WebAssembly
 
-Burn supports WebAssembly (WASM) execution using the `Flex` and `WebGpu` backends, allowing
+Cortex supports WebAssembly (WASM) execution using the `Flex` and `WebGpu` backends, allowing
 models to run directly in the browser.
 
 Check out the following examples:

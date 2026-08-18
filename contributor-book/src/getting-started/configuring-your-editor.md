@@ -1,6 +1,6 @@
 # Configuring your editor
 
-These steps are not required, and most of this isn't specific to Burn, but it's definitely helpful
+These steps are not required, and most of this isn't specific to Cortex, but it's definitely helpful
 if you haven't already done it.
 
 ## VSCode

@@ -1,6 +1,6 @@
-# Advanced LSTM Implementation with Burn
+# Advanced LSTM Implementation with Cortex
 
-A more advanced implementation of Long Short-Term Memory (LSTM) networks in Burn with combined
+A more advanced implementation of Long Short-Term Memory (LSTM) networks in Cortex with combined
 weight matrices for the input and hidden states, based on the
 [PyTorch implementation](https://github.com/shiv08/Advanced-LSTM-Implementation-with-PyTorch).
 
@@ -12,7 +12,7 @@ variants differ by `bidirectional` and `num_layers` settings：
 - Bidirectional LSTM: `num_layers = 1` and `bidirectional = true`
 - Bidirectional Stacked LSTM: `num_layers > 1` and `bidirectional = true`
 
-This implementation is complementary to Burn's official LSTM, users can choose either one depends on
+This implementation is complementary to Cortex's official LSTM, users can choose either one depends on
 the project's specific needs.
 
 ## Usage

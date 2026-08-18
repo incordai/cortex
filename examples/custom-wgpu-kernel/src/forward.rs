@@ -1,7 +1,7 @@
 use crate::FloatTensor;
 
 use super::Backend;
-use burn::{
+use cortex::{
     backend::wgpu::{
         CubeBackend, CubeTensor, KernelSource, SourceKernel, SourceTemplate, WgpuRuntime,
         build_info, into_contiguous, kernel_source,
@@ -117,7 +117,7 @@ impl Backend for CubeBackend<WgpuRuntime> {
     }
 }
 
-impl Backend for burn_fusion::Fusion<CubeBackend<WgpuRuntime>> {
+impl Backend for cortex_fusion::Fusion<CubeBackend<WgpuRuntime>> {
     fn fused_matmul_add_relu(
         _lhs: FloatTensor<Self>,
         _rhs: FloatTensor<Self>,

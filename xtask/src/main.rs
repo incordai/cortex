@@ -11,14 +11,14 @@ const WASM32_TARGET: &str = "wasm32-unknown-unknown";
 const ARM_TARGET: &str = "thumbv7m-none-eabi";
 const ARM_NO_ATOMIC_PTR_TARGET: &str = "thumbv6m-none-eabi";
 const NO_STD_CRATES: &[&str] = &[
-    "burn",
-    "burn-autodiff",
-    "burn-core",
-    "burn-std",
-    "burn-backend",
-    "burn-tensor",
-    "burn-ndarray",
-    "burn-no-std-tests",
+    "cortex",
+    "cortex-autodiff",
+    "cortex-core",
+    "cortex-std",
+    "cortex-backend",
+    "cortex-tensor",
+    "cortex-ndarray",
+    "cortex-no-std-tests",
 ];
 
 #[macros::base_commands(
@@ -34,15 +34,15 @@ const NO_STD_CRATES: &[&str] = &[
     Vulnerabilities
 )]
 pub enum Command {
-    /// Run commands to manage Burn Books.
+    /// Run commands to manage Cortex Books.
     Books(commands::books::BooksArgs),
-    /// Build Burn in different modes.
-    Build(commands::build::BurnBuildCmdArgs),
+    /// Build Cortex in different modes.
+    Build(commands::build::CortexBuildCmdArgs),
     /// Validate the remote backend end-to-end: spin up the `server` example, point
-    /// `burn-backend-tests` at it via `BURN_DEVICE=remote`, tear it down on exit.
+    /// `cortex-backend-tests` at it via `CORTEX_DEVICE=remote`, tear it down on exit.
     Remote(commands::remote::RemoteCmdArgs),
-    /// Test Burn.
-    Test(commands::test::BurnTestCmdArgs),
+    /// Test Cortex.
+    Test(commands::test::CortexTestCmdArgs),
 }
 
 fn main() -> anyhow::Result<()> {

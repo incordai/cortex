@@ -1,4 +1,4 @@
-use burn::{
+use cortex::{
     Tensor,
     module::{Param, ParamId},
     nn::{self, Linear},
