@@ -104,14 +104,32 @@ impl<O: core::fmt::Debug> Policy<O> {
         // same equality. This early return is a FAST PATH PAST BOTH OF THEM,
         // and it was the one place the check was missing.
         //
+        // MEASURE THE FIT AGAINST THE PLAN'S OWN OPERATION COUNT, NOT AGAINST
+        // `found`'s SIZE. `found.1` is `AvailableItem::size`, which comes from
+        // the validator's match and is NOT the number of operations the plan's
+        // orderings index. A first attempt at this fix compared against that,
+        // and the crash survived it: the diagnostic in `ordering.rs` then read
+        //
+        //   fusion ordering refers to operation 1, but only 0 operation(s)
+        //   remain (num_executed 3, ordering [1, 2, 3])
+        //
+        // an ordering of LENGTH 3 whose MAXIMUM INDEX is 3, so it needs four
+        // operations, while a `size` of 1 let it through `>= 1`. Length and
+        // maximum index are different numbers and only the latter bounds the
+        // indexing.
+        //
+        // `plan.operations.len()` is the right quantity, and it is the one the
+        // deliberate paths below already use — `action_sync` executes a
+        // candidate only when `item.operations.len() == operations.len()`. This
+        // early return is a fast path past those checks, so it has to apply the
+        // same rule rather than a cheaper approximation of it.
+        //
         // `>=` rather than `==` because a longer queue is legitimate and
         // supported: `OrderedExecution::finish` drains only `num_executed` and
-        // returns the remainder, and `execute_optimization` rejects only an
-        // ordering LONGER than the operations. Requiring equality here would
-        // refuse plans the machinery handles correctly today. What is never
-        // valid is executing a plan against FEWER operations than it covers.
-        if let Some((id, length)) = self.found
-            && operations.len() >= length
+        // returns the remainder. What is never valid is executing a plan
+        // against FEWER operations than it covers.
+        if let Some((id, _)) = self.found
+            && operations.len() >= store.get_unchecked(id).operations.len()
         {
             return Action::Execute(id);
         }
