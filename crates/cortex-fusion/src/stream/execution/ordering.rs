@@ -70,7 +70,39 @@ impl<R: FusionRuntime> OrderedExecution<R> {
         self.num_executed += ordering.len();
 
         for id in ordering {
-            let op = &self.operations[*id];
+            // BOUNDS-CHECKED ON PURPOSE, WITH A DIAGNOSTIC.
+            //
+            // A bare `self.operations[*id]` panics with nothing but
+            // "index out of bounds: the len is 1 but the index is 1", naming
+            // neither the stream nor what the ordering asked for. Seen
+            // intermittently - roughly one run in five - when two devices are
+            // driven concurrently, and always from the fusion device-runner
+            // thread, where it surfaces as an opaque
+            // `CallError(task panicked on device runner thread)` at
+            // client.rs:200, three layers from anything actionable.
+            //
+            // Note the asymmetry this repairs: `execute_optimization` above
+            // already guards, but only that the ordering is no LONGER than the
+            // operation list. It never checks the VALUES, and an in-range
+            // length can still carry an out-of-range index - exactly the
+            // failure observed, where `len` fell to 0 while an index of 1 was
+            // still requested.
+            //
+            // This does NOT fix the root cause: something hands this function
+            // an ordering that outlives the operations it indexes. It makes the
+            // next occurrence name its own state instead of hiding it.
+            // Skipping the operation was rejected deliberately - a silently
+            // dropped op yields a wrong tensor, which is worse than a crash.
+            let op = self.operations.get(*id).unwrap_or_else(|| {
+                panic!(
+                    "fusion ordering refers to operation {id}, but only {} operation(s) remain \
+                     (num_executed {}, ordering {:?}) - the ordering has outlived the operations \
+                     it indexes",
+                    self.operations.len(),
+                    self.num_executed,
+                    ordering,
+                )
+            });
             op.execute(handles);
         }
     }

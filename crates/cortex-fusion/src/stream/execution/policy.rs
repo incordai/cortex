@@ -81,7 +81,38 @@ impl<O: core::fmt::Debug> Policy<O> {
             );
         }
 
-        if let Some((id, _length)) = self.found {
+        // THE FOUND PLAN MUST STILL FIT THE OPERATIONS IN FRONT OF US.
+        //
+        // This read the length and threw it away (`_length`), returning
+        // `Execute(id)` for whatever was last found. But `found` is set in
+        // `check_availables` DURING `update`, as an operation is appended, and
+        // it survives until `reset`. Between those two points an execution can
+        // drain the queue, so by the time `action` is asked, the segment may
+        // hold fewer operations than the plan was matched against — and the
+        // plan's `ordering` indexes straight into that shorter list.
+        //
+        // The result was a panic from the device-runner thread at
+        // `ordering.rs`, "index out of bounds: the len is 0 but the index is
+        // 1", reaching the caller as an opaque `CallError` at `client.rs:200`
+        // with nothing naming the plan or the stream. Reproduced reliably by
+        // running a 22-layer encoder over eight different sequence lengths;
+        // the same run passes with fusion compiled out.
+        //
+        // NOTE THE ASYMMETRY THIS REPAIRS: both deliberate paths below already
+        // check the fit — `action_sync` executes an available only when
+        // `available.size == operations.len()`, and `action_lazy` defers on the
+        // same equality. This early return is a FAST PATH PAST BOTH OF THEM,
+        // and it was the one place the check was missing.
+        //
+        // `>=` rather than `==` because a longer queue is legitimate and
+        // supported: `OrderedExecution::finish` drains only `num_executed` and
+        // returns the remainder, and `execute_optimization` rejects only an
+        // ordering LONGER than the operations. Requiring equality here would
+        // refuse plans the machinery handles correctly today. What is never
+        // valid is executing a plan against FEWER operations than it covers.
+        if let Some((id, length)) = self.found
+            && operations.len() >= length
+        {
             return Action::Execute(id);
         }
 
