@@ -98,11 +98,13 @@ impl<O: core::fmt::Debug> Policy<O> {
         // running a 22-layer encoder over eight different sequence lengths;
         // the same run passes with fusion compiled out.
         //
-        // NOTE THE ASYMMETRY THIS REPAIRS: both deliberate paths below already
-        // check the fit — `action_sync` executes an available only when
-        // `available.size == operations.len()`, and `action_lazy` defers on the
-        // same equality. This early return is a FAST PATH PAST BOTH OF THEM,
-        // and it was the one place the check was missing.
+        // AND THIS WAS ONCE DESCRIBED AS "THE ONE PLACE THE CHECK WAS MISSING",
+        // on the reasoning that the deliberate paths below already check the
+        // fit. They check a fit — by COUNT, `available.size == operations.len()`
+        // and `item.operations.len() == operations.len()` — which is the very
+        // quantity that turned out not to bound anything. The gate after the
+        // match, not this early return, is what actually makes that true; this
+        // one stays because it is the fast path and should refuse early.
         //
         // MEASURE THE FIT AGAINST THE PLAN'S OWN OPERATION COUNT, NOT AGAINST
         // `found`'s SIZE. `found.1` is `AvailableItem::size`, which comes from
@@ -140,15 +142,61 @@ impl<O: core::fmt::Debug> Policy<O> {
         // far do this plan's orderings actually reach — so there is no longer a
         // cheaper number available to compare by mistake.
         if let Some((id, _)) = self.found
-            && operations.len() >= store.get_unchecked(id).optimization.strategy.required_operations()
+            && Self::plan_fits(store, id, operations)
         {
             return Action::Execute(id);
         }
 
-        match mode {
+        let action = match mode {
             ExecutionMode::Lazy => self.action_lazy(operations),
             ExecutionMode::Sync => self.action_sync(operations, store),
+        };
+
+        // AND THE FAST PATH WAS NEVER THE ONLY WAY OUT, which is what fixing it
+        // alone missed. `action_sync` reaches `Execute` by its own reasoning —
+        // `available.size == operations.len()`, then
+        // `item.operations.len() == operations.len()` — and BOTH of those are
+        // counts, the same quantity that was just removed from the guard above.
+        // A plan whose ordering reaches index 3 has three operations, so the
+        // count matched, the plan ran, and `execute_operations` indexed past
+        // the end exactly as before. A test driving this function with an
+        // ordering of `[1, 2, 3]` still got `Execute` back with the fast path
+        // already fixed.
+        //
+        // So the check belongs where the DECISION leaves, not on one of the
+        // three paths that can reach it. Every `Execute` now passes the same
+        // gate, and a future fourth path inherits it instead of needing to
+        // remember it.
+        //
+        // EXPLORE, NOT DEFER, IS THE RIGHT REFUSAL. `Defer` panics outright in
+        // sync mode ("Can't defer while sync"), while `Explore` sends the
+        // segment through the explorer, which either builds a plan that fits
+        // the operations actually present or runs them unfused. A stale plan is
+        // declined; the work still happens.
+        match action {
+            Action::Execute(id) if !Self::plan_fits(store, id, operations) => Action::Explore,
+            other => other,
         }
+    }
+
+    /// Whether `operations` is long enough for every index this plan's
+    /// orderings will reach.
+    ///
+    /// `>=` rather than `==` because a longer queue is legitimate and
+    /// supported: `OrderedExecution::finish` drains only `num_executed` and
+    /// returns the remainder. What is never valid is executing a plan against
+    /// FEWER operations than its orderings index.
+    fn plan_fits(
+        store: &ExecutionPlanStore<O>,
+        id: ExecutionPlanId,
+        operations: &[OperationIr],
+    ) -> bool {
+        operations.len()
+            >= store
+                .get_unchecked(id)
+                .optimization
+                .strategy
+                .required_operations()
     }
 
     /// Update the policy state.
@@ -332,6 +380,7 @@ mod tests {
         stream::store::{ExecutionPlan, ExecutionStrategy, ExecutionTrigger},
     };
     use std::ops::Range;
+    use std::sync::Arc;
 
     #[test]
     fn given_no_optimization_should_explore() {
@@ -373,6 +422,98 @@ mod tests {
 
         let action = policy.action(&store, &stream.operations[0..2], ExecutionMode::Sync);
         assert_eq!(action, Action::Execute(id_1));
+    }
+
+    /// THE CRASH, DRIVEN THROUGH THE GUARD THAT LET IT HAPPEN.
+    ///
+    /// Every other test here builds its plan with `ExecutionStrategy::operations(n)`,
+    /// whose ordering is `(0..n)` — the ONE shape where a count and a reach are
+    /// the same number. That is why two count-based guards shipped and neither
+    /// was caught: the suite only ever asked the question where both answers
+    /// agree.
+    ///
+    /// Real plans do not look like that. `unfused_stream_order` builds the
+    /// ordering from a chunk's absolute stream positions, so `[1, 2, 3]` covers
+    /// three operations and reaches index 3 — it needs FOUR behind it.
+    ///
+    /// Given exactly three operations, `action` must NOT hand this plan to the
+    /// executor by ANY of its routes. When this test was first written the fast
+    /// path had already been fixed and it still failed: the early return
+    /// declined, `action_sync` then matched `item.operations.len() == 3` and
+    /// returned `Execute` anyway. Both had to be closed, which is why the check
+    /// now sits on the way out rather than on one route in.
+    #[test]
+    fn a_plan_whose_ordering_outreaches_the_queue_is_not_executed() {
+        // `()` stands in for an optimization: the guard reads only the
+        // strategy's ordering, never the payload.
+        let mut store: ExecutionPlanStore<()> = ExecutionPlanStore::default();
+        let mut policy: Policy<()> = Policy::new();
+        let stream = TestStream::new(3);
+
+        // Three operations covered, but the ordering names positions 1..=3.
+        let id = store.add(ExecutionPlan {
+            operations: stream.operations[0..3].to_vec(),
+            triggers: Vec::new(),
+            optimization: BlockOptimization::new(
+                ExecutionStrategy::Operations {
+                    ordering: Arc::new(vec![1, 2, 3]),
+                },
+                Vec::new(),
+            ),
+        });
+
+        // `action` refuses to answer about more operations than it has
+        // analysed, so feed the stream through `update` first — that is also
+        // how the real queue reaches this point.
+        for op in &stream.operations[0..3] {
+            policy.update(&store, op);
+        }
+        // The fast path only fires once a plan has been found. Set that state
+        // directly rather than reaching it through a stream whose shape would
+        // be incidental to what is under test; `found.1` is deliberately the
+        // count, because the count is exactly the number the broken guards
+        // trusted.
+        policy.found = Some((id, 3));
+
+        let action = policy.action(&store, &stream.operations[0..3], ExecutionMode::Sync);
+        assert_ne!(
+            action,
+            Action::Execute(id),
+            "a plan reaching index 3 must not run against only 3 operations — \
+             that is the indexing the device runner dies on"
+        );
+    }
+
+    /// The other half of the same guard: a plan that DOES fit must still run,
+    /// or the fix would be a refusal dressed up as a bound.
+    #[test]
+    fn a_plan_whose_ordering_fits_the_queue_is_still_executed() {
+        let mut store: ExecutionPlanStore<()> = ExecutionPlanStore::default();
+        let mut policy: Policy<()> = Policy::new();
+        let stream = TestStream::new(4);
+
+        let id = store.add(ExecutionPlan {
+            operations: stream.operations[0..3].to_vec(),
+            triggers: Vec::new(),
+            optimization: BlockOptimization::new(
+                ExecutionStrategy::Operations {
+                    ordering: Arc::new(vec![1, 2, 3]),
+                },
+                Vec::new(),
+            ),
+        });
+        for op in &stream.operations[0..4] {
+            policy.update(&store, op);
+        }
+        policy.found = Some((id, 3));
+
+        // Four operations: index 3 is now addressable.
+        let action = policy.action(&store, &stream.operations[0..4], ExecutionMode::Sync);
+        assert_eq!(
+            action,
+            Action::Execute(id),
+            "four operations cover an ordering reaching index 3 — this must still run"
+        );
     }
 
     #[test]

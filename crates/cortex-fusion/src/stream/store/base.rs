@@ -59,9 +59,11 @@ impl<O> ExecutionStrategy<O> {
             // A composition reaches as far as its furthest member: every child
             // indexes the SAME operation list, so the maximum governs rather
             // than the sum.
-            Self::Composed(items) => {
-                items.iter().map(|i| i.required_operations()).max().unwrap_or(0)
-            }
+            Self::Composed(items) => items
+                .iter()
+                .map(|i| i.required_operations())
+                .max()
+                .unwrap_or(0),
         }
     }
 }
@@ -142,7 +144,9 @@ mod required_operations_tests {
     /// `()` stands in for an optimization: `required_operations` reads only the
     /// orderings, so the payload type is irrelevant to what is under test.
     fn ops(positions: &[usize]) -> ExecutionStrategy<()> {
-        ExecutionStrategy::Operations { ordering: Arc::new(positions.to_vec()) }
+        ExecutionStrategy::Operations {
+            ordering: Arc::new(positions.to_vec()),
+        }
     }
 
     /// THE CRASH, AS A UNIT TEST. `[1, 2, 3]` is the exact ordering the device
@@ -198,6 +202,9 @@ mod required_operations_tests {
     #[test]
     fn an_empty_ordering_requires_no_operations() {
         assert_eq!(ops(&[]).required_operations(), 0);
-        assert_eq!(ExecutionStrategy::<()>::Composed(vec![]).required_operations(), 0);
+        assert_eq!(
+            ExecutionStrategy::<()>::Composed(vec![]).required_operations(),
+            0
+        );
     }
 }
