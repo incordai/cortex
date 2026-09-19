@@ -128,8 +128,19 @@ impl<O: core::fmt::Debug> Policy<O> {
         // supported: `OrderedExecution::finish` drains only `num_executed` and
         // returns the remainder. What is never valid is executing a plan
         // against FEWER operations than it covers.
+        //
+        // AND `plan.operations.len()` IS STILL A COUNT, WHICH IS STILL NOT THE
+        // BOUND. That was the same mistake one level up from the one this
+        // comment describes above: `ordering` holds absolute stream positions,
+        // so `[1, 2, 3]` counts 3 and reaches 3, needing four operations. Both
+        // previous guards therefore admitted a queue of exactly 3 and left
+        // `execute_operations` to index past its end.
+        //
+        // `required_operations` answers the only question that matters — how
+        // far do this plan's orderings actually reach — so there is no longer a
+        // cheaper number available to compare by mistake.
         if let Some((id, _)) = self.found
-            && operations.len() >= store.get_unchecked(id).operations.len()
+            && operations.len() >= store.get_unchecked(id).optimization.strategy.required_operations()
         {
             return Action::Execute(id);
         }
