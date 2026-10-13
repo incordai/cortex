@@ -13,6 +13,7 @@ members = [
 exclude = [
     "examples/notebook",
     "examples/dqn-agent",         # gym-rs
+    "patches/cubecl-environment", # vendored release, see [patch.crates-io]
 ]
 
 [workspace.package]
@@ -242,6 +243,14 @@ cubecl-common = { version = "0.11.0", default-features = false }
 cubecl-environment = { version = "0.11.0", default-features = false }
 cubecl-zspace = { version = "0.11.0", default-features = false }
 cubek = { version = "0.3.0", default-features = false }
+
+[patch.crates-io]
+# The 0.11.0 release with one change: its kernel cache opens with
+# multiprocess WAL, which turso's Windows IO backend refuses, so on Windows
+# the cache never reached disk and every process re-tuned its kernels. The
+# vendored copy opens the file single-process when refused (turso then holds
+# a cross-process lock). Drop this once an upstream release carries the fix.
+cubecl-environment = { path = "patches/cubecl-environment" }
 
 [profile.dev]
 debug = 1 # Speed up compilation time and not necessary.
