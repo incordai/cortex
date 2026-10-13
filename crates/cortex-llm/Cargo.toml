@@ -1,0 +1,68 @@
+[package]
+categories = ["science", "no-std"]
+description = "LLM inference building blocks for Cortex: packed quantized matmul, fused ops, KV cache, sampling"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "llm", "quantization", "inference"]
+license.workspace = true
+name = "cortex-llm"
+readme = "README.md"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex-core/default", "fusion", "std"]
+std = [
+    "cortex-core/std",
+    "cortex-std/std",
+    "cortex-fusion?/std",
+    "dep:bytes",
+    "dep:safetensors",
+    "dep:memmap2",
+    "dep:serde_json",
+    "safetensors/std",
+    "serde_json/std",
+]
+tracing = ["cortex-core/tracing", "cortex-fusion?/tracing"]
+autodiff = ["cortex-core/autodiff"]
+autotune = ["cortex-core/autotune", "cortex-cubecl?/autotune"]
+
+cubecl-backend = ["cortex-cubecl", "cubecl"]
+fusion = ["cortex-fusion", "cortex-core/fusion"]
+
+cuda = ["cubecl-backend", "cortex-core/cuda"]
+rocm = ["cubecl-backend", "cortex-core/rocm"]
+wgpu = ["cubecl-backend", "cortex-core/wgpu"]
+vulkan = ["cubecl-backend", "cortex-core/vulkan"]
+webgpu = ["cubecl-backend", "cortex-core/webgpu"]
+metal = ["cubecl-backend", "cortex-core/metal"]
+cpu = ["cubecl-backend", "cortex-core/cpu"]
+flex = ["cortex-core/flex"]
+ndarray = ["cortex-core/ndarray"]
+tch = ["cortex-core/tch"]
+remote = ["cortex-core/remote", "router"]
+capture = ["cortex-core/capture", "router"]
+router = ["cortex-router"]
+
+[dependencies]
+# Keyed-hash MACs that authenticate `distributed` process-group links.
+blake3 = { workspace = true }
+bytes = { workspace = true, optional = true }
+cortex-core = { workspace = true, features = ["extension"] }
+cortex-cubecl = { workspace = true, optional = true, default-features = false }
+cortex-fusion = { workspace = true, optional = true, default-features = false }
+cortex-router = { workspace = true, optional = true, default-features = false }
+cortex-std = { workspace = true }
+cubecl = { workspace = true, optional = true }
+half = { workspace = true }
+memmap2 = { workspace = true, optional = true }
+num-traits = { workspace = true }
+# The OS random source, for `distributed` handshake nonces.
+rand = { workspace = true, features = ["sys_rng"] }
+safetensors = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+features = ["default", "flex"]
+rustdoc-args = ["--cfg", "docsrs"]
