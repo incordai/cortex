@@ -1,5 +1,3 @@
-use core::sync::atomic::{AtomicU64, Ordering};
-
 use super::{RouterClient, RouterTensor};
 use crate::CustomOpRegistry;
 use crate::{
@@ -9,8 +7,8 @@ use crate::{
 };
 use alloc::boxed::Box;
 use cortex_backend::{
-    Backend, DType, DeviceOps, ExecutionError, Shape, TensorData, distributed::DistributedOps,
-    tensor::IndexingUpdateOp,
+    Backend, DType, DeviceOps, ExecutionError, ProfileDuration, ProfileOptions, ProfileToken,
+    Shape, TensorData, distributed::DistributedOps, tensor::IndexingUpdateOp,
 };
 use cortex_ir::{
     ActivationOperationIr, BackendIr, BaseOperationIr, BoolOperationIr, FloatOperationIr,
@@ -18,6 +16,7 @@ use cortex_ir::{
     OperationIr, TensorId, TensorIr, TensorStatus,
 };
 use cortex_std::{DeviceSettings, future::DynFut};
+use portable_atomic::{AtomicU64, Ordering};
 
 /// An interpreter's context contains a [handle container](HandleContainer) to manage
 /// (i.e., fetch and update) existing tensors.
@@ -47,6 +46,9 @@ pub struct TensorInterpreter<B: BackendIr> {
     /// Handlers for [custom operations](OperationIr::Custom), keyed by id. Shared read-only across
     /// every session, so executing a custom op is a map lookup plus a call.
     custom_ops: CustomOpRegistry<B>,
+    /// A flush that failed where no error could be returned, reported by the next
+    /// [`sync`](Self::sync).
+    flush_error: cortex_std::sync::Mutex<Option<ExecutionError>>,
 }
 
 impl<B: BackendIr> core::fmt::Debug for TensorInterpreter<B> {
@@ -71,6 +73,7 @@ impl<B: BackendIr> TensorInterpreter<B> {
             },
             device,
             custom_ops,
+            flush_error: cortex_std::sync::Mutex::new(None),
         }
     }
 
@@ -91,7 +94,7 @@ impl<B: BackendIr> TensorInterpreter<B> {
         let dtype = tensor.dtype;
         if dtype.is_float() {
             HandleKind::Float(handles.get_float_tensor::<B>(tensor))
-        } else if dtype.is_int() {
+        } else if dtype.is_int() || dtype.is_uint() {
             HandleKind::Int(handles.get_int_tensor::<B>(tensor))
         } else if dtype.is_bool() {
             HandleKind::Bool(handles.get_bool_tensor::<B>(tensor))
@@ -162,12 +165,12 @@ impl<B: BackendIr> TensorInterpreter<B> {
     /// Register a tensor from its data and id.
     pub fn register_tensor_data_id(&mut self, id: TensorId, data: TensorData) {
         let ctx = &mut self.context;
-        let dtype = data.dtype;
+        let dtype = data.dtype();
 
         if dtype.is_float() {
             let tensor = B::float_from_data(data, &self.device);
             ctx.handles.register_float_tensor::<B>(&id, tensor)
-        } else if dtype.is_int() {
+        } else if dtype.is_int() || dtype.is_uint() {
             let tensor = B::int_from_data(data, &self.device);
             ctx.handles.register_int_tensor::<B>(&id, tensor)
         } else if dtype.is_bool() {
@@ -182,13 +185,13 @@ impl<B: BackendIr> TensorInterpreter<B> {
     pub fn register_tensor_data_desc(&mut self, data: TensorData) -> TensorIr {
         let ctx = &mut self.context;
         let id = ctx.create_empty_handle();
-        let shape = data.shape.clone();
-        let dtype = data.dtype;
+        let shape = data.shape().clone();
+        let dtype = data.dtype();
 
         if dtype.is_float() {
             let tensor = B::float_from_data(data, &self.device);
             ctx.handles.register_float_tensor::<B>(&id, tensor)
-        } else if dtype.is_int() {
+        } else if dtype.is_int() || dtype.is_uint() {
             let tensor = B::int_from_data(data, &self.device);
             ctx.handles.register_int_tensor::<B>(&id, tensor)
         } else if dtype.is_bool() {
@@ -766,6 +769,11 @@ impl<B: BackendIr> TensorInterpreter<B> {
                 }
             },
             OperationIr::NumericFloat(_dtype, op) => match op {
+                NumericOperationIr::Pad(desc) => {
+                    let tensor = handles.get_float_tensor::<B>(&desc.input);
+                    let output = B::float_pad(tensor, &desc.padding, desc.mode.into());
+                    handles.register_float_tensor::<B>(&desc.out.id, output);
+                }
                 NumericOperationIr::Add(desc) => {
                     binary_float_ops!(handles, desc, B::float_add)
                 }
@@ -824,6 +832,11 @@ impl<B: BackendIr> TensorInterpreter<B> {
                     reduce_float_dim_ops!(handles, desc, |tensor, axis, _| B::float_sum_dim(
                         tensor, axis
                     ))
+                }
+                NumericOperationIr::SumDims(desc) => {
+                    let input = handles.get_float_tensor::<B>(&desc.input);
+                    let output = B::float_sum_dims(input, &desc.axes);
+                    handles.register_float_tensor::<B>(&desc.out.id, output);
                 }
                 NumericOperationIr::Prod(desc) => {
                     unary_float_ops!(handles, desc, B::float_prod)
@@ -1003,6 +1016,11 @@ impl<B: BackendIr> TensorInterpreter<B> {
                 }
             },
             OperationIr::NumericInt(_dtype, op) => match op {
+                NumericOperationIr::Pad(desc) => {
+                    let tensor = handles.get_int_tensor::<B>(&desc.input);
+                    let output = B::int_pad(tensor, &desc.padding, desc.mode.into());
+                    handles.register_int_tensor::<B>(&desc.out.id, output);
+                }
                 NumericOperationIr::Add(desc) => {
                     binary_int_ops!(handles, desc, B::int_add)
                 }
@@ -1061,6 +1079,14 @@ impl<B: BackendIr> TensorInterpreter<B> {
                     reduce_int_dim_ops!(handles, desc, |tensor, axis, _| B::int_sum_dim(
                         tensor, axis
                     ))
+                }
+                NumericOperationIr::SumDims(desc) => {
+                    let input = handles.get_int_tensor::<B>(&desc.input);
+                    let output = desc
+                        .axes
+                        .iter()
+                        .fold(input, |tensor, &axis| B::int_sum_dim(tensor, axis));
+                    handles.register_int_tensor::<B>(&desc.out.id, output);
                 }
                 NumericOperationIr::Prod(desc) => {
                     unary_int_ops!(handles, desc, B::int_prod)
@@ -1411,6 +1437,15 @@ impl<B: BackendIr> TensorInterpreter<B> {
                 }
             },
             OperationIr::Module(op) => match op {
+                ModuleOperationIr::BatchNorm(desc) => {
+                    let x = handles.get_float_tensor::<B>(&desc.x);
+                    let gamma = handles.get_float_tensor::<B>(&desc.gamma);
+                    let beta = handles.get_float_tensor::<B>(&desc.beta);
+                    let mean = handles.get_float_tensor::<B>(&desc.mean);
+                    let variance = handles.get_float_tensor::<B>(&desc.variance);
+                    let output = B::batch_norm(x, gamma, beta, mean, variance, desc.epsilon.elem());
+                    handles.register_float_tensor::<B>(&desc.out.id, output);
+                }
                 ModuleOperationIr::Embedding(desc) => {
                     let weights = handles.get_float_tensor::<B>(&desc.weights);
                     let indices = handles.get_int_tensor::<B>(&desc.indices);
@@ -1875,20 +1910,6 @@ impl<B: BackendIr> TensorInterpreter<B> {
                     );
                     handles.register_float_tensor::<B>(&desc.out.id, output);
                 }
-                ModuleOperationIr::Rfft(desc) => {
-                    let signal = handles.get_float_tensor::<B>(&desc.signal);
-                    let (out_re, out_im) = B::rfft(signal, desc.dim, desc.n);
-
-                    handles.register_float_tensor::<B>(&desc.out_re.id, out_re);
-                    handles.register_float_tensor::<B>(&desc.out_im.id, out_im);
-                }
-                ModuleOperationIr::IRfft(desc) => {
-                    let spectrum_re = handles.get_float_tensor::<B>(&desc.input_re);
-                    let spectrum_im = handles.get_float_tensor::<B>(&desc.input_im);
-                    let signal = B::irfft(spectrum_re, spectrum_im, desc.dim, desc.n);
-
-                    handles.register_float_tensor::<B>(&desc.out_signal.id, signal);
-                }
                 ModuleOperationIr::Attention(desc) => {
                     let query = handles.get_float_tensor::<B>(&desc.query);
                     let key = handles.get_float_tensor::<B>(&desc.key);
@@ -2119,7 +2140,10 @@ impl<B: BackendIr> TensorInterpreter<B> {
                     // Safety: the collective tensor is resolved through the normal op stream
                     // (a `SyncCollective` op follows), so the handle is valid once that runs.
                     let output = unsafe { output.assume_resolved() };
-                    B::flush(&self.device);
+                    if let Err(err) = B::flush(&self.device) {
+                        // Registering an operation reports nothing: the next sync does.
+                        self.flush_error.lock().get_or_insert(err);
+                    }
                     handles.register_float_tensor::<B>(&desc.out.id, output);
                 }
                 cortex_ir::DistributedOperationIr::SyncCollective => B::sync_collective(&self.device),
@@ -2143,7 +2167,7 @@ impl<B: BackendIr> TensorInterpreter<B> {
         let tensor = if tensor.dtype.is_float() {
             let tensor = ctx.handles.get_float_tensor::<B>(&tensor);
             Output::<B>::Float(tensor)
-        } else if tensor.dtype.is_int() {
+        } else if tensor.dtype.is_int() || tensor.dtype.is_uint() {
             let tensor = ctx.handles.get_int_tensor::<B>(&tensor);
             Output::Int(tensor)
         } else if tensor.dtype.is_bool() {
@@ -2168,7 +2192,15 @@ impl<B: BackendIr> TensorInterpreter<B> {
     }
 
     /// Block until all queued backend work has completed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExecutionError`] when the queued work failed, or when a flush made while
+    /// registering operations failed since the last sync.
     pub fn sync(&self) -> Result<(), ExecutionError> {
+        if let Some(err) = self.flush_error.lock().take() {
+            return Err(err);
+        }
         B::sync(&self.device)
     }
 
@@ -2180,5 +2212,25 @@ impl<B: BackendIr> TensorInterpreter<B> {
     /// The set of supported usages for `dtype` on this backend.
     pub fn dtype_usage(&self, dtype: DType) -> cortex_backend::DTypeUsageSet {
         B::dtype_usage(&self.device, dtype)
+    }
+
+    /// Open a profiling window on the backend where the calling stream stands.
+    pub fn profile_start(&self) -> Result<Option<ProfileToken>, ExecutionError> {
+        B::profile_start(&self.device)
+    }
+
+    /// Close the window `token` where the calling stream stands.
+    pub fn profile_end(
+        &self,
+        token: ProfileToken,
+        options: ProfileOptions,
+    ) -> Result<ProfileDuration, ExecutionError> {
+        B::profile_end(&self.device, token, options)
+    }
+
+    /// Drop the window `token` where the calling stream stands without
+    /// measuring it.
+    pub fn profile_abandon(&self, token: ProfileToken) {
+        B::profile_abandon(&self.device, token)
     }
 }

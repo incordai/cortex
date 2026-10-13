@@ -1,16 +1,11 @@
 use crate::{InferenceStep, TrainStep};
-use cortex_core::module::AutodiffModule;
+use cortex_core::module::Module;
 
 /// A single keyword trait for a Cortex [module](cortex_core::module::Module) used for learning.
-pub trait LearnerModel:
-    TrainStep + InferenceStep + AutodiffModule + core::fmt::Display + 'static
-{
-}
+pub trait LearnerModel: TrainStep + InferenceStep + Module + core::fmt::Display + 'static {}
 
-impl<T> LearnerModel for T where
-    T: TrainStep + InferenceStep + AutodiffModule + core::fmt::Display + 'static
-{
-}
+impl<T> LearnerModel for T where T: TrainStep + InferenceStep + Module + core::fmt::Display + 'static
+{}
 
 /// Type for training input.
 pub(crate) type TrainingModelInput<M> = <M as TrainStep>::Input;

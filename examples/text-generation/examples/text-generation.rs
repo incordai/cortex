@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 use cortex::{
     optim::decay::WeightDecayConfig,
     tensor::{Device, DeviceConfig, Element},
@@ -95,6 +93,7 @@ mod flex {
 
 #[cfg(feature = "remote")]
 mod remote {
+    use cortex::remote::RemoteHost;
     use cortex::tensor::{Device, DeviceType};
 
     /// Address of the `cortex-remote` server to train against.
@@ -106,7 +105,7 @@ mod remote {
     /// too — doing both locks the device's settings twice and returns
     /// [`DeviceError::AlreadyInitialized`](cortex::tensor::DeviceError::AlreadyInitialized).
     pub fn run() {
-        let devices = Device::enumerate(DeviceType::remote_websocket(ADDRESS));
+        let devices = Device::enumerate(DeviceType::Remote(RemoteHost::websocket(ADDRESS)));
         crate::launch(devices.into_vec().pop().unwrap());
     }
 }

@@ -1,8 +1,9 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use crate::{Dropout, DropoutConfig, Linear, LinearConfig};
 use cortex::config::Config;
-use cortex::module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
 use cortex::tensor::{Bool, Device, Tensor};
 
 use cortex::tensor::activation::{quiet_softmax, softmax};

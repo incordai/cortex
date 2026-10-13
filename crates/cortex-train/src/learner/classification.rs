@@ -3,6 +3,7 @@ use crate::metric::{
     TopKAccuracyInput, processor::ItemLazy,
 };
 use cortex_core::tensor::{Int, Tensor};
+use cortex_std::ExecutionError;
 
 /// Simple classification output adapted for multiple metrics.
 ///
@@ -28,20 +29,20 @@ pub struct ClassificationOutput {
 }
 
 impl ItemLazy for ClassificationOutput {
-    fn sync(self) -> Self {
+    fn sync(self) -> Result<Self, ExecutionError> {
         // No readback: the metrics compute on the device the tensors live on
         // and read back only their final scalars. Flushing dispatches the
         // producing stream's buffered work so the metric thread doesn't wait
-        // on an idle queue; a training item's float tensors come off the
+        // on an idle queue; all tensors in a training item come off the
         // autodiff backend entirely, so the metric thread neither retains the
-        // tape nor pays its dispatch.
-        self.loss.device().flush();
+        // tape nor carries its dispatch context.
+        self.loss.device().flush()?;
 
-        ClassificationOutput {
-            output: self.output.no_grad(),
-            loss: self.loss.no_grad(),
-            targets: self.targets,
-        }
+        Ok(ClassificationOutput {
+            output: self.output.without_autodiff(),
+            loss: self.loss.without_autodiff(),
+            targets: self.targets.without_autodiff(),
+        })
     }
 }
 
@@ -107,16 +108,16 @@ pub struct MultiLabelClassificationOutput {
 }
 
 impl ItemLazy for MultiLabelClassificationOutput {
-    fn sync(self) -> Self {
-        // Same contract as `ClassificationOutput::sync`: flush and take the
-        // floats off the tape, no readback.
-        self.loss.device().flush();
+    fn sync(self) -> Result<Self, ExecutionError> {
+        // Same contract as `ClassificationOutput::sync`: flush and take every
+        // tensor off the autodiff backend, no readback.
+        self.loss.device().flush()?;
 
-        MultiLabelClassificationOutput {
-            output: self.output.no_grad(),
-            loss: self.loss.no_grad(),
-            targets: self.targets,
-        }
+        Ok(MultiLabelClassificationOutput {
+            output: self.output.without_autodiff(),
+            loss: self.loss.without_autodiff(),
+            targets: self.targets.without_autodiff(),
+        })
     }
 }
 

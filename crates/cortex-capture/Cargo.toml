@@ -1,0 +1,35 @@
+[package]
+name = "cortex-capture"
+authors = ["laggui <lagrange.guillaume.1@gmail.com>"]
+description = "Graph capture backend for the Cortex framework"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-capture"
+documentation = "https://docs.rs/burn-capture"
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = [
+    "cortex-backend/std",
+    "cortex-ir/std",
+    "cortex-router/std",
+    "cortex-std/std",
+]
+doc = ["default"]
+
+[dependencies]
+cortex-backend = { workspace = true }
+cortex-ir = { workspace = true }
+cortex-router = { workspace = true }
+cortex-std = { workspace = true }
+hashbrown = { workspace = true }
+portable-atomic = { workspace = true }
+spin = { workspace = true }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

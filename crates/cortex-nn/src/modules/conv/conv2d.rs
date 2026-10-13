@@ -1,15 +1,15 @@
+use crate::Initializer;
 use alloc::format;
 
 use cortex_core as cortex;
 
 use crate::PaddingConfig2d;
 use cortex::config::Config;
-use cortex::module::Initializer;
 use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay, Param};
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
 use cortex::tensor::module::conv2d;
-use cortex::tensor::ops::PaddedConvOptions;
+use cortex::tensor::ops::ConvOptions;
 
 use crate::conv::checks;
 
@@ -152,11 +152,10 @@ impl Conv2d {
     /// use cortex::nn::conv::Conv2dConfig;
     /// use cortex::tensor::Tensor;
     ///
-    /// // Assuming backend type alias `B`
     /// let device = Default::default();
     /// let conv = Conv2dConfig::new([3, 8], [3, 3]).init(&device);
     ///
-    /// let x = Tensor::<B, 4>::zeros([1, 3, 28, 28], &device);
+    /// let x = Tensor::<4>::zeros([1, 3, 28, 28], &device);
     /// let y = conv.forward(x);
     ///
     /// println!("{:?}", y.dims()); // [1, 8, 26, 26]
@@ -172,10 +171,9 @@ impl Conv2d {
             &self.stride,
         );
 
-        let options = PaddedConvOptions::asymmetric(
+        let options = ConvOptions::new_with_padding(
             self.stride,
-            [top, left],
-            [bottom, right],
+            [(top, bottom), (left, right)],
             self.dilation,
             self.groups,
         );

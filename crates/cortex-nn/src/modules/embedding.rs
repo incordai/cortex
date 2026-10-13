@@ -1,7 +1,7 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use cortex::config::Config;
-use cortex::module::Initializer;
 use cortex::module::Module;
 use cortex::module::Param;
 use cortex::module::{Content, DisplaySettings, ModuleDisplay};

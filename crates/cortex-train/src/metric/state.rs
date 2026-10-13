@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cortex_core::tensor::{Bool, Tensor};
+use cortex_core::tensor::{Bool, Tensor, TensorReadError};
 
 use crate::metric::{ClassReduction, MetricName, NumericEntry, SerializedEntry, format_float};
 
@@ -170,11 +170,15 @@ impl NumericMetricState {
     /// `count` is the number of underlying units `value` is averaged over.
     /// This is typically the batch size (e.g. for accuracy, loss), but it can be any
     /// unit the metric's `value` is implicitly a rate over.
+    /// A zero-count update records the current value without changing the running aggregate.
     pub fn update(&mut self, value: f64, count: usize) {
-        self.sum += value * count as f64;
-        self.count += count;
         self.current = value;
         self.current_count = count;
+
+        if count > 0 {
+            self.sum += value * count as f64;
+            self.count += count;
+        }
     }
 
     /// Compute the metric for the current update.
@@ -343,19 +347,23 @@ impl ConfusionStatsState {
     }
 
     /// Compute the batch-level value and the running epoch-level value (from all accumulated counts)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TensorReadError`] if the computed metric tensors cannot be read back.
     pub fn compute_update(
         &mut self,
         class_reduction: ClassReduction,
         format: FormatOptions,
         compute_fn: impl Fn(Option<Tensor<1>>, Option<Tensor<1>>, Option<Tensor<1>>) -> Tensor<1>,
-    ) -> SerializedEntry {
+    ) -> Result<SerializedEntry, TensorReadError> {
         let current_tp = self.current_tp.take();
         let current_fp = self.current_fp.take();
         let current_fn = self.current_fn.take();
 
         // Compute batch-level value
         let batch_metric = compute_fn(current_tp, current_fp, current_fn);
-        self.current_value = Self::class_average(batch_metric, class_reduction);
+        self.current_value = Self::class_average(batch_metric, class_reduction)?;
 
         // Compute epoch-level value from running totals
         let total_tp = self.true_positive.clone();
@@ -363,7 +371,7 @@ impl ConfusionStatsState {
         let total_fn = self.false_negative.clone();
 
         let epoch_metric = compute_fn(total_tp, total_fp, total_fn);
-        self.running_value = Self::class_average(epoch_metric, class_reduction);
+        self.running_value = Self::class_average(epoch_metric, class_reduction)?;
 
         // Serialize and format
         let serialized = NumericEntry::Aggregated {
@@ -371,7 +379,7 @@ impl ConfusionStatsState {
             count: self.current_count,
         }
         .serialize();
-        self.serialized_entry(format, serialized)
+        Ok(self.serialized_entry(format, serialized))
     }
 
     /// Compute the final metric for the accumulated global state.
@@ -401,12 +409,20 @@ impl ConfusionStatsState {
         SerializedEntry::new(formatted, serialized)
     }
 
-    fn class_average(mut metric: Tensor<1>, class_reduction: ClassReduction) -> f64 {
+    fn class_average(
+        mut metric: Tensor<1>,
+        class_reduction: ClassReduction,
+    ) -> Result<f64, TensorReadError> {
         use ClassReduction::{Macro, Micro};
         let avg = match class_reduction {
             Micro => metric,
             Macro => {
-                if metric.clone().contains_nan().any().into_scalar() {
+                if metric
+                    .clone()
+                    .contains_nan()
+                    .any()
+                    .try_into_scalar::<bool>()?
+                {
                     let mask = metric.clone().is_nan();
                     metric = metric
                         .clone()
@@ -415,7 +431,7 @@ impl ConfusionStatsState {
                 metric.mean()
             }
         };
-        avg.into_scalar()
+        avg.try_into_scalar::<f64>()
     }
 
     /// Get the current batch value.

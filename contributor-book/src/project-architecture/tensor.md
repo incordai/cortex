@@ -1,33 +1,29 @@
 # Tensor
 
-A proper deep learning framework should have a fast tensor implementation with autodiff support, and
-Cortex is no exception. The tensor API abstracts away backend implementation details and focuses on
-usability without compromising performance. To make it as easy as possible to use, there is only one
-tensor type, which is different from multiple tensor and deep learning crates in Rust. Generic
-parameters are used instead to specialize the tensor type.
+The public tensor type is `Tensor<const D: usize, K = Float>`: `D` is its rank and `K` is `Float`,
+`Int`, or `Bool`. Backend and element precision are runtime properties, selected through `Device`
+and `DType`. Models and tensor functions do not have a backend generic parameter.
 
-- **B: Backend:** The first argument is the backend on which the tensor implementation lies.
-- **const D: usize:** The second argument is the dimensionality of the tensor.
-- **K: TensorKind:** The third argument is the tensor kind, which can be either Float, Int or Bool.
-  By default, the tensor kind is set to Float, so for most tensors, the kind argument is not
-  necessary.
+## From backend generics to runtime selection
 
-Having one struct for tensors reduces the complexity of the tensor API, which also means less
-duplicated documentation to write and maintain.
+Previously, `Tensor<B, D, K>` carried the backend in its Rust type. Model fields and functions
+propagated `B: Backend`, and selecting another backend instantiated that generic code for another
+backend type. The current API keeps rank and kind in the type while moving backend selection to
+runtime values. The same `Tensor<2>` type can represent a tensor on Flex, CUDA, or WGPU.
 
-Tensors are thread-safe, which means that you can send a tensor to another thread, and everything
-will work, including auto-differentiation. Note that there are no explicit in-place tensor
-operations since all tensor operations take owned tensors as parameters, which make it possible to
-mutate them. Tensors can be shared simply by cloning them, but if there is only one reference to a
-tensor, the backend implementation is free to reuse the tensor's allocated data. For more
-information about how it is done, you can have a look at this
-[blog post](https://burn.dev/blog/burn-rusty-approach-to-tensor-handling).
+Cargo features determine which backends are compiled into an application. A `Device` selects the
+compute resource and supplies creation settings; existing tensors carry the information needed to
+route subsequent operations. Multiple enabled backends can be used side by side, with the same model
+code targeting each of them. There is no single process-wide backend that every tensor must use.
+Combining tensors still requires compatible devices; transfers are explicit.
+
+The `Backend` trait remains the implementation contract below dispatch. Concrete backends and
+decorators such as `Autodiff<B, C>` and `Fusion<B>` still compose using backend types. The change
+moves those types out of ordinary application signatures and into the implementation layers.
 
 ## Tensor Operations
 
-Operations on Tensors (sometimes shortened to Ops) are defined in traits (generally part of the
-Backend Supertrait) and implemented for the Tensor struct. The appropriate parent trait of an
-operation depends on the type of operation:
+Operations follow this path:
 
 - `base` => All tensor kinds should implement these operations (reshape, into_data, etc.). The
   implementation is in
@@ -42,18 +38,28 @@ operation depends on the type of operation:
 - `bool` => Tensor operations are only available for bool tensors. The implementation is in
   [burn-tensor/src/tensor/api/bool.rs](https://github.com/tracel-ai/burn/blob/6d96e8d8086d2309c425f2c8a43a8246f8c454d2/crates/burn-tensor/src/tensor/api/bool.rs).
 
-`Numeric` is directly implemented for `Float` and `Int` tensors, and in general, The implementations
-for these methods are calling the corresponding `{Int|Float}` method defined in the backend
-supertrait.
+The layers have distinct responsibilities:
 
-Anything that is implemented by numeric should have an implementation in the `{Int|Float}` traits,
-though it may be avoidable if the operation for one type requires casting to the other type. To
-provide an example, `powf` should be implemented for `Int` tensors, but it should not be an Int
-Tensor Operation. The LHS should be converted to a float, and the output should be converted back to
-an int. So it's possible to avoid implementing `IntTensorOp` altogether.
+- [`cortex-tensor/src/tensor/api`](https://github.com/tracel-ai/burn/tree/main/crates/burn-tensor/src/tensor/api)
+  defines the rank- and kind-checked API, shape checks, and user documentation. `base.rs` covers
+  common operations, `numeric.rs` covers numeric kinds, and `float.rs`, `int.rs`, and `bool.rs`
+  contain kind-specific operations. Activations and neural-network operations also have function
+  APIs in `tensor/activation` and `tensor/module.rs`.
+- [`cortex-tensor/src/bridge`](https://github.com/tracel-ai/burn/tree/main/crates/burn-tensor/src/bridge)
+  stores tensor primitives opaquely and implements kind-specific forwarding. Thin generic methods
+  call non-generic helpers taking `BridgeTensor`, so downstream monomorphization does not repeatedly
+  resolve the backend implementation types. Follow the `*_impl` pattern described in the
+  `cortex-tensor` crate documentation when adding operations.
+- [`cortex-dispatch`](https://github.com/tracel-ai/burn/tree/main/crates/burn-dispatch/src) selects a
+  backend from runtime tensors and devices. It also routes autodiff and checkpointing contexts.
+  Built-in forwarding uses `#[backend_dispatch]`; extensions use `#[backend_extension]`.
+- [`cortex-backend`](https://github.com/tracel-ai/burn/tree/main/crates/burn-backend/src/backend)
+  defines `BackendTypes`, `Backend`, and operation traits implemented by concrete backends and
+  decorators. These low-level APIs still use backend generics and tensor primitive aliases.
 
-Additionally there are some operations that should be defined as functions instead of tensor op
-methods. These are:
+A new kernel operation may need changes at every layer. An operation expressed entirely in terms of
+existing tensor operations may need only a public composition. See
+[Adding a New Operation](../guides/adding-a-new-operation-to-cortex.md).
 
 `module` => These should be exported as functions instead of methods on tensors. The implementation
 is in

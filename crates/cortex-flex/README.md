@@ -1,11 +1,20 @@
 # cortex-flex
 
+[![Current Crates.io Version](https://img.shields.io/crates/v/burn-flex.svg)](https://crates.io/crates/burn-flex)
+[![Documentation](https://docs.rs/burn-flex/badge.svg)](https://docs.rs/burn-flex)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
 A fast, memory-efficient CPU backend for Cortex with multi-threading, SIMD, and optimized matrix
 multiplication. Runs on std, no_std, and WebAssembly. Supports f16/bf16, zero-copy data loading, and
 is thread-safe by design.
 
-> **[Detailed comparison with cortex-ndarray](./COMPARISON.md)**: Full architecture, feature coverage,
+> **[Detailed comparison with cortex-ndarray](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/COMPARISON.md)**: Full architecture, feature coverage,
 > operation-by-operation analysis, and migration path.
+
+cortex-flex is independent of [cortex-cpu](https://github.com/tracel-ai/burn/tree/main/crates/burn-cpu), Cortex's other CPU backend. cortex-cpu JIT-compiles
+CubeCL kernels through LLVM, with fusion and autotuning, while cortex-flex executes eagerly with its own
+pure-Rust kernels and requires no native libraries. See the
+[cortex-cpu README](https://github.com/tracel-ai/burn/blob/main/crates/burn-cpu/README.md#burn-cpu-vs-burn-flex) for a side-by-side comparison.
 
 ### Features
 
@@ -24,7 +33,8 @@ is thread-safe by design.
   O(TILE_KV) memory per row. Both support causal masking, additive bias (ALiBi), softcap, custom
   scale, and cross-attention.
 - **Pooling**: Max pool, avg pool, adaptive avg pool. All via unified 3D with backward pass support.
-- **Conv Transpose**: Scatter-based transposed convolutions for upsampling.
+- **Conv Transpose**: Unified 3D implementation with gemm + col2im. Conv transpose 1d/2d delegate to
+  conv_transpose3d. Supports groups, dilation, padding, and output padding.
 - **Portable SIMD**: Uses [macerator](https://crates.io/crates/macerator) for automatic dispatch:
   - aarch64: NEON
   - x86_64: AVX2, AVX512, SSE
@@ -38,8 +48,10 @@ is thread-safe by design.
 - **Parallel Execution**: Optional rayon for large tensors
 - **Quantization**: Full quantize/dequantize support with per-tensor and per-block symmetric
   schemes. All ~40 quantized ops (arithmetic, trig, reductions, sorting, etc.) work out of the box.
-  Layout ops on quantized tensors (permute, flip, expand, slice, select) are zero-copy. Stores
-  scales separately for direct `scale * x_q` dequantization instead of reparsing packed bytes.
+  Layout ops on per-tensor quantized tensors (permute, flip, expand, slice) are zero-copy, and
+  `select` copies the `i8` payload directly; block-quantized tensors dequantize, move, and
+  requantize so the blocks follow the move. Stores scales separately for direct `scale * x_q`
+  dequantization instead of reparsing packed bytes.
 - **Dtype Support**: f32, f64, f16 (native), bf16 (via f32 conversion), i8-i64, u8-u64
 - **Built on Cortex**: Leverages Cortex's native infrastructure (`Bytes`, `Shape`, `TensorData`,
   `Element` trait) from cortex-backend and cortex-std
@@ -63,13 +75,13 @@ top-level `cortex` crate:
 
 ```toml
 # Direct
-cortex-flex = { version = "0.21", features = ["apple-amx"] }
+cortex-flex = { version = "0.22", features = ["apple-amx"] }
 
 # Via cortex
-cortex = { version = "0.21", features = ["flex", "apple-amx"] }
+cortex = { version = "0.22", features = ["flex", "apple-amx"] }
 ```
 
-See [ARCHITECTURE.md#feature-flags](./ARCHITECTURE.md#feature-flags) for per-case benchmark impact.
+See [ARCHITECTURE.md#feature-flags](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/ARCHITECTURE.md#feature-flags) for per-case benchmark impact.
 
 ### Why replace cortex-ndarray?
 
@@ -90,14 +102,14 @@ and fused kernels.
 
 | Category          | Speedup      | Highlights                              |
 | ----------------- | ------------ | --------------------------------------- |
-| Binary ops (f32)  | **~1x**      | Both use macerator SIMD for f32         |
+| Binary ops (f32)  | **~1-1.4x**  | SIMD parity; COW avoids output alloc    |
 | Binary ops (i32)  | **1.8-5.3x** | Flex uses i32, NdArray uses i64         |
 | Matmul (square)   | **1.4-3.1x** | gemm at small/large; tied at mid-sizes  |
 | Matmul (batched)  | **1.3-2.2x** | Multi-head attention shapes             |
-| Matmul (int)      | **3.7-6.5x** | gemm vs matrixmultiply for integers     |
+| Matmul (int)      | **3.7-6.5x** | Nested loop with SIMD i32 dot product   |
 | Conv2d (3x3)      | **1.1-3.7x** | Larger kernels and batches benefit most |
 | Conv1d            | **4.3-9.8x** |                                         |
-| Conv transpose    | **9.2-84x**  | Direct scatter vs im2col                |
+| Conv transpose    | **9.2-84x**  | gemm + col2im vs direct scatter         |
 | Attention         | **1.2-3.0x** | Fused softmax, 2-8x lower peak memory   |
 | Pooling           | **1.1-3.1x** |                                         |
 | Interpolation     | **1.1-6.3x** | Nearest 4-6x, bilinear 1.7-2.8x         |
@@ -131,7 +143,7 @@ and separated storage layouts.
 > operations. The quantized speedups reflect the difference between simulated and native execution,
 > not equivalent algorithms running at different speeds.
 
-See [BENCHMARKS.md](./BENCHMARKS.md) for the full breakdown.
+See [BENCHMARKS.md](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/BENCHMARKS.md) for the full breakdown.
 
 ### Performance vs candle-core (Apple M3 Max, pure-Rust, no BLAS)
 
@@ -147,7 +159,7 @@ as fast or faster on every operation category.
 | Conv transpose                      | **1.5-1.9x**         |                                  |
 | Max/min reductions                  | **3.8-5.1x**         | SIMD + zero-alloc                |
 | Pooling (k=3 s=2)                   | **1.8-2.5x**         |                                  |
-| Layer norm (fused)                  | **1.6-3.4x**         | Two-pass Welford kernel          |
+| Layer norm (fused)                  | **1.6-3.4x**         | Three-pass row kernel            |
 | Softmax (fused)                     | **1.4-1.7x**         | Three-pass row kernel            |
 | Cat, gather, select                 | **1.3-2.5x**         |                                  |
 | Nearest2d interpolation             | **1.3-1.4x**         |                                  |
@@ -180,8 +192,15 @@ as fast or faster on every operation category.
 
 ### Documentation
 
-- [COMPARISON.md](./COMPARISON.md) - Comprehensive comparison with cortex-ndarray
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - Design decisions, memory strategy, and implementation
+- [COMPARISON.md](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/COMPARISON.md) - Comprehensive comparison with cortex-ndarray
+- [ARCHITECTURE.md](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/ARCHITECTURE.md) - Design decisions, memory strategy, and implementation
   patterns
-- [BENCHMARKS.md](./BENCHMARKS.md) - Full benchmark results (Flex vs NdArray)
-- [ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) - Projects that influenced cortex-flex
+- [BENCHMARKS.md](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/BENCHMARKS.md) - Full benchmark results (Flex vs NdArray)
+- [ACKNOWLEDGMENTS.md](https://github.com/tracel-ai/burn/blob/main/crates/burn-flex/ACKNOWLEDGMENTS.md) - Projects that influenced cortex-flex
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://burn.dev/books/burn/) and the [API documentation](https://docs.rs/burn).

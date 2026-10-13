@@ -1,21 +1,27 @@
-use cortex_backend::{DTypeUsageSet, ExecutionError, TensorData};
+use cortex_backend::{DTypeUsageSet, ExecutionError, ProfileOptions, ProfileToken, TensorData};
 use cortex_ir::{GraphBindings, GraphId, OperationIr, TensorId, TensorIr};
 use cortex_std::{
     DType, DeviceSettings,
     id::{IdGenerator, StreamId},
 };
+use core::time::Duration;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 use crate::{PeerAddr, PeerId};
 
 /// Current Cortex Remote application-protocol version.
-pub const PROTOCOL_VERSION: u16 = 1;
+///
+/// Bumped whenever [`Task`] or [`TaskResponseContent`] changes shape, so a
+/// mismatched peer is refused at the handshake rather than failing to decode
+/// a batch mid-session. `2`: profiling windows.
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Routing id for a task whose result is fetched back.
 ///
 /// Only the result-producing tasks ([`Task::ReadTensor`], [`Task::SyncBackend`],
-/// [`Task::DTypeUsage`]) carry a `RequestId`; the server echoes it on its [`TaskResponse`] so
+/// [`Task::DTypeUsage`], [`Task::ProfileStart`], [`Task::ProfileEnd`]) carry a `RequestId`;
+/// the server echoes it on its [`TaskResponse`] so
 /// the client demultiplexes results back to the right pending callback. Fire-and-forget tasks
 /// have no id because no result ever comes back. Collective ops (all-reduce, sync-collective)
 /// are plain fire-and-forget [`OperationIr`]s carried by [`Task::RegisterOperation`].
@@ -48,9 +54,9 @@ impl TransferCapability {
         Self(rand::random())
     }
 
-    /// Deterministic compatibility key for the legacy 64-bit WebSocket transfer service.
+    /// The 64-bit key the WebSocket transfer service rendezvouses on, taken from the capability.
     #[cfg(feature = "websocket")]
-    pub(crate) fn legacy_id(self) -> u64 {
+    pub(crate) fn websocket_id(self) -> u64 {
         u64::from_le_bytes(
             self.0[..8]
                 .try_into()
@@ -100,7 +106,7 @@ pub enum RemoteMessage {
 
 /// Client-side session handshake.
 #[allow(missing_docs)]
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SessionInit {
     pub version: u16,
     pub session_id: SessionId,
@@ -108,6 +114,17 @@ pub struct SessionInit {
     /// Opaque application credential interpreted by the compute node's authorizer.
     #[serde(with = "serde_bytes")]
     pub authorization: Vec<u8>,
+}
+
+impl core::fmt::Debug for SessionInit {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Never the authorization, which is often a shared secret.
+        f.debug_struct("SessionInit")
+            .field("version", &self.version)
+            .field("session_id", &self.session_id)
+            .field("device_index", &self.device_index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SessionInit {
@@ -131,6 +148,26 @@ pub struct SessionInfo {
     pub device_count: u32,
     /// Authenticated identity of the compute node, when the transport provides one.
     pub peer_id: Option<PeerId>,
+}
+
+/// Why a server will not serve a session, as the client is told.
+///
+/// A category and never the authorizer's own words: the client is not yet authorized, and an
+/// authorizer writes its reasons for the server's log.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRefusal {
+    /// The server's authorizer rejected the client's credential.
+    Unauthorized,
+    /// The server does not host the device the client asked for. Only an authorized client is
+    /// told how many it hosts.
+    NoSuchDevice { device_count: u32 },
+    /// The server cannot read the client's handshake, as when the client speaks another version
+    /// of the Cortex Remote protocol. Told before authorization, so it reveals the server's
+    /// version, which a client could find by trying each version anyway.
+    ///
+    /// The only refusal a client on another version receives, so its encoding never changes, nor
+    /// do the Iroh ALPN and stream header that carry it.
+    IncompatibleProtocol { server_version: u16 },
 }
 
 #[allow(missing_docs)]
@@ -215,6 +252,20 @@ pub enum Task {
     ReadTensor(RequestId, StreamId, TensorIr),
     SyncBackend(RequestId, StreamId),
     DTypeUsage(RequestId, DType),
+    /// Open a profiling window on the server's backend where `stream_id` stands.
+    ProfileStart(RequestId, StreamId),
+    /// Close the window `token` where `stream_id` stands, flushing the server's
+    /// backend first when the options ask for it. The measurement comes back
+    /// once the server's device has answered it, like a read does.
+    ProfileEnd(RequestId, StreamId, ProfileToken, ProfileOptions),
+    /// Drop the window `token` where `stream_id` stands without measuring it.
+    ///
+    /// Fire-and-forget, and the only profiling task that is: it is sent while
+    /// a panic is already unwinding on the client, where there is nobody left
+    /// to hand a measurement to. An open window costs the server's backend
+    /// something for as long as it stays open, so the client says so rather
+    /// than leaving it.
+    ProfileAbandon(StreamId, ProfileToken),
 }
 
 #[allow(missing_docs)]
@@ -233,4 +284,38 @@ pub enum TaskResponseContent {
     ReadTensor(Result<TensorData, ExecutionError>),
     SyncBackend(Result<(), ExecutionError>),
     DTypeUsage(DTypeUsageSet),
+    /// `None` when the server's backend opens no windows.
+    ProfileStart(Result<Option<ProfileToken>, ExecutionError>),
+    /// The window's duration on the server's clock; `None` when it carried no
+    /// measurement.
+    ProfileEnd(Result<Option<Duration>, ExecutionError>),
+    /// The server's answer to an `Init` it will not serve, in place of [`Init`](Self::Init),
+    /// before it closes the session.
+    InitRefused(SessionRefusal),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_incompatible_protocol_refusal_keeps_its_wire_encoding() {
+        let refusal = TaskResponse {
+            content: TaskResponseContent::InitRefused(SessionRefusal::IncompatibleProtocol {
+                server_version: 2,
+            }),
+            id: 0,
+        };
+
+        // `[content, id]`, each variant a one-entry map keyed by its name.
+        let expected = [
+            &[0x92, 0x81, 0xab][..],
+            b"InitRefused",
+            &[0x81, 0xb4],
+            b"IncompatibleProtocol",
+            &[0x91, 0x02, 0x00],
+        ]
+        .concat();
+        assert_eq!(rmp_serde::to_vec(&refusal).unwrap(), expected);
+    }
 }

@@ -1,3 +1,6 @@
+// This sample exists to validate a cortex-tch install, so naming the deprecated crate is the point.
+#![allow(deprecated)]
+
 use cortex_backend::{TensorMetadata, ops::FloatTensorOps};
 use cortex_tch::{LibTorch, LibTorchDevice};
 

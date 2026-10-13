@@ -20,12 +20,19 @@ pub struct OperationQueue<R: FusionRuntime> {
     /// because we don't need to know the exact values, but they are sufficient to
     /// determine which operations can be fused.
     pub(crate) relative: Vec<OperationIr>,
+    /// `shapes_assigned[i]` is [`OperationConverter::num_relative_shapes`] right after
+    /// `relative[i]` was relativized, so a plan covering the first `n` operations may only
+    /// name relative shape ids below `shapes_assigned[n - 1]`.
+    ///
+    /// The converter's live count answers a different question — it covers the *whole* queue,
+    /// including operations queued after the ones a plan replays — so it cannot be used to
+    /// bound a plan (see [`execute`](Self::execute)).
+    pub(crate) shapes_assigned: Vec<usize>,
     pub(crate) converter: OperationConverter,
     pub(crate) operations: Vec<UnfusedOp<R>>,
     pub(crate) variables: HashMap<TensorId, TensorStatus>,
-    /// Last-use frees of materialized tensors received from another thread,
-    /// run at the next execution boundary instead of interrupting the queue
-    /// (see [`ReadPlan`](crate::stream::ReadPlan)).
+    /// Frees waiting on the pending ops that reference their tensor, from last-use
+    /// reads (see [`ReadPlan`](crate::stream::ReadPlan)) and cross-thread drops.
     pub(crate) deferred_frees: Vec<TensorIr>,
 }
 
@@ -41,6 +48,7 @@ impl<R: FusionRuntime> OperationQueue<R> {
         Self {
             global: Vec::new(),
             relative: Vec::new(),
+            shapes_assigned: Vec::new(),
             converter: OperationConverter::default(),
             operations: Vec::new(),
             variables: HashMap::new(),
@@ -88,6 +96,8 @@ impl<R: FusionRuntime> OperationQueue<R> {
         }
         let relative = global.to_relative(&mut self.converter);
         self.relative.push(relative);
+        self.shapes_assigned
+            .push(self.converter.num_relative_shapes());
         self.global.push(global);
         self.operations.push(operation);
     }

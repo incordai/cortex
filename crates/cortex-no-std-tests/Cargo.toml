@@ -6,7 +6,7 @@ authors = [
 edition.workspace = true
 license.workspace = true
 name = "cortex-no-std-tests"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-no-std-tests"
 version.workspace = true
 
@@ -20,7 +20,7 @@ default = []
 
 # ** Please make sure all dependencies support no_std **
 
-cortex = { workspace = true }
+cortex = { workspace = true, features = ["flex"] }
 cortex-flex = { workspace = true }
 
-cortex-store = { workspace = true, features = ["safetensors", "cortexpack"] }
+cortex-store = { workspace = true, features = ["safetensors"] }

@@ -6,20 +6,16 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
 license.workspace = true
 name = "cortex-rl"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-rl"
 documentation = "https://docs.rs/burn-rl"
 version.workspace = true
 
 [dependencies]
-cortex-core = { workspace = true, features = [
-    "dataset",
-    "std",
-] }
+cortex-core = { workspace = true, features = ["std"] }
 
 derive-new.workspace = true
 log = { workspace = true }
-rand.workspace = true
 
 [dev-dependencies]
 # Test backend

@@ -19,7 +19,6 @@ metal = ["cortex/metal"]
 cuda = ["cortex/cuda"]
 vulkan = ["cortex/vulkan"]
 rocm = ["cortex/rocm"]
-remote = ["cortex/remote-websocket"]
 
 [dependencies]
 cortex = { workspace = true, features = [

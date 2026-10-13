@@ -1,5 +1,6 @@
 use crate::AsIndex;
 use crate::Cast;
+use crate::DType;
 use crate::Device;
 use crate::Tensor;
 use crate::cast::ToElement;
@@ -8,7 +9,7 @@ use crate::check::TensorCheck;
 use crate::check::unwrap_dim_index;
 use crate::kind::FloatMath;
 use crate::ops::{BridgeKind, BridgeTensor};
-use crate::quantization::{QuantScheme, QuantizationParameters};
+use crate::quantization::{QuantScheme, QuantizationParameters, global_scale_dtype};
 use crate::tensor::stats;
 use crate::tensor::{Distribution, TensorData};
 use crate::{Bool, Float, Int, TensorPrimitive};
@@ -56,6 +57,7 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
     #[cfg_attr(doc, doc = r#"$y_i = \sqrt{x_i^2 + y_i^2}$"#)]
     #[cfg_attr(not(doc), doc = "`y_i = sqrt(x_i^2 + y_i^2)`")]
     pub fn hypot(self, other: Self) -> Self {
+        check!(TensorCheck::binary_ops_ew("Hypot", &self, &other));
         Self::new(hypot_impl(self.primitive, other.primitive))
     }
 
@@ -75,7 +77,7 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
     /// let tensor_in_radians = tensor.deg2rad();
     /// ```
     pub fn deg2rad(self) -> Self {
-        self.mul_scalar(f32::consts::PI / 180.0)
+        self.mul_scalar(core::f64::consts::PI / 180.0)
     }
 
     /// Converts each of the elements of the input tensor from angles in radians to degrees.
@@ -85,7 +87,7 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
     /// let tensor_in_degrees = tensor.rad2deg();
     /// ```
     pub fn rad2deg(self) -> Self {
-        self.mul_scalar(180.0 / f32::consts::PI)
+        self.mul_scalar(180.0 / core::f64::consts::PI)
     }
 
     /// Applies element wise round operation.
@@ -140,7 +142,16 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
 
     /// Returns a new tensor with the same shape, dtype, and device as the current tensor filled random
     /// values sampled from the given distribution.
+    ///
+    /// # Panics
+    ///
+    /// If the tensor is quantized. This method preserves the input dtype,
+    /// but quantized tensor creation is not supported.
     pub fn random_like(&self, distribution: Distribution) -> Self {
+        check!(TensorCheck::quantized_unsupported(
+            "Random Like",
+            self.dtype()
+        ));
         Self::new(random_like_impl(&self.primitive, distribution))
     }
 
@@ -314,29 +325,51 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
 
     /// Detach the current tensor from the autodiff graph.
     ///
-    /// This function does nothing when autodiff is not enabled.
-    /// This can be used in batchers or elsewhere to ensure that previous operations are not
-    /// considered in the autodiff graph.
+    /// The returned tensor keeps its autodiff association but starts a new graph lineage, so
+    /// previous operations aren't considered during backward. A leaf tensor also preserves its
+    /// current `require_grad` setting. This function does nothing when autodiff isn't enabled.
+    #[must_use]
     pub fn detach(self) -> Self {
         Self::new(detach_impl(self.primitive))
     }
 
     /// Mark the tensor to keep gradients during the backward pass.
     ///
-    /// This function does nothing when autodiff is not enabled.
+    /// This function does nothing when the tensor is quantized.
+    /// Enabling gradient retention doesn't enable autodiff; use [`autodiff`](Tensor::autodiff)
+    /// first when needed.
+    ///
+    /// # Panics
+    ///
+    /// For non-quantized tensors, panics if autodiff is disabled or the tensor is a non-leaf.
+    /// Enable autodiff with [`autodiff`](Tensor::autodiff) before requesting gradients.
+    /// Use [`detach`](Tensor::detach) first to start a new graph lineage.
+    #[must_use]
     pub fn require_grad(self) -> Self {
         self.set_require_grad(true)
     }
 
-    /// Returns true if the tensor requires gradients during the backward pass.
+    /// Returns whether this tensor's gradient is retained after backward.
+    ///
+    /// This is distinct from [`Tensor::is_autodiff`], which reports whether operations use an
+    /// autodiff context, and `Tensor::is_tracked()`, which reports graph participation when the
+    /// `autodiff` feature is enabled.
     pub fn is_require_grad(&self) -> bool {
         is_require_grad_impl(&self.primitive)
     }
 
-    /// Mark the tensor as tracked or untracked depending on the require_grad argument.
-    /// When tracked, the gradients will be available after the backward pass.
+    /// Sets whether this tensor's gradient is retained after backward.
     ///
-    /// This function does nothing when autodiff is not enabled.
+    /// This function does nothing when the tensor is quantized.
+    /// Setting this to `false` on a non-leaf tensor starts a new graph lineage, like
+    /// [`detach`](Tensor::detach), while leaving gradient retention disabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics when setting this to `true` without autodiff or on a non-leaf tensor.
+    /// Enable autodiff with [`autodiff`](Tensor::autodiff) first. Setting this to `false`
+    /// on a tensor without autodiff is harmless. Quantized tensors remain unchanged.
+    #[must_use]
     pub fn set_require_grad(self, require_grad: bool) -> Self {
         Self::new(set_require_grad_impl(self.primitive, require_grad))
     }
@@ -375,10 +408,31 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
     ///
     /// The quantized tensor.
     pub fn quantize(self, scheme: &QuantScheme, qparams: QuantizationParameters) -> Tensor<D> {
+        assert_eq!(
+            global_scale_dtype(scheme).is_some(),
+            qparams.global.is_some(),
+            "{scheme:?} does not match a per-tensor scale of {:?}",
+            qparams.global,
+        );
+        if let Some(global) = &qparams.global {
+            assert_eq!(
+                global.dims()[0],
+                1,
+                "the per-tensor scale must have exactly one element, got {:?}",
+                global.dims()
+            );
+            assert_eq!(
+                global.dtype(),
+                DType::F32,
+                "the per-tensor scale must be an f32 tensor, got {:?}",
+                global.dtype()
+            );
+        }
         Tensor::new(quantize_impl(
             self.primitive,
             scheme,
             qparams.scales.primitive,
+            qparams.global.map(|global| global.primitive),
         ))
     }
 
@@ -679,6 +733,7 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
     /// // [[1.0, 8.0, 81.0], [5.0, 81.0, 216.0]]
     /// ```
     pub fn powf(self, other: Self) -> Self {
+        check!(TensorCheck::binary_ops_ew("Powf", &self, &other));
         Tensor::new(powf_impl(self.primitive, other.primitive))
     }
 
@@ -1062,6 +1117,7 @@ where
     /// println!("{}", lhs.atan2(rhs)); // [-1.1071,  2.0344, -2.0344]
     /// ```
     pub fn atan2(self, other: Self) -> Self {
+        check!(TensorCheck::binary_ops_ew("Atan2", &self, &other));
         Tensor::new(K::atan2(self.primitive, other.primitive))
     }
 }
@@ -1096,7 +1152,7 @@ fn ceil_impl(p: BridgeTensor) -> BridgeTensor {
 }
 
 fn int_impl(p: BridgeTensor, device: Device) -> BridgeTensor {
-    let out_dtype = device.settings().int_dtype;
+    let out_dtype = device.get_or_init_settings().int_dtype;
     BridgeTensor::int(Dispatch::float_into_int(p.into_float(), out_dtype))
 }
 
@@ -1126,6 +1182,11 @@ fn set_require_grad_impl(p: BridgeTensor, require_grad: bool) -> BridgeTensor {
     let (kind, tensor) = p.into_parts();
     match kind {
         BridgeKind::Float => {
+            assert!(
+                !require_grad
+                    || tensor.autodiff != cortex_dispatch::DispatchAutodiffContext::Disabled,
+                "Tensor::require_grad requires autodiff; call Tensor::autodiff first"
+            );
             BridgeTensor::float(Dispatch::float_set_require_grad(tensor, require_grad))
         }
         BridgeKind::QFloat => {
@@ -1139,12 +1200,18 @@ fn relu_impl(p: BridgeTensor) -> BridgeTensor {
     BridgeTensor::float(Dispatch::relu(p.into_float()))
 }
 
-fn quantize_impl(p: BridgeTensor, scheme: &QuantScheme, scales: BridgeTensor) -> BridgeTensor {
+fn quantize_impl(
+    p: BridgeTensor,
+    scheme: &QuantScheme,
+    scales: BridgeTensor,
+    global: Option<BridgeTensor>,
+) -> BridgeTensor {
     BridgeTensor::qfloat(Dispatch::quantize(
         p.into_float(),
         scheme,
         QuantizationParametersPrimitive {
             scales: scales.into_float(),
+            global: global.map(|global| global.into_float()),
         },
     ))
 }

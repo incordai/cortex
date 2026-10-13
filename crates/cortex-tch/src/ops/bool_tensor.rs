@@ -12,7 +12,7 @@ use cortex_backend::{Shape, TensorData, TensorMetadata, ops::BoolTensorOps};
 
 impl BoolTensorOps<Self> for LibTorch {
     fn bool_from_data(data: TensorData, device: &LibTorchDevice) -> TchTensor {
-        match data.dtype {
+        match data.dtype() {
             cortex_backend::DType::Bool(BoolStore::Native) => {
                 TchTensor::from_data::<bool>(data, (*device).into())
             }

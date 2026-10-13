@@ -1,6 +1,19 @@
 #![warn(missing_docs)]
 
-//! The derive crate of Cortex.
+//! Derive and procedural macros for Cortex.
+//!
+//! Use these through `cortex`, which re-exports them; this crate is not meant to be a direct
+//! dependency.
+//!
+//! - `#[derive(Module)]` implements `Module` for a struct or enum of modules, parameters and
+//!   constants. `#[module(skip)]` excludes a field.
+//! - `#[derive(Config)]` makes a struct a serializable configuration with a generated `new`
+//!   constructor and `with_*` setters for optional fields and fields marked `#[config(default = ...)]`.
+//! - `#[derive(RecordState)]` decomposes an optimizer or scheduler state into named tensors and
+//!   scalars for the cortexpack format.
+//!
+//! The function-like macros below implement `cortex::tensor::assert_shape!`,
+//! `debug_assert_shape!` and `einsum!`, and are not part of the public API.
 
 #[macro_use]
 extern crate derive_new;
@@ -8,8 +21,10 @@ extern crate derive_new;
 use proc_macro::TokenStream;
 
 pub(crate) mod config;
+pub(crate) mod einsum;
 pub(crate) mod module;
 pub(crate) mod record_state;
+pub(crate) mod shape;
 pub(crate) mod shared;
 
 /// Derive macro for the `Module` trait.
@@ -85,4 +100,34 @@ pub fn config_derive(input: TokenStream) -> TokenStream {
 pub fn record_state_derive(input: TokenStream) -> TokenStream {
     let input = syn::parse(input).unwrap();
     record_state::derive_impl(&input)
+}
+
+/// Implementation of `cortex_tensor::assert_shape!`. Not part of the public API.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __assert_shape(input: TokenStream) -> TokenStream {
+    shape_macro(input, shape::Mode::Assert)
+}
+
+/// Implementation of `cortex_tensor::debug_assert_shape!`. Not part of the public API.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __debug_assert_shape(input: TokenStream) -> TokenStream {
+    shape_macro(input, shape::Mode::DebugAssert)
+}
+
+/// The input is `$crate, tensor, [pattern]`, see the wrappers in cortex-tensor.
+fn shape_macro(input: TokenStream, mode: shape::Mode) -> TokenStream {
+    let input = syn::parse_macro_input!(input as shape::ShapeInput);
+    shape::expand(input, mode).into()
+}
+
+/// Implementation of `cortex_tensor::einsum!`. Not part of the public API.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __einsum(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as einsum::EinsumInput);
+    einsum::expand(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }

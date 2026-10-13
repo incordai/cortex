@@ -1,9 +1,30 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![recursion_limit = "135"]
 
-//! The core crate of Cortex.
+//! The core of Cortex: modules, configuration, records and data loading, on top of the tensor API.
+//!
+//! Applications should depend on [`cortex`](https://docs.rs/burn), which re-exports everything here
+//! together with neural network layers, optimizers and training. This crate is the dependency for
+//! libraries that only need the core abstractions.
+//!
+//! - [`tensor`]: Cortex's tensor API, re-exported from `cortex-tensor`.
+//! - [`module`]: the [`Module`](module::Module) trait, implemented with `#[derive(Module)]`, and
+//!   [`Param`](module::Param) for trainable tensors.
+//! - [`config`]: serializable configuration structs with `#[derive(Config)]`.
+//! - [`store`]: module records and the cortexpack format.
+//! - [`data`]: datasets, batchers and data loaders (`std` only).
+//! - [`prelude`]: the types most programs import.
+//!
+//! # Feature flags
+//!
+//! Backend features (`wgpu`, `cuda`, `flex`, ...) and the `autodiff`, `fusion`, `remote` and
+//! `capture` features match those of `cortex`. Others:
+//!
+//! - `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
+//! - `dataset`: the dataset library in [`data`]; `vision`, `audio` and `sqlite` add sources.
+//! - `network`: file downloads with a progress bar.
+//! - `tracing`: instrument operations with the `tracing` crate.
 
 // `derive_new` provides the `#[derive(new)]` macro used across the crate; the lint mistakenly
 // reports the `#[macro_use]` as unused.
@@ -86,7 +107,7 @@ pub mod prelude {
         module::Module,
         tensor::{
             Bool, Device, DeviceIndex, DeviceKind, ElementConversion, Float, Int, Shape, SliceArg,
-            Tensor, TensorData, cast::ToElement, s,
+            Tensor, TensorData, assert_shape, cast::ToElement, debug_assert_shape, s,
         },
     };
 }

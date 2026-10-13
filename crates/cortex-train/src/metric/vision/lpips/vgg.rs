@@ -6,6 +6,7 @@ use cortex::module::Module;
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
 use cortex::tensor::activation::relu;
+use cortex::tensor::ops::MaxPoolOptions;
 use cortex_nn::PaddingConfig2d;
 use cortex_nn::conv::{Conv2d, Conv2dConfig};
 
@@ -112,5 +113,5 @@ impl VggFeatureExtractor {
 
 /// 2x2 max pooling with stride 2.
 fn max_pool2d(x: Tensor<4>) -> Tensor<4> {
-    cortex_core::tensor::module::max_pool2d(x, [2, 2], [2, 2], [0, 0], [1, 1], false)
+    cortex_core::tensor::module::max_pool2d(x, MaxPoolOptions::new([2, 2]))
 }

@@ -1,15 +1,31 @@
 //! Vision ops for cortex, with GPU acceleration where possible.
 //!
+//! No execution backend is enabled by default. Select `flex`, `wgpu`, or another
+//! backend feature on this crate. When configuring through `cortex`, enable both
+//! `vision` and the backend feature, for example `features = ["vision", "flex"]`.
+//! Enabling only `cortex/flex` does not enable this crate's backend implementations.
+//!
 //! # Operations
 //! Operation names are based on `opencv` wherever applicable.
 //!
 //! Currently implemented are:
 //! - `connected_components`
 //! - `connected_components_with_stats`
+//! - morphology (`dilate` / `erode`, with `create_structuring_element`)
 //! - `nms` (Non-Maximum Suppression)
+//! - `filter2d` (depthwise 2D correlation)
+//! - color conversion (`rgb2gray` / `gray2rgb` / `rgb2hsv` / `hsv2rgb`)
+//! - 2D affine transforms (`Transform2D`: rotation, scale, shear, translation)
+//!
+//! With the `loss` feature, `loss` adds a VGG19-based Gram matrix (style) loss.
 //!
 
 #![warn(missing_docs)]
+// Implementing the vision ops for the deprecated `LibTorch` backend is this crate's job, and the
+// `backend_extension` macro expands it into every generated impl, so the warnings cannot be
+// attributed to individual sites. Lint levels do not propagate to dependents, so downstream code
+// naming `LibTorch` still gets the warning, and `tch` is not a default feature.
+#![cfg_attr(feature = "tch", allow(deprecated))]
 
 extern crate alloc;
 
@@ -33,6 +49,12 @@ cfg_backend! {
     pub use tensor::*;
     pub use backends::{KernelShape, create_structuring_element};
 }
+
+mod color;
+pub use color::*;
+
+mod filter;
+pub use filter::*;
 
 mod transform;
 pub use transform::*;

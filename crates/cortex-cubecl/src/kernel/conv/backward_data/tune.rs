@@ -2,27 +2,28 @@ use cortex_backend::cubecl::dtype_to_storage_type;
 use cortex_backend::ops::ConvOptions;
 use cortex_std::Shape;
 use cubecl::{
-    ir::StorageType,
+    ir::ElemType,
     tune::{LocalTuner, Tunable, TunableSet, anchor, local_tuner},
 };
 use cubek::convolution::AcceleratedTileKind;
 
 use crate::{
-    CubeAutotuneKey, CubeRuntime, CubeTuneId,
+    CubeAutotuneKey, CubeTuneId,
     kernel::conv::{
         ConvAutotuneKey,
         backward_data::{fallback::conv_data_backward_fallback, implicit_gemm::*},
+        im2col::{dgrad_im2col, dgrad_im2col_1x1},
     },
     tensor::CubeTensor,
 };
 
-/// Executes autotune on conv2d operations
-pub fn dgrad_autotune<R: CubeRuntime, const N: usize>(
-    out_grad: CubeTensor<R>,
-    weights: CubeTensor<R>,
+/// Executes autotune on the data gradient of conv operations.
+pub fn dgrad_autotune<const N: usize>(
+    out_grad: CubeTensor,
+    weights: CubeTensor,
     input_shape: Shape,
     options: ConvOptions<N>,
-) -> CubeTensor<R> {
+) -> CubeTensor {
     let client = out_grad.client.clone();
 
     static TUNER: LocalTuner<CubeAutotuneKey, CubeTuneId> = local_tuner!();
@@ -30,63 +31,107 @@ pub fn dgrad_autotune<R: CubeRuntime, const N: usize>(
     // Note: TMA isn't currently implemented properly, and will always error.
     // It's kept here so it gets automatically enabled as soon as cubek updates.
     // No CMMA for TMA because swizzling will be mandatory for good performance on dgrad.
-    let tunables = TUNER.init(|| {
-        TunableSet::new(create_key::<R, N>, create_wgrad_input::<R, N>)
+    let tune_id = CubeTuneId::new(&out_grad.client, &out_grad.device);
+    let tunables = TUNER.init(&tune_id, || {
+        TunableSet::new(create_key::<N>, create_dgrad_input::<N>)
             .with(Tunable::new(
-                "wgrad_fallback",
+                "dgrad_fallback",
                 |(out_grad, weights, input_shape, options)| {
-                    conv_data_backward_fallback::<R, N>(out_grad, weights, input_shape, options)
+                    conv_data_backward_fallback::<N>(out_grad, weights, input_shape, options)
+                },
+            ))
+            // Pointwise unit stride only; `dgrad_im2col` declines this shape so
+            // the unmaterialised matmul is the dense candidate.
+            .with(Tunable::new(
+                "dgrad_im2col_1x1",
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_im2col_1x1::<N>(out_grad, weights, input_shape, options)
+                },
+            ))
+            // Every other `groups == 1` dense shape, including stride other
+            // than 1, which the implicit-GEMM candidates below decline in
+            // setup. Materialises `[M, taps * C_in]` and scatter-adds; autotune
+            // drops it when that loses.
+            .with(Tunable::new(
+                "dgrad_im2col",
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_im2col::<N>(out_grad, weights, input_shape, options)
                 },
             ))
             .with(Tunable::new(
                 "simple_sync_cmma",
-                |(input, grad, shape, options)| {
-                    dgrad_gemm_simple_sync(input, grad, shape, options, AcceleratedTileKind::Cmma)
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_gemm_simple_sync(
+                        out_grad,
+                        weights,
+                        input_shape,
+                        options,
+                        AcceleratedTileKind::Cmma,
+                    )
                 },
             ))
             .with(Tunable::new(
                 "simple_sync_mma",
-                |(input, grad, shape, options)| {
-                    dgrad_gemm_simple_sync(input, grad, shape, options, AcceleratedTileKind::Mma)
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_gemm_simple_sync(
+                        out_grad,
+                        weights,
+                        input_shape,
+                        options,
+                        AcceleratedTileKind::Mma,
+                    )
                 },
             ))
             .with(Tunable::new(
                 "simple_async_cmma",
-                |(input, grad, shape, options)| {
-                    dgrad_gemm_simple_async(input, grad, shape, options, AcceleratedTileKind::Cmma)
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_gemm_simple_async(
+                        out_grad,
+                        weights,
+                        input_shape,
+                        options,
+                        AcceleratedTileKind::Cmma,
+                    )
                 },
             ))
             .with(Tunable::new(
                 "simple_async_mma",
-                |(input, grad, shape, options)| {
-                    dgrad_gemm_simple_async(input, grad, shape, options, AcceleratedTileKind::Mma)
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_gemm_simple_async(
+                        out_grad,
+                        weights,
+                        input_shape,
+                        options,
+                        AcceleratedTileKind::Mma,
+                    )
                 },
             ))
             .with(Tunable::new(
                 "simple_tma_mma",
-                |(input, grad, shape, options)| {
-                    dgrad_gemm_simple_tma(input, grad, shape, options, AcceleratedTileKind::Mma)
+                |(out_grad, weights, input_shape, options)| {
+                    dgrad_gemm_simple_tma(
+                        out_grad,
+                        weights,
+                        input_shape,
+                        options,
+                        AcceleratedTileKind::Mma,
+                    )
                 },
             ))
     });
 
     TUNER.execute(
-        &CubeTuneId::new(&out_grad.client, &out_grad.device),
+        &tune_id,
         &client,
         tunables,
         (out_grad, weights, input_shape, options),
     )
 }
 
-pub fn create_wgrad_input<R: CubeRuntime, const N: usize>(
+pub fn create_dgrad_input<const N: usize>(
     _key: &CubeAutotuneKey,
-    (out_grad, weights, input_shape, options): &(
-        CubeTensor<R>,
-        CubeTensor<R>,
-        Shape,
-        ConvOptions<N>,
-    ),
-) -> (CubeTensor<R>, CubeTensor<R>, Shape, ConvOptions<N>) {
+    (out_grad, weights, input_shape, options): &(CubeTensor, CubeTensor, Shape, ConvOptions<N>),
+) -> (CubeTensor, CubeTensor, Shape, ConvOptions<N>) {
     (
         out_grad.clone(),
         weights.clone(),
@@ -95,13 +140,8 @@ pub fn create_wgrad_input<R: CubeRuntime, const N: usize>(
     )
 }
 
-fn create_key<R: CubeRuntime, const N: usize>(
-    (out_grad, weights, input_shape, options): &(
-        CubeTensor<R>,
-        CubeTensor<R>,
-        Shape,
-        ConvOptions<N>,
-    ),
+fn create_key<const N: usize>(
+    (out_grad, weights, input_shape, options): &(CubeTensor, CubeTensor, Shape, ConvOptions<N>),
 ) -> CubeAutotuneKey {
     let dtype = out_grad.dtype;
     let rank = out_grad.meta.num_dims();
@@ -164,7 +204,7 @@ fn create_key<R: CubeRuntime, const N: usize>(
 const MAX_STRIDE_FACTOR: u32 = 10;
 
 /// Defines the non-contiguous stride alignment in terms of powers of two
-fn stride_align(strides: &[usize], elem: StorageType) -> u8 {
+fn stride_align(strides: &[usize], elem: ElemType) -> u8 {
     let max = MAX_STRIDE_FACTOR;
     let dim_c = strides.len() - 1;
     let factor = strides[..dim_c]

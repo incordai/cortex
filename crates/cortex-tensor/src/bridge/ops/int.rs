@@ -4,7 +4,7 @@ use cortex_backend::{
     ops::{IntTensorOps, TransactionPrimitive},
 };
 use cortex_dispatch::Dispatch;
-use cortex_std::{DType, ExecutionError, IndexingUpdateOp, Shape, Slice};
+use cortex_std::{DType, ExecutionError, IndexingUpdateOp, PadMode, Shape, Slice};
 
 use crate::{
     Device, Int,
@@ -236,6 +236,10 @@ impl BasicOps for Int {
 }
 
 impl Numeric for Int {
+    fn pad(tensor: BridgeTensor, padding: &[(usize, usize)], mode: PadMode) -> BridgeTensor {
+        BridgeTensor::int(Dispatch::int_pad(tensor.into(), padding, mode))
+    }
+
     fn add(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
         BridgeTensor::int(Dispatch::int_add(lhs.into(), rhs.into()))
     }
@@ -278,6 +282,11 @@ impl Numeric for Int {
         BridgeTensor::int(Dispatch::int_sum_dim(tensor.into(), dim))
     }
 
+    fn sum_dims(tensor: BridgeTensor, dims: &[usize]) -> BridgeTensor {
+        dims.iter()
+            .fold(tensor, |tensor, &dim| Self::sum_dim(tensor, dim))
+    }
+
     fn prod(tensor: BridgeTensor) -> BridgeTensor {
         BridgeTensor::int(Dispatch::int_prod(tensor.into()))
     }
@@ -287,9 +296,19 @@ impl Numeric for Int {
     }
 
     fn mean(tensor: BridgeTensor) -> BridgeTensor {
+        // A float mean of nothing is `NaN`; an integer has no such value. Checked here rather than
+        // in `int_mean` so a backend that overrides it cannot report an arbitrary number instead.
+        assert!(
+            tensor.shape().num_elements() > 0,
+            "Cannot compute mean of an empty int tensor"
+        );
         BridgeTensor::int(Dispatch::int_mean(tensor.into()))
     }
     fn mean_dim(tensor: BridgeTensor, dim: usize) -> BridgeTensor {
+        assert!(
+            tensor.shape()[dim] > 0,
+            "Cannot compute mean of an empty axis for an int tensor"
+        );
         BridgeTensor::int(Dispatch::int_mean_dim(tensor.into(), dim))
     }
     fn cumsum(tensor: BridgeTensor, dim: usize) -> BridgeTensor {

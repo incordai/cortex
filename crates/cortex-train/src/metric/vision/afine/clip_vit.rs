@@ -16,9 +16,10 @@
 use cortex_core as cortex;
 
 use cortex::config::Config;
-use cortex::module::{Initializer, Module, Param};
+use cortex::module::{Module, Param};
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
+use cortex_nn::Initializer;
 use cortex_nn::conv::{Conv2d, Conv2dConfig};
 use cortex_nn::{LayerNorm, LayerNormConfig, Linear, LinearConfig};
 

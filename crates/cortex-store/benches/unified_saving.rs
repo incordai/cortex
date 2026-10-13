@@ -1,9 +1,10 @@
-#![recursion_limit = "256"]
+// The LibTorch bench group exists to compare against the deprecated backend.
+#![cfg_attr(feature = "tch", allow(deprecated))]
 
 //! Unified benchmark comparing all saving methods:
-//! - CortexpackStore (new native format)
-//! - NamedMpkFileRecorder (old native format)
-//! - SafetensorsStore (new)
+//! - CortexpackStore (streaming cortexpack writer)
+//! - ModuleRecord (the record API, writing the same cortexpack format)
+//! - SafetensorsStore
 //!
 //! Before running this benchmark, ensure the directory exists:
 //! ```bash
@@ -68,9 +69,9 @@ fn main() {
             println!("🚀 Running unified saving benchmarks...");
             println!();
             println!("Comparing 3 saving methods:");
-            println!("  1. CortexpackStore (new native format)");
-            println!("  2. NamedMpkFileRecorder (old native format)");
-            println!("  3. SafetensorsStore (new)");
+            println!("  1. CortexpackStore (streaming cortexpack writer)");
+            println!("  2. ModuleRecord (record API, same cortexpack format)");
+            println!("  3. SafetensorsStore");
             println!();
             println!("Available backends:");
             println!("  - Flex (CPU)");
@@ -116,14 +117,14 @@ macro_rules! bench_backend {
             }
 
             #[divan::bench]
-            fn namedmpk_recorder(bencher: Bencher) {
+            fn module_record(bencher: Bencher) {
                 bencher.bench(|| {
                     let device = $device;
                     let model = LargeModel::new(&device);
-                    let output_path = get_output_dir().join("test_namedmpk.mpk");
+                    let output_path = get_output_dir().join("test_module_record.bpk");
                     model
                         .save_file(output_path.clone())
-                        .expect("Failed to save with NamedMpkFileRecorder");
+                        .expect("Failed to save with ModuleRecord");
                     // Clean up
                     let _ = fs::remove_file(output_path);
                 });
@@ -148,7 +149,7 @@ macro_rules! bench_backend {
 }
 
 // Generate benchmarks for each backend
-bench_backend!(Device::flex(), ndarray_backend, "NdArray Backend (CPU)");
+bench_backend!(Device::flex(), flex_backend, "Flex Backend (CPU)");
 
 #[cfg(feature = "wgpu")]
 bench_backend!(

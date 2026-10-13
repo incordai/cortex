@@ -18,43 +18,54 @@ repository = "https://github.com/tracel-ai/burn"
 rust-version = "1.95"
 version.workspace = true
 
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 
 [features]
 default = [
-    "rl",
     "std",
     "optim",
     "cortex-core/default",
     "cortex-train?/default",
     "cortex-nn/default",
+    "cortex-linalg?/default",
     "cortex-optim?/default",
-    "cortex-autodiff?/default",
+    "cortex-signal?/default",
     "cortex-vision?/default",
 ]
 doc = [
     "default",
+    "flex",
     "train",
     "cortex-core/doc",
     "cortex-train/doc",
     "cortex-store?/std",
     "cortex-nn/doc",
+    "linalg",
     "cortex-optim?/doc",
-    "cortex-autodiff?/std",
+    "rl",
+    "signal",
+    "vision",
 ]
 std = [
     "cortex-core/std",
     "cortex-store?/std",
     "cortex-nn/std",
+    "cortex-linalg?/std",
+    "cortex-signal?/std",
     "cortex-optim?/std",
-    "cortex-autodiff?/std",
 ]
 tracing = [
     "cubecl?/tracing",
     "cortex-core/tracing",
+    "cortex-signal?/tracing",
     "cortex-vision?/tracing",
     "cortex-nn/tracing",
+    "cortex-linalg?/tracing",
     "cortex-optim?/tracing",
 ]
 
@@ -89,78 +100,68 @@ cubecl = ["dep:cubecl"]
 
 audio = ["cortex-core/audio"]
 vision = ["cortex-core/vision", "cortex-vision"]
+linalg = ["dep:cortex-linalg"]
+signal = ["dep:cortex-signal"]
 rl = ["dep:cortex-rl", "cortex-train?/rl"]
 
 # Optimizer
 optim = ["cortex-optim", "autodiff"]
 
 # Backend
-ir = ["cortex-ir"]
-autodiff = ["cortex-core/autodiff", "cortex-autodiff"]
-fusion = ["ir", "cortex-core/fusion", "cortex-vision?/fusion"]
+ir = ["cortex-core/ir"]
+autodiff = ["cortex-core/autodiff", "cortex-signal?/autodiff"]
+fusion = ["ir", "cortex-core/fusion", "cortex-linalg?/fusion", "cortex-signal?/fusion", "cortex-vision?/fusion"]
 
 ## Backend features
-accelerate = ["cortex-candle?/accelerate", "cortex-ndarray?/blas-accelerate"]
-autotune = ["cortex-core/autotune"]
+accelerate = ["cortex-core/accelerate"]
+autotune = ["cortex-core/autotune", "cortex-signal?/autotune"]
 autotune-checks = ["cortex-core/autotune-checks"]
-blas-netlib = ["cortex-ndarray?/blas-netlib"]
-openblas = ["cortex-ndarray?/blas-openblas"]
-openblas-system = ["cortex-ndarray?/blas-openblas-system"]
-simd = ["cortex-ndarray?/simd", "cortex-flex?/simd"]
+blas-netlib = ["cortex-core/blas-netlib"]
+openblas = ["cortex-core/openblas"]
+openblas-system = ["cortex-core/openblas-system"]
+simd = ["cortex-core/simd"]
+rayon = ["cortex-core/rayon"]
 
-# cortex-flex opt-in CPU codegen paths.
-x86-v4 = ["cortex-flex?/x86-v4"]
-apple-amx = ["cortex-flex?/apple-amx"]
+# Opt-in CPU codegen paths.
+x86-v4 = ["cortex-core/x86-v4"]
+apple-amx = ["cortex-core/apple-amx"]
 
-template = ["cortex-wgpu?/template"]
-router = ["cortex-router", "ir"]
-remote = ["cortex-core/remote"]
-remote-server = ["cortex-core/remote-server"]
-remote-websocket = ["cortex-core/remote-websocket"]
+template = ["cortex-core/template"]
+remote = ["cortex-core/remote", "cortex-linalg?/remote", "cortex-signal?/remote"]
+remote-server = ["remote", "cortex-core/remote-server", "cortex-signal?/router"]
+remote-websocket = ["remote", "cortex-core/remote-websocket", "cortex-signal?/remote-websocket"]
 
-candle = ["cortex-candle"]
-candle-cuda = ["candle", "cortex-candle/cuda"]
-candle-metal = ["cortex-candle?/metal"]
-cuda = ["cortex-cuda", "cortex-core/cuda", "cortex-vision?/cuda"]
-rocm = ["cortex-rocm", "cortex-core/rocm", "cortex-vision?/rocm"]
-flex = ["cortex-flex", "cortex-core/flex", "cortex-vision?/flex"]
-ndarray = ["cortex-ndarray", "cortex-core/ndarray"]
-tch = ["cortex-tch", "cortex-core/tch", "cortex-vision?/tch"]
-vulkan = ["wgpu", "cortex-core/vulkan", "cortex-vision?/vulkan"]
-webgpu = ["wgpu", "cortex-core/webgpu", "cortex-vision?/webgpu"]
-metal = ["wgpu", "cortex-core/metal", "cortex-vision?/metal"]
-wgpu = ["cortex-wgpu", "cortex-core/wgpu", "cortex-vision?/wgpu"]
-cpu = ["cortex-cpu", "cortex-core/cpu", "cortex-vision?/cpu"]
+cuda = ["cortex-core/cuda", "cortex-linalg?/cuda", "cortex-signal?/cuda", "cortex-vision?/cuda"]
+rocm = ["cortex-core/rocm", "cortex-linalg?/rocm", "cortex-signal?/rocm", "cortex-vision?/rocm"]
+flex = ["cortex-core/flex", "cortex-linalg?/flex", "cortex-signal?/flex", "cortex-vision?/flex"]
+ndarray = ["cortex-core/ndarray", "cortex-linalg?/ndarray"]
+tch = ["cortex-core/tch", "cortex-linalg?/tch", "cortex-signal?/tch", "cortex-vision?/tch"]
+vulkan = ["wgpu", "cortex-core/vulkan", "cortex-linalg?/vulkan", "cortex-signal?/vulkan", "cortex-vision?/vulkan"]
+webgpu = ["wgpu", "cortex-core/webgpu", "cortex-linalg?/webgpu", "cortex-signal?/webgpu", "cortex-vision?/webgpu"]
+metal = ["wgpu", "cortex-core/metal", "cortex-linalg?/metal", "cortex-signal?/metal", "cortex-vision?/metal"]
+wgpu = ["cortex-core/wgpu", "cortex-linalg?/wgpu", "cortex-signal?/wgpu", "cortex-vision?/wgpu"]
+cpu = ["cortex-core/cpu", "cortex-linalg?/cpu", "cortex-signal?/cpu", "cortex-vision?/cpu"]
 
 # Backend extensions
 extension = ["cortex-core/extension"]
+capture = ["cortex-core/capture", "cortex-linalg?/capture", "cortex-signal?/capture"]
 
 [dependencies]
 
 # ** Please make sure all dependencies support no_std when std is disabled **
 
 cortex-core = { workspace = true }
+cortex-linalg = { workspace = true, optional = true }
 cortex-train = { workspace = true, optional = true }
 cortex-store = { workspace = true, optional = true }
 cortex-nn = { workspace = true }
 cortex-optim = { workspace = true, optional = true }
 cortex-rl = { workspace = true, optional = true }
+cortex-signal = { workspace = true, optional = true }
 cortex-vision = { workspace = true, optional = true }
 cortex-std = { workspace = true }
 
-# Backends
-# TODO: clean up from root; backends should be exposed from the extension
-cortex-candle = { workspace = true, optional = true, features = ["default"] }
-cortex-cuda = { workspace = true, optional = true }
-cortex-cpu = { workspace = true, optional = true }
-cortex-rocm = { workspace = true, optional = true }
-cortex-flex = { workspace = true, optional = true }
-cortex-ndarray = { workspace = true, optional = true }
-cortex-router = { workspace = true, optional = true }
-cortex-tch = { workspace = true, optional = true }
-cortex-wgpu = { workspace = true, optional = true }
-cortex-ir = { workspace = true, optional = true }
-cortex-autodiff = { workspace = true, optional = true }
-cortex-dispatch = { workspace = true, optional = true }
+# Backend implementations and their public facade re-exports are owned by cortex-core;
+# dispatch itself continues through cortex-tensor -> cortex-dispatch.
 
 cubecl = { workspace = true, optional = true }

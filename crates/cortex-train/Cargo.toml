@@ -6,7 +6,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
 license.workspace = true
 name = "cortex-train"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-train"
 documentation = "https://docs.rs/burn-train"
 version.workspace = true
@@ -15,9 +15,9 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["sys-metrics", "tui", "rl"]
-doc = ["default"]
-vision = ["cortex-nn", "cortex-store/pytorch", "cortex-std/network", "dirs"]
+default = ["sys-metrics", "tui"]
+doc = ["default", "rl"]
+vision = ["cortex-nn", "cortex-linalg", "cortex-store/pytorch", "cortex-std/network", "dirs"]
 tracing = ["cortex-core/tracing", "cortex-optim/tracing"]
 
 
@@ -34,6 +34,7 @@ cortex-core = { workspace = true, features = [
 cortex-optim = { workspace = true, features = ["std"] }
 cortex-rl = { workspace = true, optional = true }
 cortex-nn = { workspace = true, optional = true, features = ["std"] }
+cortex-linalg = { workspace = true, optional = true, features = ["std"] }
 cortex-store = { workspace = true, optional = true, features = ["std"] }
 cortex-std = { workspace = true, default-features = false, features = ["std"] }
 dirs = { workspace = true, optional = true }

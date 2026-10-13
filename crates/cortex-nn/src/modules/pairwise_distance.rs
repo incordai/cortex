@@ -3,7 +3,7 @@ use cortex_core as cortex;
 use cortex::config::Config;
 use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
 use cortex::tensor::Tensor;
-use cortex::tensor::linalg::lp_norm;
+use cortex_linalg::lp_norm;
 
 /// Configuration to create a [PairwiseDistance](PairwiseDistance) layer using the
 /// [init function](PairwiseDistanceConfig::init).

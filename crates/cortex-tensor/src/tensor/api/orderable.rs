@@ -202,6 +202,10 @@ where
     ///
     /// A new tensor with the `k` largest elements along the given dimension.
     ///
+    /// With autodiff, gradients are propagated to the input positions selected during the forward
+    /// pass. All other input positions receive zero gradient. When values are tied, the gradient
+    /// follows the indices selected by the backend.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -230,6 +234,9 @@ where
     /// * `k` - The number of elements to return.
     /// * `dim` - The dimension to sort along.
     ///   Negative dimensions are supported and count from the end.
+    ///
+    /// With autodiff, gradients from the returned values are propagated to the input positions
+    /// identified by the returned indices. All other input positions receive zero gradient.
     ///
     /// # Example
     ///
@@ -277,6 +284,7 @@ where
     /// }
     /// ```
     pub fn one_hot<const D2: usize>(self, num_classes: usize) -> Tensor<D2, K> {
+        check!(TensorCheck::quantized_unsupported("One Hot", self.dtype()));
         check!(TensorCheck::one_hot_tensor(self.clone(), num_classes));
         self.one_hot_fill(num_classes, 1.0, 0.0, -1)
     }
@@ -294,6 +302,10 @@ where
     /// # Returns
     ///
     /// A tensor with one additional dimension for the one-hot encoding, where active positions are filled with `on_value` and others with `off_value`.
+    ///
+    /// # Panics
+    ///
+    /// If the tensor is quantized, since lossy quantized values can't be trusted as class indices.
     ///
     /// # Example
     /// ```rust
@@ -316,11 +328,13 @@ where
         axis: impl AsIndex,
     ) -> Tensor<D2, K> {
         check!(TensorCheck::one_hot_tensor_rank::<D, D2>());
+        check!(TensorCheck::quantized_unsupported("One Hot", self.dtype()));
         let axis = unwrap_dim_index(axis.try_dim_index(D + 1), "One Hot");
 
         // Initialize shape from the current tensor dimensions and prepare for modification
         let mut shape = self.shape();
         let device = self.device();
+        let dtype = self.dtype();
 
         // Convert the input tensor to integer indices
         let indices: Tensor<D, Int> = Tensor::from_data(self.to_data().convert::<i64>(), &device);
@@ -336,18 +350,16 @@ where
         let indices_unsqueezed: Tensor<D2, Int> = adjusted_indices.unsqueeze_dim(axis);
 
         // Initialize the output tensor with the off_value
-        let output = Tensor::full(shape.clone(), off_value, &device);
+        let output = Tensor::full(shape.clone(), off_value, (&device, dtype));
 
-        // Prepare scatter tensor for on_value and off_value adjustments
-        let scatter_on_values = Tensor::full(indices_unsqueezed.shape(), on_value, &device)
-            - Tensor::full(indices_unsqueezed.shape(), off_value, &self.device());
+        let on_values = Tensor::full(indices_unsqueezed.shape(), on_value, (&device, dtype));
 
         // Scatter on_value at the appropriate indices to create the one-hot representation
         output.scatter(
             axis,
             indices_unsqueezed,
-            scatter_on_values,
-            IndexingUpdateOp::Add,
+            on_values,
+            IndexingUpdateOp::Assign,
         )
     }
 
@@ -766,7 +778,17 @@ where
     /// println!("{tensor}");
     /// // [[9.0]]
     /// ```
+    ///
+    /// # Empty dimensions
+    ///
+    /// Unlike ordinary reductions such as [`Tensor::max_dims`], this is a composite
+    /// operation equivalent to `self.abs().max_dims(dims)`. If `dims` is empty, no
+    /// reduction is performed, but the elementwise absolute-value operation is
+    /// still applied.
     pub fn max_abs_dims<I: AsIndex>(self, dims: &[I]) -> Self {
+        if dims.is_empty() {
+            return self.abs();
+        }
         dims.iter()
             .fold(self, |tensor, &dim| tensor.max_abs_dim(dim))
     }
@@ -939,6 +961,9 @@ where
     }
 
     /// Clamp element wise between the given min and max values.
+    ///
+    /// For floating-point tensors, if the result is zero and the input and bounds
+    /// include zeros of opposite signs, either sign of zero may be returned.
     ///
     /// # Arguments
     ///

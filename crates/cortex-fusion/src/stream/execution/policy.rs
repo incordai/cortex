@@ -138,9 +138,9 @@ impl<O: core::fmt::Debug> Policy<O> {
         // previous guards therefore admitted a queue of exactly 3 and left
         // `execute_operations` to index past its end.
         //
-        // `required_operations` answers the only question that matters — how
-        // far do this plan's orderings actually reach — so there is no longer a
-        // cheaper number available to compare by mistake.
+        // `plan_fits` answers the only question that matters — how far do this
+        // plan's orderings actually reach — so there is no longer a cheaper
+        // number available to compare by mistake.
         if let Some((id, _)) = self.found
             && Self::plan_fits(store, id, operations)
         {
@@ -182,21 +182,27 @@ impl<O: core::fmt::Debug> Policy<O> {
     /// Whether `operations` is long enough for every index this plan's
     /// orderings will reach.
     ///
-    /// `>=` rather than `==` because a longer queue is legitimate and
-    /// supported: `OrderedExecution::finish` drains only `num_executed` and
-    /// returns the remainder. What is never valid is executing a plan against
-    /// FEWER operations than its orderings index.
+    /// A longer queue is legitimate and supported: `OrderedExecution::finish`
+    /// drains only `num_executed` and returns the remainder. What is never
+    /// valid is executing a plan against FEWER operations than its orderings
+    /// index.
+    ///
+    /// Sibling: `OperationQueue::execute_block_optimization`
+    /// (`stream/queue/execution.rs`) applies the same `max_index` bound as the
+    /// last line of defence and runs a misfit unfused. This gate is the earlier
+    /// refusal that sends the segment back to the explorer, so it can still be
+    /// fused under a plan that fits.
     fn plan_fits(
         store: &ExecutionPlanStore<O>,
         id: ExecutionPlanId,
         operations: &[OperationIr],
     ) -> bool {
-        operations.len()
-            >= store
-                .get_unchecked(id)
-                .optimization
-                .strategy
-                .required_operations()
+        store
+            .get_unchecked(id)
+            .optimization
+            .strategy
+            .max_index()
+            .is_none_or(|max| max < operations.len())
     }
 
     /// Update the policy state.
@@ -382,6 +388,21 @@ mod tests {
     use std::ops::Range;
     use std::sync::Arc;
 
+    #[derive(Debug)]
+    struct ShapeIds(Option<usize>);
+
+    impl crate::NumOperations for ShapeIds {
+        fn len(&self) -> usize {
+            1
+        }
+        fn name(&self) -> &'static str {
+            "shape-ids"
+        }
+        fn max_relative_shape_id(&self) -> Option<usize> {
+            self.0
+        }
+    }
+
     #[test]
     fn given_no_optimization_should_explore() {
         let store = ExecutionPlanStore::default();
@@ -514,6 +535,58 @@ mod tests {
             Action::Execute(id),
             "four operations cover an ordering reaching index 3 — this must still run"
         );
+    }
+
+    #[test]
+    fn should_not_execute_a_plan_longer_than_the_segment() {
+        let mut store = ExecutionPlanStore::<()>::default();
+        let mut policy = Policy::<()>::new();
+        let stream = TestStream::new(3);
+
+        let id = store.add(ExecutionPlan {
+            operations: stream.operations[0..3].to_vec(),
+            triggers: vec![ExecutionTrigger::Always],
+            optimization: BlockOptimization::new(ExecutionStrategy::operations(3), Vec::new()),
+        });
+
+        for operation in stream.operations[0..3].iter() {
+            policy.update(&store, operation);
+        }
+
+        assert_eq!(
+            policy.action(&store, &stream.operations[0..3], ExecutionMode::Lazy),
+            Action::Execute(id),
+        );
+        assert_ne!(
+            policy.action(&store, &stream.operations[0..1], ExecutionMode::Lazy),
+            Action::Execute(id),
+        );
+    }
+
+    #[test]
+    fn strategy_reports_the_highest_relative_shape_id_it_holds() {
+        let strategy = ExecutionStrategy::Composed(vec![
+            Box::new(ExecutionStrategy::operations(2)),
+            Box::new(ExecutionStrategy::Optimization {
+                opt: ShapeIds(Some(4)),
+                ordering: Arc::new(vec![0, 1]),
+                score: 0,
+            }),
+            Box::new(ExecutionStrategy::Optimization {
+                opt: ShapeIds(Some(7)),
+                ordering: Arc::new(vec![2]),
+                score: 0,
+            }),
+        ]);
+
+        assert_eq!(strategy.max_relative_shape_id(), Some(7));
+    }
+
+    #[test]
+    fn operations_only_strategy_names_no_relative_shape_id() {
+        let strategy = ExecutionStrategy::<ShapeIds>::operations(3);
+
+        assert_eq!(strategy.max_relative_shape_id(), None);
     }
 
     #[test]

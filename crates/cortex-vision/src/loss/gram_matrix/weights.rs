@@ -1,8 +1,5 @@
-use cortex_core as cortex;
-
 use super::vgg19::Vgg19;
-use cortex::tensor::Device;
-use cortex_core::network::downloader::download_file_as_bytes;
+use cortex_std::network::downloader::download_file_as_bytes;
 use cortex_store::{ModuleSnapshot, PytorchStore};
 use std::fs::{File, create_dir_all, rename};
 use std::io::Write;

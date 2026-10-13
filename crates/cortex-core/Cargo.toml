@@ -7,7 +7,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
 license.workspace = true
 name = "cortex-core"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-core"
 version.workspace = true
 
@@ -20,8 +20,13 @@ default = [
     "cortex-std/default",
     "cortex-dataset?/default",
     "cortex-tensor/default",
+    "cortex-cpu?/default",
+    "cortex-cuda?/default",
+    "cortex-rocm?/default",
+    "cortex-wgpu?/default",
 ]
 doc = [
+    "flex",
     "std",
     "dataset",
     "audio",
@@ -31,7 +36,15 @@ doc = [
     "cortex-tensor/doc",
     "dep:regex"
 ]
-tracing = ["cortex-std/tracing", "cortex-tensor/tracing", "cortex-dataset?/tracing"]
+tracing = [
+    "cortex-std/tracing",
+    "cortex-tensor/tracing",
+    "cortex-dataset?/tracing",
+    "cortex-cpu?/tracing",
+    "cortex-cuda?/tracing",
+    "cortex-rocm?/tracing",
+    "cortex-wgpu?/tracing",
+]
 
 dataset = ["cortex-dataset"]
 
@@ -48,6 +61,10 @@ std = [
     "serde/std",
     "serde_json/std",
     "num-traits/std",
+    "cortex-cpu?/std",
+    "cortex-cuda?/std",
+    "cortex-rocm?/std",
+    "cortex-wgpu?/std",
 ]
 vision = ["cortex-dataset?/vision"]
 audio = ["cortex-dataset?/audio"]
@@ -56,27 +73,63 @@ audio = ["cortex-dataset?/audio"]
 remote = ["cortex-tensor/remote"]
 remote-server = ["cortex-tensor/remote-server"]
 remote-websocket = ["cortex-tensor/remote-websocket"]
-cuda = ["cortex-tensor/cuda"]
-rocm = ["cortex-tensor/rocm"]
+cuda = ["cortex-tensor/cuda", "dep:cortex-cuda"]
+rocm = ["cortex-tensor/rocm", "dep:cortex-rocm"]
 flex = ["cortex-tensor/flex"]
 ndarray = ["cortex-tensor/ndarray"]
 tch = ["cortex-tensor/tch"]
-vulkan = ["cortex-tensor/vulkan"]
-webgpu = ["cortex-tensor/webgpu"]
-wgpu = ["cortex-tensor/wgpu"]
-metal = ["cortex-tensor/metal"]
-cpu = ["cortex-tensor/cpu"]
+vulkan = ["wgpu", "cortex-tensor/vulkan", "cortex-wgpu/vulkan"]
+webgpu = ["wgpu", "cortex-tensor/webgpu", "cortex-wgpu/webgpu"]
+wgpu = ["cortex-tensor/wgpu", "dep:cortex-wgpu"]
+metal = ["wgpu", "cortex-tensor/metal", "cortex-wgpu/metal"]
+cpu = ["cortex-tensor/cpu", "dep:cortex-cpu"]
 autodiff = ["cortex-tensor/autodiff"]
+capture = ["cortex-tensor/capture"]
 ir = ["cortex-ir"]
 
 # Backend features
-autotune = ["cortex-tensor/autotune"]
-autotune-checks = ["cortex-tensor/autotune-checks"]
-fusion = ["cortex-tensor/fusion"]
+autotune = [
+    "cortex-tensor/autotune",
+    "cortex-cpu?/autotune",
+    "cortex-cuda?/autotune",
+    "cortex-rocm?/autotune",
+    "cortex-wgpu?/autotune",
+]
+autotune-checks = [
+    "cortex-tensor/autotune-checks",
+    "cortex-cpu?/autotune-checks",
+    "cortex-cuda?/autotune-checks",
+    "cortex-rocm?/autotune-checks",
+    "cortex-wgpu?/autotune-checks",
+]
+fusion = [
+    "dep:cortex-fusion",
+    "cortex-tensor/fusion",
+    "cortex-cpu?/fusion",
+    "cortex-cuda?/fusion",
+    "cortex-rocm?/fusion",
+    "cortex-wgpu?/fusion",
+]
+simd = ["cortex-tensor/simd"]
+rayon = ["cortex-tensor/rayon"]
+x86-v4 = ["cortex-tensor/x86-v4"]
+apple-amx = ["cortex-tensor/apple-amx"]
+accelerate = ["cortex-tensor/accelerate"]
+blas-netlib = ["cortex-tensor/blas-netlib"]
+openblas = ["cortex-tensor/openblas"]
+openblas-system = ["cortex-tensor/openblas-system"]
+template = ["cortex-tensor/template", "cortex-wgpu?/template"]
 
 # Backend extensions
 # cortex-dispatch features are enabled from cortex-tensor, we just re-export the public types
 extension = ["cortex-tensor/extension", "cortex-backend-extension", "cortex-dispatch", "cortex-backend"]
+
+# These integration tests need CubeCL and Fusion's test utilities.
+# Keep them opt-in so default `cortex-core` builds and tests avoid those dependencies;
+# dev-dependencies would be compiled for every test build, even when the tests are skipped.
+# Enable a CubeCL runtime separately (e.g. `cpu` or `metal`) and select it with CORTEX_DEVICE.
+# Gate the test files with cfg instead of required-features so CI's --test '*' can select them.
+extension-tests = ["extension", "fusion", "dep:cortex-cubecl", "cortex-fusion/test-util"]
 
 [dependencies]
 
@@ -88,11 +141,21 @@ cortex-derive = { workspace = true }
 cortex-pack = { workspace = true, default-features = false }
 cortex-tensor = { workspace = true }
 
+# Public backend facades re-exported by `cortex-core::backend`.
+cortex-cpu = { workspace = true, optional = true }
+cortex-cuda = { workspace = true, optional = true }
+cortex-rocm = { workspace = true, optional = true }
+cortex-wgpu = { workspace = true, optional = true }
+
 # Backend extensions
 cortex-backend = { workspace = true, optional = true }
 cortex-dispatch = { workspace = true, optional = true }
 cortex-backend-extension = { workspace = true, optional = true }
+cortex-fusion = { workspace = true, optional = true }
 cortex-ir = { workspace = true, optional = true }
+
+# Backend extension integration tests.
+cortex-cubecl = { workspace = true, optional = true }
 
 derive-new = { workspace = true }
 log = { workspace = true, optional = true }
@@ -104,24 +167,17 @@ hashbrown = { workspace = true, features = ["serde"] } # no_std compatible
 # Serialize Deserialize
 serde = { workspace = true, features = ["derive"] }
 
-ahash = { workspace = true }
 half = { workspace = true }
 num-traits = { workspace = true }
 serde_json = { workspace = true, features = ["alloc"] } #Default enables std
 spin = { workspace = true }                             # Using in place of use std::sync::Mutex when std is disabled
-thiserror = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 
 [target.'cfg(target_has_atomic = "ptr")'.dependencies]
 regex = { workspace = true }
 
-[target.'cfg(not(target_has_atomic = "ptr"))'.dependencies]
-portable-atomic-util = { workspace = true }
-portable-atomic = { workspace = true }
-
 [dev-dependencies]
 cortex-dataset = { workspace = true, features = ["fake"] }
-rstest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 

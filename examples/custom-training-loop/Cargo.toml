@@ -14,4 +14,3 @@ cortex = { workspace = true, features = ["autodiff", "webgpu", "vision"] }
 guide = { path = "../guide" }
 
 # Serialization
-log = { workspace = true }

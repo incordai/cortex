@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 // Only the CUDA `launch_multi` path uses these at the top level; the remote module imports
 // them locally. Gating on both features avoids an unused-import warning for `remote,ddp`.
 #[cfg(all(feature = "ddp", feature = "cuda"))]
@@ -108,6 +106,7 @@ mod wgpu {
 #[cfg(feature = "remote")]
 mod remote {
     use crate::ElemType;
+    use cortex::remote::RemoteHost;
     #[cfg(feature = "ddp")]
     use cortex::tensor::distributed::{DistributedConfig, ReduceOperation};
     use cortex::tensor::{Device, DeviceConfig, DeviceType, Element};
@@ -120,7 +119,7 @@ mod remote {
     /// List every device the remote server hosts and train across all of them.
     #[cfg(not(feature = "ddp"))]
     pub fn run() {
-        let mut devices = Device::enumerate(DeviceType::remote_websocket(ADDRESS));
+        let mut devices = Device::enumerate(DeviceType::Remote(RemoteHost::websocket(ADDRESS)));
         devices
             .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
             .unwrap();
@@ -131,7 +130,7 @@ mod remote {
     /// Same enumeration, but drive the devices with distributed data-parallel training.
     #[cfg(feature = "ddp")]
     pub fn run() {
-        let mut devices = Device::enumerate(DeviceType::remote_websocket(ADDRESS));
+        let mut devices = Device::enumerate(DeviceType::Remote(RemoteHost::websocket(ADDRESS)));
         devices
             .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
             .unwrap();

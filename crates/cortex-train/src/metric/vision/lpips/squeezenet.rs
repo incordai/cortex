@@ -6,6 +6,7 @@ use cortex::module::Module;
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
 use cortex::tensor::activation::relu;
+use cortex::tensor::ops::MaxPoolOptions;
 use cortex_nn::PaddingConfig2d;
 use cortex_nn::conv::{Conv2d, Conv2dConfig};
 
@@ -153,5 +154,10 @@ impl SqueezeFeatureExtractor {
 
 /// 3x3 max pooling with stride 2, ceil mode (for SqueezeNet).
 fn max_pool2d_squeeze(x: Tensor<4>) -> Tensor<4> {
-    cortex_core::tensor::module::max_pool2d(x, [3, 3], [2, 2], [0, 0], [1, 1], true)
+    cortex_core::tensor::module::max_pool2d(
+        x,
+        MaxPoolOptions::new([3, 3])
+            .with_stride([2, 2])
+            .with_ceil_mode(true),
+    )
 }

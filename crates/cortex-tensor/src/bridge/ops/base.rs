@@ -731,11 +731,12 @@ pub(crate) trait BasicOps: TensorKind {
     /// Returns a view of the tensor with all complete windows of size `size` in dimension `dim`;
     /// where windows are advanced by `step` at each index.
     ///
-    /// The number of windows is `max(0, (shape[dim] - size).ceil_div(step))`.
+    /// The number of windows is `0` when `shape[dim] < size`, and otherwise
+    /// `(shape[dim] - size) / step + 1`.
     ///
     /// # Warning
     ///
-    /// For the `ndarray` and `candle` backends; this is not a view but a full copy.
+    /// For the `ndarray` backend; this is not a view but a full copy.
     ///
     /// # Arguments
     ///

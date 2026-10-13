@@ -1,12 +1,7 @@
 use core::fmt::Debug;
 
 use cortex_backend::Backend;
-
-#[cfg(target_has_atomic = "ptr")]
-use alloc::sync::Arc;
-
-#[cfg(not(target_has_atomic = "ptr"))]
-use portable_atomic_util::Arc;
+use cortex_std::sync::Arc;
 
 use crate::{graph::ComputingProperty, tensor::AutodiffTensor};
 

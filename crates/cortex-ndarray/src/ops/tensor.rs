@@ -179,23 +179,6 @@ impl FloatTensorOps<Self> for NdArray {
         )
     }
 
-    fn float_scatter_add(
-        dim: usize,
-        tensor: FloatTensor<Self>,
-        indices: NdArrayTensor,
-        value: FloatTensor<Self>,
-    ) -> FloatTensor<Self> {
-        execute_with_int_dtype!(
-            indices,
-            IntElem,
-            |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
-                execute_with_float_dtype!((tensor, value), |tensor, value| NdArrayOps::scatter(
-                    dim, tensor, idx_array, value
-                ))
-            }
-        )
-    }
-
     fn float_scatter(
         dim: usize,
         tensor: FloatTensor<Self>,
@@ -205,7 +188,15 @@ impl FloatTensorOps<Self> for NdArray {
     ) -> FloatTensor<Self> {
         match update {
             cortex_backend::tensor::IndexingUpdateOp::Add => {
-                Self::float_scatter_add(dim, tensor, indices, value)
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayOps::scatter(dim, tensor, idx_array, value)
+                        })
+                    }
+                )
             }
             cortex_backend::tensor::IndexingUpdateOp::Assign => {
                 execute_with_int_dtype!(
@@ -218,7 +209,39 @@ impl FloatTensorOps<Self> for NdArray {
                     }
                 )
             }
-            other => unimplemented!("float_scatter with {other:?} update is not implemented"),
+            cortex_backend::tensor::IndexingUpdateOp::Mul => {
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayOps::scatter_mul(dim, tensor, idx_array, value)
+                        })
+                    }
+                )
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Min => {
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayOps::scatter_min(dim, tensor, idx_array, value)
+                        })
+                    }
+                )
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Max => {
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayOps::scatter_max(dim, tensor, idx_array, value)
+                        })
+                    }
+                )
+            }
         }
     }
 
@@ -267,23 +290,6 @@ impl FloatTensorOps<Self> for NdArray {
         )
     }
 
-    fn float_select_add(
-        tensor: FloatTensor<Self>,
-        dim: usize,
-        indices: NdArrayTensor,
-        value: FloatTensor<Self>,
-    ) -> FloatTensor<Self> {
-        execute_with_int_dtype!(
-            indices,
-            IntElem,
-            |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
-                execute_with_float_dtype!((tensor, value), |tensor, value| {
-                    NdArrayMathOps::select_assign(tensor, dim, idx_array, value)
-                })
-            }
-        )
-    }
-
     fn float_select_assign(
         tensor: FloatTensor<Self>,
         dim: usize,
@@ -293,7 +299,15 @@ impl FloatTensorOps<Self> for NdArray {
     ) -> FloatTensor<Self> {
         match update {
             cortex_backend::tensor::IndexingUpdateOp::Add => {
-                Self::float_select_add(tensor, dim, indices, value)
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayMathOps::select_assign(tensor, dim, idx_array, value)
+                        })
+                    }
+                )
             }
             cortex_backend::tensor::IndexingUpdateOp::Assign => {
                 execute_with_int_dtype!(
@@ -306,8 +320,38 @@ impl FloatTensorOps<Self> for NdArray {
                     }
                 )
             }
-            other => {
-                unimplemented!("float_select_assign with {other:?} update is not implemented")
+            cortex_backend::tensor::IndexingUpdateOp::Mul => {
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayMathOps::select_assign_mul(tensor, dim, idx_array, value)
+                        })
+                    }
+                )
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Min => {
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayMathOps::select_assign_min(tensor, dim, idx_array, value)
+                        })
+                    }
+                )
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Max => {
+                execute_with_int_dtype!(
+                    indices,
+                    IntElem,
+                    |idx_array: SharedArray<IntElem>| -> NdArrayTensor {
+                        execute_with_float_dtype!((tensor, value), |tensor, value| {
+                            NdArrayMathOps::select_assign_max(tensor, dim, idx_array, value)
+                        })
+                    }
+                )
             }
         }
     }

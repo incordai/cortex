@@ -1,27 +1,32 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+//! The CubeCL CPU runtime for [Cortex](https://github.com/tracel-ai/burn): the GPU backends' kernels,
+//! compiled for the CPU through LLVM.
+//!
+//! Applications enable Cortex's `cpu` feature and create a device with `Device::cpu()`; they do not
+//! need this crate directly. [`Cpu`] is the backend type under the name of this runtime: every
+//! CubeCL runtime shares the same backend, and a tensor's device says which one it runs on. LLVM
+//! is bundled, so no system installation is needed.
+//!
+//! This is one of two independent CPU backends. `cortex-flex` (feature `flex`) is a pure-Rust eager
+//! backend that also supports `no_std` and WebAssembly; this one brings kernel fusion, autotuning
+//! and custom CubeCL kernels to the CPU.
+//!
+//! # Feature flags
+//!
+//! - `std` (default): standard library support.
+//! - `fusion` (default): kernel fusion.
+//! - `autotune` (default): benchmark kernel variants at runtime and keep the fastest.
+//! - `tracing`: instrument operations with the `tracing` crate.
+
 extern crate alloc;
 
-use cortex_cubecl::CubeBackend;
 pub use cubecl::cpu::CpuDevice;
-use cubecl::{
-    cpu::CpuRuntime,
-    throughput::{ThroughputKey, ThroughputValue},
-};
 
-#[cfg(not(feature = "fusion"))]
-pub type Cpu = CubeBackend<CpuRuntime>;
-
-#[cfg(feature = "fusion")]
-pub type Cpu = cortex_fusion::Fusion<CubeBackend<CpuRuntime>>;
-
-/// Measure peak throughput on a CPU `device` for each of the given `keys`.
-pub fn device_throughput(
-    device: &CpuDevice,
-    keys: &[ThroughputKey],
-) -> alloc::vec::Vec<ThroughputValue> {
-    cubecl::std::throughput::device_throughput::<CpuRuntime>(device, keys)
-}
+/// The cubecl backend, under the name of the runtime this crate compiles in.
+/// Every cubecl backend is the same type — a tensor's device is what says which
+/// runtime it runs on.
+pub type Cpu = cortex_cubecl::Cube;
 
 #[cfg(test)]
 mod tests {
@@ -31,13 +36,12 @@ mod tests {
     #[test]
     fn should_support_dtypes() {
         type B = Cpu;
-        let device = CpuDevice;
+        let device = cubecl::Device::Cpu(CpuDevice);
         let scheme = device.defaults().quantization.scheme;
 
         assert!(B::supports_dtype(&device, DType::F64));
         assert!(B::supports_dtype(&device, DType::F32));
         assert!(B::supports_dtype(&device, DType::F16));
-        assert!(B::supports_dtype(&device, DType::BF16));
         assert!(B::supports_dtype(&device, DType::I64));
         assert!(B::supports_dtype(&device, DType::I32));
         assert!(B::supports_dtype(&device, DType::I16));
@@ -51,5 +55,7 @@ mod tests {
         // Currently not registered in supported types
         assert!(!B::supports_dtype(&device, DType::Flex32));
         assert!(!B::supports_dtype(&device, DType::Bool(BoolStore::Native)));
+        // BF16 is dropped: the LLVM dialect has no bfloat type to compute with.
+        assert!(!B::supports_dtype(&device, DType::BF16));
     }
 }

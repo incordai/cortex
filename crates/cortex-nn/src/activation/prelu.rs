@@ -1,5 +1,6 @@
+use crate::Initializer;
 use cortex::config::Config;
-use cortex::module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay, Param};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay, Param};
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
 use cortex_core as cortex;

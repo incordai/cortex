@@ -67,7 +67,7 @@ To convert an _existing_ tensor to another element type, use
 let x_f64 = x.cast(FloatDType::F64); // convert the f32 tensor above to f64
 ```
 
-Cortex Tensors are defined by the number of dimensions D in its declaration as opposed to its shape.
+Cortex Tensors are defined by the number of dimensions D in their declaration as opposed to their shape.
 The actual shape of the tensor is inferred from its initialization. For example, a Tensor of size
 (5,) is initialized as below:
 
@@ -87,12 +87,12 @@ let tensor_1 = Tensor::<1>::from_floats(floats, &device);
 ### Initialization
 
 Cortex Tensors are primarily initialized using the `from_data()` method which takes the `TensorData`
-struct as input. The `TensorData` struct has two public fields: `shape` and `dtype`. The `value`,
-now stored as bytes, is private but can be accessed via any of the following methods: `as_slice`,
-`as_mut_slice`, `to_vec` and `iter`. To retrieve the data from a tensor, the method `.to_data()`
-should be employed when intending to reuse the tensor afterward. Alternatively, `.into_data()` is
-recommended for one-time use. Let's look at a couple of examples for initializing a tensor from
-different inputs.
+struct as input. The `TensorData` fields are private: `shape()` and `dtype()` return the shape and
+data type, and the values, stored as bytes, can be accessed via any of the following methods:
+`as_slice`, `as_mut_slice`, `try_to_vec`, `try_to_vec_as` and `iter`. To retrieve the data from a
+tensor, the method `.to_data()` should be employed when intending to reuse the tensor afterward.
+Alternatively, `.into_data()` is recommended for one-time use. Let's look at a couple of examples
+for initializing a tensor from different inputs.
 
 ```rust, ignore
 
@@ -127,6 +127,9 @@ let data  = TensorData::from([bmi.age as f32, bmi.height as f32, bmi.weight]);
 let tensor_5 = Tensor::<1>::from_data(data, &device);
 
 ```
+
+Reading a tensor's data is also where a failed computation surfaces. `into_data()` and `to_data()`
+panic in that case; use `try_into_data()` or `try_to_data()` to handle the `ExecutionError` instead.
 
 ## Ownership and Cloning
 
@@ -169,6 +172,23 @@ operations into a single kernel ([burn-fusion](https://burn.dev/docs/burn_fusion
 that reason, we don't provide explicit inplace operations. If a tensor is used only one time,
 inplace operations will always be used when available.
 
+## Shape Assertions
+
+The rank of a tensor is checked by the type system, and `let [b, t, c] = x.dims();` names its axes.
+To check the size of each axis, use the shape macros from the prelude:
+
+```rust, ignore
+let [batch_size, seq_length, _] = x.dims();
+assert_shape!(x, [_, _, 80]);
+assert_shape!(y, [batch_size, seq_length, 256]);
+assert_shape!(flat, [batch_size * seq_length, 256]);
+assert_shape!(w, [.., 256]); // any rank, last axis checked
+debug_assert_shape!(z, [batch_size, _, 256]);
+```
+
+See [Forward Contract](./module.md#forward-contract) for the slot syntax and guidance on which macro
+to use where.
+
 ## Tensor Operations
 
 Normally with PyTorch, explicit inplace operations aren't supported during the backward pass, making
@@ -189,7 +209,7 @@ Those operations are available for all tensor kinds: `Int`, `Float`, and `Bool`.
 | ---------------------------------------------------- | ------------------------------------------------------------------------- |
 | `Tensor::cat(tensors, dim)`                          | `torch.cat(tensors, dim)`                                                 |
 | `Tensor::empty(shape, options)`                      | `torch.empty(shape, device=device, dtype=dtype)`                          |
-| `tensor::empty_like()`                               | `tensor.empty_like(tensor)`                                               |
+| `tensor.empty_like()`                                | `torch.empty_like(tensor)`                                                |
 | `Tensor::from_primitive(primitive)`                  | N/A                                                                       |
 | `Tensor::stack(tensors, dim)`                        | `torch.stack(tensors, dim)`                                               |
 | `tensor.all()`                                       | `tensor.all()`                                                            |
@@ -210,7 +230,7 @@ Those operations are available for all tensor kinds: `Int`, `Float`, and `Bool`.
 | `tensor.full_like(fill_value)`                       | `torch.full_like(tensor, fill_value)`                                     |
 | `tensor.gather(dim, indices)`                        | `torch.gather(tensor, dim, indices)`                                      |
 | `tensor.into_data()`                                 | N/A                                                                       |
-| `tensor.into_primitive()`                            | N/A                                                                       |
+| `tensor.try_into_primitive()`                        | N/A                                                                       |
 | `tensor.into_scalar()`                               | `tensor.item()`                                                           |
 | `tensor.mask_fill(mask, value)`                      | `tensor.masked_fill(mask, value)`                                         |
 | `tensor.mask_select(mask)`                           | `tensor.masked_select(mask)`                                              |
@@ -439,6 +459,70 @@ strategies.
 | `tensor.quantize(scheme, qparams)` | N/A                |
 | `tensor.dequantize()`              | N/A                |
 
+## Einstein Summation
+
+Use `einsum!` to express tensor contractions with an equation. Each letter names an input axis;
+commas separate operands, and `->` lists the output axes in order. Values are multiplied along
+matching labels and summed over labels omitted from the output. For example, `"ij,jk->ik"`
+multiplies two matrices and sums over `j`.
+
+| Equation               | Operation                                             |
+| ---------------------- | ----------------------------------------------------- |
+| `"ij,jk->ik"`          | Matrix multiplication                                 |
+| `"ij->ji"`             | Transpose                                             |
+| `"ii->i"`              | Extract a diagonal                                    |
+| `"ii->"`               | Trace (sum of the diagonal)                           |
+| `"i,i->"`              | Dot product                                           |
+| `"...ij,...jk->...ik"` | Matrix multiplication with broadcast batch dimensions |
+
+```rust,ignore
+use cortex::tensor::{Tensor, einsum};
+
+// Queries: [batch, queries, channels]; features: [batch, channels, height, width].
+// Sum over channels to produce [batch, queries, height, width].
+let masks = einsum!("bqc,bchw->bqhw", &queries, &features);
+
+// Runtime equations accept operands of different ranks through `.into()`.
+let equation = "ij,j->i";
+let output = Tensor::<1>::einsum(equation, [matrix.into(), vector.into()]);
+```
+
+The macro checks the equation, operand count, and statically determined ranks at compile time.
+Shapes and broadcasting are checked at runtime.
+
+### Broadcasting and diagonals
+
+Matching labels across operands must have equal sizes or a size of one, which broadcasts to the
+other size. Repeated labels within a single operand extract a diagonal and require equal axis sizes;
+singleton broadcasting does not apply there.
+
+An ellipsis (`...`) matches zero or more axes. Ellipsis dimensions broadcast from the right:
+`"...ij,...jk->...ik"` can multiply shapes `[2, 3, 4]` and `[4, 5]` to produce `[2, 3, 5]`. Supply
+the result type when an output ellipsis has unknown width:
+
+```rust,ignore
+let result: Tensor<3> = einsum!("...ij,...jk->...ik", batches, matrix);
+```
+
+Omitting `...` from an explicit output sums over its dimensions. With no `->`, the output contains
+the ellipsis first, followed by labels occurring exactly once across all inputs, sorted `A-Z`, then
+`a-z`. Each axis label is a single letter from `a-z` or `A-Z`. Uppercase and lowercase letters are
+distinct labels.
+
+### Types and limitations
+
+Float and Int operands must share their kind, dtype, and device. Scalar results have shape `[1]`; an
+empty input subscript also accepts a tensor of shape `[1]`. Quantized operands are unsupported.
+Operands are contracted from left to right using existing tensor operations, so floating-point
+contractions support autodiff. The implementation does not search for an optimized contraction
+order.
+
+Run the matrix multiplication, mask prediction, and gradient demo from the repository:
+
+```sh
+cargo run -p cortex-tensor --example einsum --features flex,autodiff
+```
+
 ## Activation Functions
 
 | Cortex API                                          | PyTorch Equivalent                                  |
@@ -495,6 +579,7 @@ strategies.
 | `linalg::lp_norm(tensor, p, dim)`                  | _No direct equivalent_                              |
 | `linalg::lu(tensor)`                               | `torch.linalg.lu(tensor)`                           |
 | `linalg::qr(tensor)`                               | `torch.linalg.qr(tensor)`                           |
+| `linalg::svd(tensor, sweeps)`                      | `torch.linalg.svd(tensor)`                          |
 | `linalg::matvec(matrix, vector)`                   | `torch.matmul(matrix, vector)` / `@` operator       |
 | `linalg::max_abs_norm(tensor, dim)`                | _No direct equivalent_                              |
 | `linalg::min_abs_norm(tensor, dim)`                | _No direct equivalent_                              |
@@ -506,7 +591,16 @@ strategies.
 
 ## Signal Processing Functions
 
-Signal-processing helpers live in `cortex::tensor::signal` and operate on real-valued float tensors.
+Signal-processing helpers live in the `cortex-signal` extension crate and operate on real-valued
+float tensors. Enable Cortex's optional `signal` feature to use `cortex::signal`; the compatibility
+path `cortex::tensor::signal` exports the same functions. The direct `cortex_tensor::signal` and
+`cortex_core::tensor::signal` paths have been removed.
+
+FFT operations use the `SignalOps` backend extension. Windows and STFT/ISTFT
+compose tensor operations. Enable `autodiff` to differentiate through FFTs. Remote servers and
+captured-graph interpreters must register `cortex_signal::register_fft_ops` in their custom-operation
+registry (with the `router` feature enabled).
+
 FFT length `n` (and `n_fft` in STFT) must currently be a power of two: when `n` is `Some(size)`, the
 input is truncated or zero-padded to `size` and the output has `size / 2 + 1` frequency bins.
 Non-power-of-two sizes panic at the public API boundary; general arbitrary-size DFT support
@@ -516,6 +610,7 @@ Non-power-of-two sizes panic at the public API boundary; general arbitrary-size 
 | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `signal::rfft(tensor, dim, n)`                        | `torch.fft.rfft(tensor, n, dim)`                                                  |
 | `signal::irfft(re, im, dim, n)`                       | `torch.fft.irfft(complex, n, dim)`                                                |
+| `signal::cfft(re, im, dim, n)`                        | `torch.fft.fft(complex, n, dim)`                                                 |
 | `signal::stft(signal, window, options)`               | `torch.stft(signal, n_fft, hop_length, win_length, window, center)`               |
 | `signal::istft(stft_matrix, window, length, options)` | `torch.istft(stft_matrix, n_fft, hop_length, win_length, window, center, length)` |
 | `signal::blackman_window(size, periodic, options)`    | `torch.blackman_window(size, periodic)`                                           |
@@ -615,10 +710,9 @@ Options:
   Here's an example of how to use `check_closeness`:
 
   ```rust, ignore
-  use cortex::tensor::{check_closeness, Tensor};
-  type B = cortex::backend::Flex;
+  use cortex::tensor::{check_closeness, Device, Tensor};
 
-  let device = Default::default();
+  let device = Device::flex();
   let tensor1 = Tensor::<1>::from_floats(
       [1.0, 2.0, 3.0, 4.0, 5.0, 6.001, 7.002, 8.003, 9.004, 10.1],
       &device,

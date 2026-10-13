@@ -7,7 +7,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
 license.workspace = true
 name = "cortex-backend-tests"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-backend-tests"
 version.workspace = true
 
@@ -29,10 +29,9 @@ bench-disable-alloc = []
 # Backends
 cuda = ["cortex-tensor/cuda", "quantization", "cube"]
 rocm = ["cortex-tensor/rocm", "quantization", "cube"]
-flex = ["flex-base"]
-flex-base = ["cortex-tensor/flex", "quantization"]
-flex-simd = ["flex-base", "cortex-flex/simd"]
-flex-rayon = ["flex-base", "cortex-flex/rayon"]
+flex = ["cortex-tensor/flex", "quantization"]
+flex-simd = ["flex", "cortex-flex/simd"]
+flex-rayon = ["flex", "cortex-flex/rayon"]
 ndarray = ["cortex-tensor/ndarray", "quantization"]
 tch = ["cortex-tensor/tch"]
 vulkan = ["wgpu", "cortex-tensor/vulkan"]
@@ -41,8 +40,8 @@ metal = ["wgpu", "cortex-tensor/metal"]
 wgpu = ["cortex-tensor/wgpu", "quantization", "cube"]
 cpu = ["cortex-tensor/cpu", "cube"]
 # Runs the test suite against a remote `cortex-remote` server.
-# At runtime, set `BURN_DEVICE=remote` (and optionally `BURN_REMOTE_ADDRESS=ws://host:port`).
-remote = ["cortex-tensor/remote"]
+# At runtime, set `CORTEX_DEVICE=remote` (and optionally `CORTEX_REMOTE_ADDRESS=ws://host:port`).
+remote = ["cortex-tensor/remote-websocket"]
 
 autotune = ["cortex-tensor/autotune"]
 autotune-checks = ["cortex-tensor/autotune-checks"]
@@ -59,8 +58,6 @@ cube = [
     "autotune",
     "cortex-tensor/ndarray",
     "cortex-ndarray",
-    # Not used directly, but included to avoid recompiling with and without fusion
-    "cortex-cubecl",
     # Direct dependency so fusion tests can assert launch-level decisions (in-place aliasing).
     "cortex-cubecl-fusion",
 ]
@@ -84,11 +81,6 @@ cortex-ndarray = { workspace = true, optional = true, features = [
     "export_tests",
 ] }
 
-# Manually enable so running the tests again with fusion feature doesn't have to compile other crates
-cortex-cubecl = { workspace = true, optional = true, features = [
-    "default",
-    "fusion",
-] }
 cortex-cubecl-fusion = { workspace = true, optional = true }
 
 # Enabled alongside the `fusion` feature so spy-based tests can import the spy API.
@@ -109,8 +101,12 @@ syn = { workspace = true }
 
 [dev-dependencies]
 # Used to initialize device settings (test dtypes)
-ctor = "0.10.1"
+ctor = "1.0.13"
 divan = "0.1"
+
+[[test]]
+name = "autodiff_transfer"
+required-features = ["flex", "ndarray"]
 
 [[bench]]
 name = "attention"
@@ -150,10 +146,6 @@ harness = false
 
 [[bench]]
 name = "deform_conv_ops"
-harness = false
-
-[[bench]]
-name = "fft_ops"
 harness = false
 
 [[bench]]

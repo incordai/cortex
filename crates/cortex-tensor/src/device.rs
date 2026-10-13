@@ -3,14 +3,31 @@ pub use cortex_std::{
 };
 
 #[cfg(feature = "cubecl")]
-pub use cortex_backend::cubecl::{ThroughputKey, ThroughputMode, ThroughputValue};
+pub use cortex_backend::cubecl::{
+    AdapterLuid, DeviceIdentity, MemoryAccess, PciAddress, PciVendor, PhysicalDevice,
+    ThroughputError, ThroughputKey, ThroughputMode, ThroughputValue,
+};
 use cortex_backend::{Backend, DeviceOps};
+pub use cortex_backend::{
+    MemoryPoolUsage, ProfileDuration, ProfileOptions, ProfileTicks, SlicedPoolReport, TimingMethod,
+};
 #[allow(unused)]
 use cortex_dispatch::DispatchDeviceId;
+#[cfg(feature = "autodiff")]
+use cortex_dispatch::GradientCheckpointingStrategy;
+#[cfg(any(feature = "cpu", feature = "cuda", feature = "rocm", feature = "wgpu"))]
+use cortex_dispatch::devices::RuntimeId;
+#[cfg(any(feature = "metal", feature = "vulkan", feature = "webgpu"))]
+use cortex_dispatch::devices::WgpuBackend;
 use cortex_dispatch::{Dispatch, DispatchDevice};
 use cortex_std::{BoolDType, FloatDType, IntDType, TensorData};
 
-#[cfg(feature = "remote-websocket")]
+#[cfg(feature = "capture")]
+pub use cortex_dispatch::backends::capture::{
+    CaptureError, CaptureScope, CapturedGraph, CompletedCaptureScope, TensorId,
+};
+
+#[cfg(any(feature = "cpu", feature = "cuda", feature = "rocm", feature = "wgpu"))]
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -19,7 +36,8 @@ use alloc::vec::Vec;
 ///
 /// [`Device`] provides a unified interface to interact with the underlying compute backend.
 ///
-/// Autodiff support is a property of the device rather than a separate type parameter.
+/// Autodiff support is configured on the device rather than through a separate type parameter.
+/// Tensors inherit that context when created and can later change it independently.
 #[cfg_attr(
     feature = "autodiff",
     doc = "Wrap a device with [`.autodiff()`](Device::autodiff) to enable automatic differentiation with the device."
@@ -30,6 +48,15 @@ use alloc::vec::Vec;
 )]
 ///
 /// # Backend selection
+///
+/// Default Cargo features do not enable an execution backend. Select one explicitly,
+/// for example with the `wgpu` or `flex` feature; there is no implicit CPU fallback.
+/// Backend-free builds can expose tensor/model APIs, but cannot create an execution device.
+///
+/// [`Device::default()`] selects the first enabled backend in this order:
+/// CUDA, Metal, ROCm, Vulkan, WebGPU, wgpu, CPU, LibTorch, Flex, Remote, NdArray.
+/// Use an explicit factory method when the choice must be independent of Cargo feature unification.
+/// Without an execution backend, `Device::default()` panics with configuration guidance.
 ///
 /// Enable the desired backend via Cargo feature flags, then call the
 /// corresponding factory method:
@@ -53,7 +80,7 @@ use alloc::vec::Vec;
 /// (take an integer index or a [`DeviceIndex`]), `Device::wgpu` /
 /// `Device::vulkan` / `Device::metal` / `Device::webgpu` (take a
 /// [`DeviceKind`]), `Device::flex`, `Device::ndarray`, `Device::libtorch`,
-/// `Device::libtorch_mps`, `Device::libtorch_vulkan`.
+/// `Device::libtorch_mps`, `Device::libtorch_vulkan`, `Device::capture`.
 ///
 /// # Autodiff
 ///
@@ -64,8 +91,8 @@ use alloc::vec::Vec;
 /// ```rust,ignore
 /// let device = Device::default().autodiff();
 ///
-/// // Tensors created on this device will track gradients
-/// let x = Tensor::<1>::from_floats([1.0, 2.0, 3.0], &device);
+/// // Tensors created on this device can participate in an autodiff graph.
+/// let x = Tensor::<1>::from_floats([1.0, 2.0, 3.0], &device).require_grad();
 /// ```
 pub struct Device {
     blob: device_opaque::Opaque,
@@ -104,8 +131,9 @@ impl PartialEq for Device {
     /// Compares devices based on hardware identity.
     ///
     /// Returns `true` if both devices represent the same compute resource.
-    /// Note that this comparison ignores autodiff and checkpointing settings.
-    /// To check if two devices have identical capabilities, check [`Device::is_autodiff`].
+    /// Note that this comparison ignores autodiff and checkpointing settings. Inspect
+    /// [`Device::is_autodiff`] and `Device::gradient_checkpointing_strategy()` when execution
+    /// context also matters.
     fn eq(&self, other: &Self) -> bool {
         self.as_dispatch() == other.as_dispatch()
     }
@@ -191,7 +219,7 @@ impl DeviceIndex {
     /// [`DeviceIndex::Default`]. Backend factory methods are each gated by a
     /// Cargo feature, so this looks dead when none of them are enabled.
     #[allow(dead_code)]
-    fn resolve(self) -> usize {
+    pub(crate) fn resolve(self) -> usize {
         match self {
             DeviceIndex::Specified(i) => i,
             DeviceIndex::Default => 0,
@@ -233,7 +261,7 @@ impl From<i64> for DeviceIndex {
 /// enum (e.g. WGPU, which can target a discrete/integrated/virtual GPU, a CPU
 /// adapter, an externally-created wgpu setup, or just "best available").
 ///
-/// The variants mirror `WgpuDevice` from cubecl so the mapping is direct, but
+/// The variants mirror `WgpuDeviceKind` from cubecl so the mapping is direct, but
 /// it is kept as a cortex-owned enum so callers don't have to depend on cubecl.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Default)]
 pub enum DeviceKind {
@@ -265,11 +293,44 @@ pub enum DeviceKind {
     ///
     /// # Notes
     ///
-    /// This can be initialized with `init_device` from the wgpu runtime.
+    /// This identifies an already registered runtime. To register an application's
+    /// setup, use `Device::wgpu_options().setup(setup).init()` and retain the
+    /// returned device. Clone that device to share it; do not invent an existing ID.
     Existing(u32),
 }
 
 impl Device {
+    /// Create a reusable graph-capture device.
+    ///
+    /// Operations on tensors moved to this device are recorded rather than executed. Use
+    /// [`Device::capture_scope`] to delimit each capture and declare its graph boundaries.
+    #[cfg(feature = "capture")]
+    pub fn capture() -> Self {
+        Self::new(DispatchDevice::capture())
+    }
+
+    /// Capture the operations performed by `capture` on this device.
+    ///
+    /// The closure receives a [`CaptureScope`] and must return the token produced by
+    /// [`CaptureScope::complete`], containing the ordered runtime input and output tensor IDs.
+    /// Requiring this return value prevents a capture from being finalized without an explicit
+    /// boundary declaration. Completing the scope immediately rejects further tensor operations;
+    /// the device can then be reused for later, independent scopes after the closure returns.
+    ///
+    /// Returns [`CaptureError::InvalidDevice`] if this is not a capture device, and
+    /// [`CaptureError::AlreadyActive`] if another scope is active on the same device.
+    #[cfg(feature = "capture")]
+    pub fn capture_scope(
+        &self,
+        capture: impl FnOnce(CaptureScope) -> CompletedCaptureScope,
+    ) -> Result<CapturedGraph, CaptureError> {
+        match self.as_dispatch() {
+            DispatchDevice::Capture(device) => device.capture_scope(capture),
+            #[allow(unreachable_patterns)] // Capture can be the only enabled backend.
+            _ => Err(CaptureError::InvalidDevice),
+        }
+    }
+
     /// Default CPU device backed by CubeCL's CPU backend.
     #[cfg(feature = "cpu")]
     pub fn cpu() -> Self {
@@ -306,18 +367,33 @@ impl Device {
 
     /// Default NdArray (CPU) device.
     #[cfg(feature = "ndarray")]
+    #[deprecated(
+        since = "0.22.0",
+        note = "cortex-ndarray is deprecated and will be removed in a future release. Use `Device::flex()` for pure-Rust CPU execution instead."
+    )]
+    #[allow(deprecated)] // constructing the deprecated device is this constructor's job
     pub fn ndarray() -> Self {
         Self::new(cortex_dispatch::devices::NdArrayDevice::default())
     }
 
     /// LibTorch CPU device.
     #[cfg(feature = "tch")]
+    #[deprecated(
+        since = "0.22.0",
+        note = "cortex-tch is deprecated and will be removed in a future release. Use a CubeCL backend (`Device::cuda`, `Device::rocm`, `Device::metal`, `Device::vulkan`, `Device::cpu`) or `Device::flex()` instead."
+    )]
+    #[allow(deprecated)] // constructing the deprecated device is this constructor's job
     pub fn libtorch() -> Self {
         Self::new(cortex_dispatch::devices::LibTorchDevice::Cpu)
     }
 
     /// LibTorch CUDA device at the given hardware index.
     #[cfg(feature = "tch")]
+    #[deprecated(
+        since = "0.22.0",
+        note = "cortex-tch is deprecated and will be removed in a future release. Use a CubeCL backend (`Device::cuda`, `Device::rocm`, `Device::metal`, `Device::vulkan`, `Device::cpu`) or `Device::flex()` instead."
+    )]
+    #[allow(deprecated)] // constructing the deprecated device is this constructor's job
     pub fn libtorch_cuda(index: impl Into<DeviceIndex>) -> Self {
         Self::new(cortex_dispatch::devices::LibTorchDevice::Cuda(
             index.into().resolve(),
@@ -326,175 +402,120 @@ impl Device {
 
     /// LibTorch Metal Performance Shaders (MPS) device.
     #[cfg(feature = "tch")]
+    #[deprecated(
+        since = "0.22.0",
+        note = "cortex-tch is deprecated and will be removed in a future release. Use a CubeCL backend (`Device::cuda`, `Device::rocm`, `Device::metal`, `Device::vulkan`, `Device::cpu`) or `Device::flex()` instead."
+    )]
+    #[allow(deprecated)] // constructing the deprecated device is this constructor's job
     pub fn libtorch_mps() -> Self {
         Self::new(cortex_dispatch::devices::LibTorchDevice::Mps)
     }
 
     /// LibTorch Vulkan device.
     #[cfg(feature = "tch")]
+    #[deprecated(
+        since = "0.22.0",
+        note = "cortex-tch is deprecated and will be removed in a future release. Use a CubeCL backend (`Device::cuda`, `Device::rocm`, `Device::metal`, `Device::vulkan`, `Device::cpu`) or `Device::flex()` instead."
+    )]
+    #[allow(deprecated)] // constructing the deprecated device is this constructor's job
     pub fn libtorch_vulkan() -> Self {
         Self::new(cortex_dispatch::devices::LibTorchDevice::Vulkan)
     }
 
-    /// Legacy WebSocket remote device. New integrations should prefer [`Device::remote_iroh`].
-    ///
-    /// Connects to a cortex-remote WebSocket server at the given address. `index` selects which of
-    /// the server's devices to use; two devices with the same address but different indices target
-    /// distinct devices on the same host.
-    #[cfg(feature = "remote-websocket")]
-    pub fn remote_websocket(address: &str, index: impl Into<DeviceIndex>) -> Self {
-        let index = index.into().resolve();
-        let device = cortex_dispatch::devices::RemoteDevice::websocket(address, index);
-        device.connect(); // initializes the connection (required to get the device default settings)
-        Self::new(device)
-    }
-
-    /// Iroh peer-to-peer remote device.
-    ///
-    /// `endpoint` is the application-owned Iroh endpoint to dial from; `peer` is the compute
-    /// server's identity (from [`RemoteSecret::id`](cortex_dispatch::backends::remote::RemoteSecret::id)),
-    /// optionally carrying direct/relay dialing hints.
-    /// On wasm, use [`remote_iroh_async`](Self::remote_iroh_async) instead since sessions cannot
-    /// be opened synchronously.
-    #[cfg(all(feature = "remote", not(target_family = "wasm")))]
-    pub fn remote_iroh(
-        endpoint: &cortex_dispatch::backends::remote::Endpoint,
-        peer: impl Into<cortex_dispatch::backends::remote::EndpointAddr>,
-        index: impl Into<DeviceIndex>,
-    ) -> Self {
-        let index = index.into().resolve();
-        let device =
-            cortex_dispatch::backends::remote::RemoteDevice::iroh(endpoint, peer.into(), index);
-        device.connect();
-        Self::new(device)
-    }
-
-    /// Browser counterpart of [`remote_iroh`](Self::remote_iroh). Wasm cannot block to connect,
-    /// so the session is established asynchronously before the device is returned.
-    #[cfg(all(feature = "remote", any(target_family = "wasm", doc)))]
-    pub async fn remote_iroh_async(
-        endpoint: &cortex_dispatch::backends::remote::Endpoint,
-        peer: impl Into<cortex_dispatch::backends::remote::EndpointAddr>,
-        index: impl Into<DeviceIndex>,
-    ) -> Self {
-        let index = index.into().resolve();
-        let device =
-            cortex_dispatch::backends::remote::RemoteDevice::iroh(endpoint, peer.into(), index);
-        device.connect_async().await;
-        Self::new(device)
-    }
-
-    /// Like `remote_iroh`, but carries an authorization credential the server's PeerAuthorizer
-    /// will check. Use against servers that require a credential; open servers take `remote_iroh`.
-    #[cfg(all(feature = "remote", not(target_family = "wasm")))]
-    pub fn remote_iroh_authorized(
-        endpoint: &cortex_dispatch::backends::remote::Endpoint,
-        peer: impl Into<cortex_dispatch::backends::remote::EndpointAddr>,
-        index: impl Into<DeviceIndex>,
-        credential: Vec<u8>,
-    ) -> Self {
-        let index = index.into().resolve();
-        let device = cortex_dispatch::backends::remote::RemoteDevice::iroh_authorized(
-            endpoint,
-            peer.into(),
-            index,
-            credential,
-        );
-        device.connect();
-        Self::new(device)
-    }
-
-    /// Browser counterpart of `remote_iroh_authorized`. Establishes the session asynchronously.
-    #[cfg(all(feature = "remote", any(target_family = "wasm", doc)))]
-    pub async fn remote_iroh_authorized_async(
-        endpoint: &cortex_dispatch::backends::remote::Endpoint,
-        peer: impl Into<cortex_dispatch::backends::remote::EndpointAddr>,
-        index: impl Into<DeviceIndex>,
-        credential: Vec<u8>,
-    ) -> Self {
-        let index = index.into().resolve();
-        let device = cortex_dispatch::backends::remote::RemoteDevice::iroh_authorized(
-            endpoint,
-            peer.into(),
-            index,
-            credential,
-        );
-        device.connect_async().await;
-        Self::new(device)
-    }
-
     /// WGPU device, selected via [`DeviceKind`].
     ///
-    /// This variant uses the runtime [`AutoCompiler`](cortex_dispatch::backends::wgpu::AutoCompiler)
-    /// to dispatch to the most appropriate shader language (WGSL, SPIR-V, or MSL) based on the
-    /// enabled features.
+    /// [`AutoCompiler`](cortex_dispatch::devices::AutoCompiler) dispatches to the most
+    /// appropriate shader language (WGSL, SPIR-V, or MSL) based on the enabled features.
     ///
     /// For [`DeviceKind::DefaultDevice`], the adapter is picked by `wgpu`'s
     /// selection heuristics (high-power GPU preferred, or overridden by
     /// `CUBECL_WGPU_DEFAULT_DEVICE`).
     ///
-    /// `Device::vulkan`, `Device::metal`, and `Device::webgpu` also use the Wgpu runtime,
-    /// but bypass runtime dispatch by pinning specific compilers at compile time.
+    /// The graphics API — and so the shader compiler — is the runtime's to settle, from the
+    /// enabled features and what the machine offers. `Device::vulkan`, `Device::metal` and
+    /// `Device::webgpu` pin one instead: the same adapter on two APIs is two devices.
+    ///
+    /// This constructor is lazy. Use [`Device::wgpu_options`] to initialize with runtime
+    /// options or share an existing wgpu setup. In a browser, initialize asynchronously
+    /// with [`init_async`](crate::wgpu::WgpuOptions::init_async) before creating tensors.
     #[cfg(feature = "wgpu")]
     pub fn wgpu(device_kind: DeviceKind) -> Self {
-        Self::new(DispatchDevice::Wgpu(wgpu_device(device_kind)))
+        Self::new(wgpu_device(
+            device_kind,
+            cortex_dispatch::devices::WgpuBackend::Auto,
+        ))
     }
 
-    #[cfg(all(feature = "wgpu", target_family = "wasm"))]
-    /// Asynchronously creates a WGPU device, initializing the client.
-    pub async fn wgpu_async(device_kind: DeviceKind) -> Self {
-        Self::new(DispatchDevice::Wgpu(wgpu_init_async(device_kind).await))
-    }
-
-    /// Vulkan-backed WGPU device, selected via [`DeviceKind`].
+    /// Vulkan-backed WGPU device, selected via [`DeviceKind`] — and so `SPIR-V`, where the
+    /// build and the adapter allow it.
     ///
-    /// Pins the wgpu shader compiler to SPIR-V at compile time, avoiding
-    /// the runtime [`AutoCompiler`](cortex_dispatch::backends::wgpu::AutoCompiler) dispatch.
+    /// Pinned to Vulkan: the device comes up there or not at all, rather than quietly on
+    /// whichever API [`Device::wgpu`] would settle on.
     #[cfg(feature = "vulkan")]
     pub fn vulkan(device_kind: DeviceKind) -> Self {
-        Self::new(DispatchDevice::Vulkan(wgpu_device(device_kind)))
+        Self::new(wgpu_device(
+            device_kind,
+            cortex_dispatch::devices::WgpuBackend::Vulkan,
+        ))
     }
 
-    /// Metal-backed WGPU device, selected via [`DeviceKind`].
+    /// Metal-backed WGPU device, selected via [`DeviceKind`], requiring native MSL support.
     ///
-    /// Pins the wgpu shader compiler to MSL at compile time.
+    /// Pinned to Metal, as `Device::vulkan` is to Vulkan. Runtime initialization panics if
+    /// native MSL is unavailable on the selected device. Use [`Device::wgpu`] for automatic
+    /// compiler selection with WGSL fallback.
     #[cfg(feature = "metal")]
     pub fn metal(device_kind: DeviceKind) -> Self {
-        Self::new(DispatchDevice::Metal(wgpu_device(device_kind)))
+        Self::new(wgpu_device(
+            device_kind,
+            cortex_dispatch::devices::WgpuBackend::Metal,
+        ))
     }
 
-    /// WebGPU-backed device, selected via [`DeviceKind`].
-    ///
-    /// Pins the wgpu shader compiler to WGSL at compile time.
+    /// WebGPU-backed device, selected via [`DeviceKind`] — the browser's own. Pinned to
+    /// WebGPU, as `Device::vulkan` is to Vulkan.
     #[cfg(feature = "webgpu")]
     pub fn webgpu(device_kind: DeviceKind) -> Self {
-        Self::new(DispatchDevice::WebGpu(wgpu_device(device_kind)))
+        Self::new(wgpu_device(
+            device_kind,
+            cortex_dispatch::devices::WgpuBackend::WebGpu,
+        ))
     }
 
     /// Enables autodiff on this device.
     ///
-    /// Autodiff is a property of the device: tensors created on the returned device
-    /// will participate in the autodiff graph.
+    /// Tensors created on the returned device inherit its autodiff context. A tensor can later
+    /// change that context independently with [`Tensor::autodiff`](crate::Tensor::autodiff) or
+    /// [`Tensor::without_autodiff`](crate::Tensor::without_autodiff).
     ///
-    /// Only first-order autodiff is supported. Calling this method on a device that
-    /// already has autodiff enabled will panic.
+    /// Calling this method on a device that already has autodiff enabled returns it unchanged,
+    /// preserving its gradient-checkpointing strategy. This operation is idempotent.
+    /// Calling it repeatedly doesn't enable higher-order differentiation; only first-order
+    /// autodiff is supported.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let device = Device::default().autodiff();
-    /// let x = Tensor::<1>::from_floats([1.0, 2.0, 3.0], &device);
-    /// // x.backward() is now available
+    /// let x = Tensor::<1>::from_floats([1.0, 2.0, 3.0], &device).require_grad();
+    /// let gradients = x.backward();
     /// ```
     ///
-    /// # Panics
-    ///
-    /// Panics if autodiff is already enabled on this device.
     #[cfg(feature = "autodiff")]
+    #[must_use]
     pub fn autodiff(self) -> Self {
         match self.into_dispatch() {
-            DispatchDevice::Autodiff(_) => unimplemented!("Only first-order autodiff is supported"),
+            device @ DispatchDevice::Autodiff(_) => Self::new(device),
             other => Self::new(DispatchDevice::autodiff(other)),
+        }
+    }
+
+    /// Returns this device's gradient-checkpointing strategy when autodiff is enabled.
+    #[cfg(feature = "autodiff")]
+    pub fn gradient_checkpointing_strategy(&self) -> Option<GradientCheckpointingStrategy> {
+        match self.as_dispatch() {
+            DispatchDevice::Autodiff(device) => Some(device.gradient_checkpointing_strategy()),
+            _ => None,
         }
     }
 
@@ -515,38 +536,79 @@ impl Device {
     ///
     /// Panics if autodiff is not enabled on this device.
     #[cfg(feature = "autodiff")]
+    #[must_use]
     pub fn gradient_checkpointing(self) -> Self {
-        match self.into_dispatch() {
-            DispatchDevice::Autodiff(device) => {
-                use cortex_dispatch::CheckpointingStrategy;
+        self.with_gradient_checkpointing_strategy(GradientCheckpointingStrategy::Balanced)
+    }
 
-                Self::new(DispatchDevice::autodiff_checkpointed(
-                    device.inner(),
-                    CheckpointingStrategy::Balanced,
-                ))
-            }
-            _ => panic!("Autodiff is not enabled on this device"),
+    /// Sets the gradient-checkpointing strategy on this autodiff device.
+    #[cfg(feature = "autodiff")]
+    #[must_use]
+    pub(crate) fn with_gradient_checkpointing_strategy(
+        self,
+        strategy: GradientCheckpointingStrategy,
+    ) -> Self {
+        match self.into_dispatch() {
+            DispatchDevice::Autodiff(device) => Self::new(
+                DispatchDevice::autodiff_with_gradient_checkpointing(device.inner(), strategy),
+            ),
+            _ => panic!(
+                "Gradient checkpointing requires autodiff; use Device::autodiff().gradient_checkpointing()"
+            ),
         }
     }
 
-    /// Returns the underlying device, removing the autodiff capability if present.
+    /// Returns this device without its autodiff association.
     ///
-    /// If autodiff is not enabled, this method returns the device as-is.
+    /// If autodiff is not enabled, the device is returned unchanged. This operation is idempotent.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let device = Device::default().autodiff();
-    /// let inner_device = device.inner();
+    /// let inference_device = device.without_autodiff();
     ///
-    /// assert!(!inner_device.is_autodiff());
+    /// assert!(!inference_device.is_autodiff());
     /// ```
-    pub fn inner(self) -> Self {
+    #[must_use]
+    pub fn without_autodiff(self) -> Self {
         if self.is_autodiff() {
             Self::new(self.into_dispatch().inner())
         } else {
             self
         }
+    }
+
+    /// Applies `source`'s autodiff association and gradient-checkpointing strategy to this device,
+    /// discarding this device's own.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_autodiff_context_from(self, source: &Self) -> Self {
+        #[cfg(feature = "autodiff")]
+        {
+            match source.gradient_checkpointing_strategy() {
+                Some(strategy) => self
+                    .autodiff()
+                    .with_gradient_checkpointing_strategy(strategy),
+                None => self.without_autodiff(),
+            }
+        }
+
+        #[cfg(not(feature = "autodiff"))]
+        {
+            let _ = source;
+            self
+        }
+    }
+
+    /// Returns this device without its autodiff association.
+    ///
+    /// This is equivalent to [`without_autodiff`](Self::without_autodiff). `inner` reflects the
+    /// historical backend-decorator model, while `without_autodiff` describes the device's runtime
+    /// property directly.
+    #[must_use]
+    pub fn inner(self) -> Self {
+        self.without_autodiff()
     }
 
     /// Synchronize the device, waiting for all pending operations to complete.
@@ -570,8 +632,64 @@ impl Device {
     /// Unlike [`sync`](Self::sync), this does not block on results — it only ensures buffered
     /// operations are dispatched instead of sitting idle. Eager backends, which execute each
     /// operation as it is registered, have nothing buffered and treat this as a no-op.
-    pub fn flush(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExecutionError`] when the buffered operations cannot be dispatched, e.g. on a
+    /// device that is poisoned.
+    pub fn flush(&self) -> Result<(), ExecutionError> {
         Dispatch::flush(self.as_dispatch())
+    }
+
+    /// Measure how long this device spends on the work `func` puts on it, in
+    /// device time.
+    ///
+    /// The measurement is a [`ProfileDuration`]: a future the device answers
+    /// once it has run both ends of the window, so nothing here waits on the
+    /// device, and windows nest — an inner `profile` costs the outer one
+    /// nothing. Collect them and [`resolve`](ProfileDuration::resolve) once
+    /// the run is over.
+    ///
+    /// The window spans the stream from the call to `func`'s return. Work the
+    /// stream still owed from before falls in; work a backend queues past the
+    /// end falls out — the fusion backend holds a closure's last operations
+    /// back to batch them, so a window over lazy work alone can read as
+    /// empty. Ending the closure with a read, or
+    /// [`profile_with`](Self::profile_with) and
+    /// [`ProfileOptions::flush`], closes the window over all of it. A window
+    /// that nothing ran in reads as no time.
+    ///
+    /// A backend with no device clock (ndarray, LibTorch, a remote device
+    /// whose server has none) measures wall-clock time between two syncs
+    /// instead: that one waits, and an inner window's syncs are charged to
+    /// the outer.
+    ///
+    /// ```rust,ignore
+    /// let (output, duration) = device.profile(|| model.forward(input))?;
+    /// // Later, once the run is over:
+    /// let ticks = duration.resolve().await.expect("the window carried work");
+    /// println!("forward: {:?}", ticks.duration());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExecutionError`] when the device refuses to open or close
+    /// the window — a remote device does from a browser thread, which cannot
+    /// wait on the server.
+    pub fn profile<O: Send + 'static>(
+        &self,
+        func: impl FnOnce() -> O + Send,
+    ) -> Result<(O, ProfileDuration), ExecutionError> {
+        self.profile_with(ProfileOptions::default(), func)
+    }
+
+    /// [`profile`](Self::profile) with [`ProfileOptions`].
+    pub fn profile_with<O: Send + 'static>(
+        &self,
+        options: ProfileOptions,
+        func: impl FnOnce() -> O + Send,
+    ) -> Result<(O, ProfileDuration), ExecutionError> {
+        Dispatch::profile(self.as_dispatch(), options, func)
     }
 
     /// Seeds the random number generator for this device.
@@ -595,7 +713,10 @@ impl Device {
         Dispatch::seed(self.as_dispatch(), seed)
     }
 
-    /// Returns `true` if autodiff (gradient tracking) is enabled on this device.
+    /// Returns whether this device is associated with autodiff.
+    ///
+    /// This is device context inherited by newly created tensors, not a statement that any tensor
+    /// participates in a graph or retains gradients.
     ///
     /// # Example
     ///
@@ -652,6 +773,18 @@ impl Device {
         Dispatch::memory_cleanup(self.as_dispatch());
     }
 
+    /// This device's dynamic pools, in the order they were installed. `None` on
+    /// a backend that does not report them.
+    pub fn memory_pool_report(&self) -> Option<Vec<SlicedPoolReport>> {
+        Dispatch::memory_pool_report(self.as_dispatch())
+    }
+
+    /// What this device's allocator currently holds. `None` on a backend that
+    /// does not report it.
+    pub fn memory_pool_usage(&self) -> Option<MemoryPoolUsage> {
+        Dispatch::memory_pool_usage(self.as_dispatch())
+    }
+
     /// Prepares the given data for transfer between the CPU and accelerator devices such as GPUs.
     ///
     /// Depending on the backend, the data may be transferred to pinned memory
@@ -665,12 +798,19 @@ impl Device {
 
     /// Returns the [`DeviceSettings`] for this device.
     ///
-    /// Settings include the default float and integer data types used when creating
+    /// Settings include the default float, integer, and boolean data types used when creating
     /// tensors on this device.
     ///
-    /// See [`configure`](Device::configure) to configure them.
+    /// Before initialization, returns a snapshot of the backend defaults without locking them.
+    /// Another thread may configure the device afterward, so subsequent tensor operations may use
+    /// different settings. [Configure the device](Device::configure) before relying on its defaults.
     pub fn settings(&self) -> DeviceSettings {
         cortex_backend::get_device_settings::<Dispatch>(self.as_dispatch())
+    }
+
+    /// Returns settings for tensor operations, initializing them to defaults if unset.
+    pub(crate) fn get_or_init_settings(&self) -> DeviceSettings {
+        cortex_backend::get_or_init_device_settings::<Dispatch>(self.as_dispatch())
     }
 
     /// Configures the [settings](DeviceSettings) for this device.
@@ -678,23 +818,27 @@ impl Device {
     /// This configures the dtype used when no explicit type is specified at tensor
     /// creation time.
     ///
-    /// Settings can only be initialized once per device, and must happen before any
-    /// tensor is created on the device. The first tensor operation will lock the device
-    /// to its defaults, causing subsequent initializations attempt to return
-    /// [`DeviceError::AlreadyInitialized`].
+    /// Settings can only be initialized once per device. Configure defaults before creating
+    /// tensors or initializing model parameters: tensor creation locks them to the backend's
+    /// defaults, even with an explicit dtype, and any later call returns
+    /// [`DeviceError::AlreadyInitialized`]. Querying [`settings`](Device::settings) does not lock them.
+    ///
+    /// Individual tensors can still use an explicit supported dtype at creation or be converted
+    /// with [`Tensor::cast`](crate::Tensor::cast); neither changes the defaults.
     ///
     /// # Errors
     ///
-    /// Returns [`DeviceError::AlreadyInitialized`] if settings have already been set
-    /// for this device (either by a prior call or because a tensor operation has
-    /// already occurred).
+    /// Returns [`DeviceError::UnsupportedDType`] if a requested dtype is unsupported.
+    /// Returns [`DeviceError::AlreadyInitialized`] if settings have already been initialized
+    /// for this device, either by a prior call or by a tensor operation.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let device = Default::default();
+    /// use cortex_tensor::{Device, FloatDType, Int, IntDType, Tensor};
     ///
-    /// device.configure((FloatDType::F16, IntDType::I32))?
+    /// let mut device = Device::cuda(0);
+    /// device.configure((FloatDType::F16, IntDType::I32))?;
     ///
     /// // Float tensors will now use F16
     /// let floats = Tensor::<2>::zeros([2, 3], &device);
@@ -720,21 +864,21 @@ impl Device {
 
     /// Retrieves all available [`Device`]s that match the given [`DeviceType`] filter.
     ///
-    /// Local backends (CPU, CUDA, WGPU, …) enumerate the hardware found on the host. The
-    /// [`Remote`](DeviceType::Remote) variant instead lists every device hosted by the
-    /// `cortex-remote` server at the given address — it connects to the server to learn how
-    /// many devices it exposes:
+    /// Backends enumerate the hardware found on this machine, and `DeviceType::Remote` every
+    /// device a remote server hosts:
     ///
     /// ```rust,ignore
     /// // Every CUDA device on this machine.
     /// let local = Device::enumerate(DeviceType::Cuda);
     ///
-    /// // Every device hosted by a remote server.
-    /// let remote = Device::enumerate(DeviceType::remote_websocket("ws://host:3000"));
-    ///
     /// // Filters combine with `|`.
-    /// let both = Device::enumerate(DeviceType::Cuda | DeviceType::remote_websocket("ws://host:3000"));
+    /// let both = Device::enumerate(DeviceType::Cuda | DeviceType::Remote(host));
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Where `RemoteHost::devices` returns an error for a `DeviceType::Remote`, and on wasm for any
+    /// `DeviceType::Remote`, which a browser can only list with `RemoteHost::devices_async`.
     pub fn enumerate(filter: impl Into<DeviceFilter>) -> Devices {
         #[allow(unused)]
         let mut devices = Vec::new();
@@ -743,33 +887,54 @@ impl Device {
         for device_type in filter.into() {
             #[allow(unused)]
             let type_id = match device_type {
+                // The cubecl runtimes are one dispatch backend, so `DispatchDeviceId::Cube`
+                // would list every runtime's devices at once. These name the runtime the
+                // caller asked for instead. `Metal`, `Vulkan` and `WebGpu` pin wgpu to the
+                // requested graphics API; `Wgpu` leaves the API to auto-selection.
                 #[cfg(feature = "cpu")]
-                DeviceType::Cpu => DispatchDeviceId::Cpu,
+                DeviceType::Cpu => {
+                    push_cube(&mut devices, RuntimeId::Cpu);
+                    continue;
+                }
                 #[cfg(feature = "cuda")]
-                DeviceType::Cuda => DispatchDeviceId::Cuda,
+                DeviceType::Cuda => {
+                    push_cube(&mut devices, RuntimeId::Cuda);
+                    continue;
+                }
                 #[cfg(feature = "rocm")]
-                DeviceType::Rocm => DispatchDeviceId::Rocm,
+                DeviceType::Rocm => {
+                    push_cube(&mut devices, RuntimeId::Hip);
+                    continue;
+                }
                 #[cfg(feature = "wgpu")]
-                DeviceType::Wgpu => DispatchDeviceId::Wgpu,
+                DeviceType::Wgpu => {
+                    push_cube(&mut devices, RuntimeId::Wgpu);
+                    continue;
+                }
                 #[cfg(feature = "metal")]
-                DeviceType::Metal => DispatchDeviceId::Metal,
+                DeviceType::Metal => {
+                    push_wgpu(&mut devices, WgpuBackend::Metal);
+                    continue;
+                }
                 #[cfg(feature = "vulkan")]
-                DeviceType::Vulkan => DispatchDeviceId::Vulkan,
+                DeviceType::Vulkan => {
+                    push_wgpu(&mut devices, WgpuBackend::Vulkan);
+                    continue;
+                }
                 #[cfg(feature = "webgpu")]
-                DeviceType::WebGpu => DispatchDeviceId::WebGpu,
+                DeviceType::WebGpu => {
+                    push_wgpu(&mut devices, WgpuBackend::WebGpu);
+                    continue;
+                }
                 #[cfg(feature = "flex")]
                 DeviceType::Flex => DispatchDeviceId::Flex,
                 #[cfg(feature = "ndarray")]
                 DeviceType::NdArray => DispatchDeviceId::NdArray,
                 #[cfg(feature = "tch")]
                 DeviceType::LibTorch => DispatchDeviceId::LibTorch,
-                // Remote devices are keyed by address, not a backend type id, so they take a
-                // dedicated enumeration path (connecting to the server for its device count).
-                #[cfg(feature = "remote-websocket")]
-                DeviceType::Remote(address) => {
-                    for device in Dispatch::enumerate_remote_websocket(&address) {
-                        devices.push(Device::new(device));
-                    }
+                #[cfg(feature = "remote")]
+                DeviceType::Remote(host) => {
+                    devices.extend(host.enumerate());
                     continue;
                 }
             };
@@ -783,12 +948,58 @@ impl Device {
         Devices(devices)
     }
 
+    /// Who this device is: the part's name, what its kernels are compiled for and, for a card
+    /// on a bus, the card itself. `None` for a backend that does not report one. Opens the
+    /// device.
+    #[cfg(feature = "cubecl")]
+    pub fn identity(&self) -> Option<DeviceIdentity> {
+        self.as_dispatch().identity()
+    }
+
+    /// Every card this build can reach, once each, with the devices that reach it.
+    ///
+    /// A card visible to two runtimes (an NVIDIA GPU under CUDA and under Vulkan) is one entry
+    /// holding both devices, so a caller placing work on cards never puts two stages on one
+    /// card by another name. Opens every device of every runtime, so call it once and keep
+    /// the answer.
+    #[cfg(any(feature = "cpu", feature = "cuda", feature = "rocm", feature = "wgpu"))]
+    pub fn enumerate_physical() -> Vec<PhysicalGpu> {
+        let mut gpus: Vec<PhysicalGpu> = Vec::new();
+        for device in Dispatch::enumerate(DispatchDeviceId::Cube) {
+            let device = Device::new(device);
+            let Some(DeviceIdentity {
+                name,
+                physical: Some(physical),
+                ..
+            }) = device.identity()
+            else {
+                continue;
+            };
+            match gpus
+                .iter_mut()
+                .find(|gpu| gpu.physical.is_same_card(&physical))
+            {
+                Some(gpu) => {
+                    gpu.physical.fill_from(&physical);
+                    gpu.devices.0.push(device);
+                }
+                None => gpus.push(PhysicalGpu {
+                    physical,
+                    name,
+                    devices: Devices(vec![device]),
+                }),
+            }
+        }
+        gpus
+    }
+
     /// Measure peak compute and memory throughput for this device.
     ///
     /// Runs cubecl-std's throughput benchmarks for each [`ThroughputKey`],
-    /// returning one [`ThroughputStat`] per key (in the same order). Only
-    /// cubecl-backed devices (cuda, wgpu, ...) report measurements; other
-    /// backends return an empty vector.
+    /// returning one [`ThroughputStat`] per key (in the same order). A key the
+    /// device has no peak for keeps its place, carrying the [`ThroughputError`]
+    /// saying why. Only cubecl-backed devices (cuda, wgpu, ...) report
+    /// measurements; other backends return an empty vector.
     #[cfg(feature = "cubecl")]
     pub fn performance_stats(&self, keys: &[ThroughputKey]) -> Vec<ThroughputStat> {
         self.as_dispatch()
@@ -800,14 +1011,27 @@ impl Device {
     }
 }
 
+/// One card and every device that reaches it, from [`Device::enumerate_physical`].
+#[cfg(any(feature = "cpu", feature = "cuda", feature = "rocm", feature = "wgpu"))]
+#[derive(Debug, Clone)]
+pub struct PhysicalGpu {
+    /// The card's PCI address, Windows LUID and vendor, from whichever of its runtimes reported
+    /// each.
+    pub physical: PhysicalDevice,
+    /// The part as the first runtime that reached it names it.
+    pub name: String,
+    /// Every device that runs on this card, one per runtime that reaches it.
+    pub devices: Devices,
+}
+
 /// A single peak-throughput measurement produced by [`Device::performance_stats`].
 #[cfg(feature = "cubecl")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThroughputStat {
     /// The measurement key (mode + dtype) that was benchmarked.
     pub key: ThroughputKey,
-    /// The measured throughput for that key.
-    pub value: ThroughputValue,
+    /// The measured throughput for that key, or why the device has none.
+    pub value: Result<ThroughputValue, ThroughputError>,
 }
 
 /// Short, column-friendly name for a throughput mode.
@@ -816,7 +1040,11 @@ fn mode_label(mode: &ThroughputMode) -> &'static str {
     match mode {
         ThroughputMode::ComputeDirect { .. } => "compute-direct",
         ThroughputMode::ComputeCmma { .. } => "compute-cmma",
-        ThroughputMode::Memory => "memory",
+        ThroughputMode::Memory(spec) => match spec.access {
+            MemoryAccess::Copy => "memory",
+            MemoryAccess::Read => "memory-read",
+            MemoryAccess::Write => "memory-write",
+        },
         ThroughputMode::Launch => "launch",
     }
 }
@@ -836,51 +1064,101 @@ impl core::fmt::Display for ThroughputStat {
             ThroughputMode::ComputeDirect { dtype } | ThroughputMode::ComputeCmma { dtype, .. } => {
                 alloc::format!("{dtype}")
             }
-            ThroughputMode::Memory | ThroughputMode::Launch => alloc::string::String::new(),
+            ThroughputMode::Memory(_) | ThroughputMode::Launch => alloc::string::String::new(),
         };
 
-        let value = self.value.format(&self.key);
+        let value = match &self.value {
+            Ok(value) => value.format(&self.key),
+            Err(error) => alloc::format!("{error}"),
+        };
 
         write!(f, "{mode:<14} {dtype:<5} {value}")
     }
 }
 
-/// Map our backend-agnostic [`DeviceKind`] onto cubecl's `WgpuDevice` enum.
+/// Append every device of the cubecl `runtime` to `devices`, skipping any already listed.
 ///
-/// Shared by [`Device::wgpu`], [`Device::vulkan`], [`Device::metal`], and
-/// [`Device::webgpu`], which differ only in which Cargo feature gates them.
-#[cfg(feature = "wgpu")]
-fn wgpu_device(device_kind: DeviceKind) -> cortex_dispatch::devices::WgpuDevice {
-    use cortex_dispatch::devices::WgpuDevice;
-    match device_kind {
-        DeviceKind::DiscreteGpu(i) => WgpuDevice::DiscreteGpu(i),
-        DeviceKind::IntegratedGpu(i) => WgpuDevice::IntegratedGpu(i),
-        DeviceKind::VirtualGpu(i) => WgpuDevice::VirtualGpu(i),
-        DeviceKind::Cpu => WgpuDevice::Cpu,
-        DeviceKind::DefaultDevice => WgpuDevice::DefaultDevice,
-        DeviceKind::Existing(id) => WgpuDevice::Existing(id),
+/// A filter can name the same runtime twice (e.g. two `DeviceType::Cuda` entries),
+/// and a caller enumerating hardware should see each device once.
+#[cfg(any(feature = "cpu", feature = "cuda", feature = "rocm", feature = "wgpu"))]
+fn push_cube(devices: &mut Vec<Device>, runtime: RuntimeId) {
+    for device in Dispatch::enumerate_cube(runtime) {
+        let device = Device::new(device);
+        if !devices.contains(&device) {
+            devices.push(device);
+        }
     }
 }
 
-#[cfg(all(feature = "wgpu", target_family = "wasm"))]
-// TODO: this is only helpful for the default graphics api and runtime options.. we'd have to expose other methods but that leaks the types
-// so we might have to introduce some wrapper types.
-async fn wgpu_init_async(device_kind: DeviceKind) -> cortex_dispatch::devices::WgpuDevice {
-    use cortex_dispatch::backends::wgpu::{graphics::AutoGraphicsApi, init_setup_async};
+/// Append every wgpu device on `backend`, skipping any already listed.
+#[cfg(any(feature = "metal", feature = "vulkan", feature = "webgpu"))]
+fn push_wgpu(devices: &mut Vec<Device>, backend: WgpuBackend) {
+    push_wgpu_with(
+        devices,
+        backend,
+        cortex_dispatch::devices::CubeDevice::enumerate,
+    );
+}
 
-    let device = wgpu_device(device_kind);
-    init_setup_async::<AutoGraphicsApi>(&device, Default::default()).await;
-    device
+#[cfg(any(feature = "metal", feature = "vulkan", feature = "webgpu"))]
+fn push_wgpu_with(
+    devices: &mut Vec<Device>,
+    backend: WgpuBackend,
+    mut enumerate: impl FnMut(DeviceId) -> Vec<DeviceId>,
+) {
+    use cortex_dispatch::devices::{CubeDevice, WgpuDevice, WgpuDeviceKind};
+
+    // Enumeration preserves the seed's kind and graphics API. Ask for each concrete
+    // kind on the requested API: Auto may expose different kinds or fewer adapters.
+    // DefaultDevice is an alias, and Existing devices cannot be discovered.
+    for kind in [
+        WgpuDeviceKind::DiscreteGpu(0),
+        WgpuDeviceKind::IntegratedGpu(0),
+        WgpuDeviceKind::VirtualGpu(0),
+        WgpuDeviceKind::Cpu,
+        WgpuDeviceKind::Other(0),
+    ] {
+        let seed = CubeDevice::Wgpu(WgpuDevice::new(kind).on(backend));
+        for id in enumerate(seed.to_id()) {
+            let device = Device::new(CubeDevice::from_id(id));
+            if !devices.contains(&device) {
+                devices.push(device);
+            }
+        }
+    }
+}
+
+/// Map our backend-agnostic [`DeviceKind`] onto cubecl's `WgpuDevice`, on `backend`.
+///
+/// Shared by [`Device::wgpu`], which leaves the graphics API to the runtime, and
+/// [`Device::vulkan`], [`Device::metal`] and [`Device::webgpu`], which each pin theirs.
+#[cfg(feature = "wgpu")]
+pub(crate) fn wgpu_device(
+    device_kind: DeviceKind,
+    backend: cortex_dispatch::devices::WgpuBackend,
+) -> cortex_dispatch::devices::WgpuDevice {
+    use cortex_dispatch::devices::{WgpuDevice, WgpuDeviceKind};
+
+    let kind = match device_kind {
+        DeviceKind::DiscreteGpu(i) => WgpuDeviceKind::DiscreteGpu(i),
+        DeviceKind::IntegratedGpu(i) => WgpuDeviceKind::IntegratedGpu(i),
+        DeviceKind::VirtualGpu(i) => WgpuDeviceKind::VirtualGpu(i),
+        DeviceKind::Cpu => WgpuDeviceKind::Cpu,
+        DeviceKind::DefaultDevice => WgpuDeviceKind::DefaultDevice,
+        DeviceKind::Existing(id) => WgpuDeviceKind::Existing(id),
+    };
+
+    WgpuDevice::new(kind).on(backend)
 }
 
 /// Represents the devices that can be used.
 ///
-/// `DeviceType` is used to filter the available device types for [`Device::enumerate`]. Most
-/// variants are fieldless and select a backend's local hardware; [`Remote`](Self::Remote)
-/// carries the network address of a `cortex-remote` server whose devices should be listed.
+/// `DeviceType` is used to filter the available device types for [`Device::enumerate`]. Each
+/// variant selects a backend's hardware on this machine, except `Remote`, which selects a remote
+/// server's devices.
 ///
 /// Variants combine into a [`DeviceFilter`] with the `|` operator, so a single
-/// [`Device::enumerate`] call can span several backends and remote hosts.
+/// [`Device::enumerate`] call can span several backends and remote servers.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceType {
@@ -904,29 +1182,17 @@ pub enum DeviceType {
     NdArray,
     #[cfg(feature = "tch")]
     LibTorch,
-    /// Devices hosted by the `cortex-remote` server at the given address
-    /// (e.g. `"ws://host:3000"`). Unlike the other variants this is resolved at runtime by
-    /// connecting to the server, which reports how many devices it exposes.
-    #[cfg(feature = "remote-websocket")]
-    Remote(String),
-}
-
-#[cfg(feature = "remote-websocket")]
-impl DeviceType {
-    /// Filter selecting every device hosted by the `cortex-remote` server at `address`
-    /// (e.g. `"ws://host:3000"`).
-    ///
-    /// Convenience for [`DeviceType::Remote`] that accepts anything string-like.
-    pub fn remote_websocket(address: impl Into<String>) -> Self {
-        DeviceType::Remote(address.into())
-    }
+    /// Every device the remote server `host` hosts, connected on first use like any listed device.
+    /// [`RemoteHost::devices`](crate::remote::RemoteHost::devices) does the same and returns an
+    /// error where `enumerate` panics.
+    #[cfg(feature = "remote")]
+    Remote(crate::remote::RemoteHost),
 }
 
 /// A set of [`DeviceType`]s passed to [`Device::enumerate`].
 ///
 /// Built from a single [`DeviceType`], a `Vec<DeviceType>`, or by combining variants with the
-/// `|` operator (`DeviceType::Cuda | DeviceType::Cpu`). Because [`DeviceType::Remote`] carries
-/// an address, this is a plain list rather than a bitset.
+/// `|` operator (`DeviceType::Cuda | DeviceType::Cpu`).
 #[derive(Debug, Clone, Default)]
 pub struct DeviceFilter(Vec<DeviceType>);
 
@@ -1062,19 +1328,33 @@ impl From<(FloatDType, IntDType)> for DeviceConfig {
 ///
 /// `Devices` dereferences to a slice of [`Device`], so it can be iterated,
 /// indexed, and passed anywhere a `&[Device]` is expected.
+#[derive(Debug, Clone)]
 pub struct Devices(Vec<Device>);
 
 impl Devices {
     /// Enables autodiff across all contained devices.
     ///
-    /// Only first-order autodiff is supported. Calling this method on a device that
-    /// already has autodiff enabled will panic.
+    /// Devices that already have autodiff enabled are left unchanged, preserving their
+    /// gradient-checkpointing strategy.
     ///
     /// See [`Device::autodiff`].
     #[cfg(feature = "autodiff")]
+    #[must_use]
     pub fn autodiff(mut self) -> Self {
         for device in &mut self.0 {
             *device = core::mem::take(device).autodiff();
+        }
+
+        self
+    }
+
+    /// Removes the autodiff association from every contained device.
+    ///
+    /// See [`Device::without_autodiff`].
+    #[must_use]
+    pub fn without_autodiff(mut self) -> Self {
+        for device in &mut self.0 {
+            *device = core::mem::take(device).without_autodiff();
         }
 
         self
@@ -1085,10 +1365,11 @@ impl Devices {
     /// This configures the dtype used when no explicit type is specified at tensor
     /// creation time.
     ///
-    /// Settings can only be initialized once per device, and must happen before any
-    /// tensor is created on the device. The first tensor operation will lock the device
-    /// to its defaults, causing subsequent initializations attempt to return
-    /// [`DeviceError::AlreadyInitialized`].
+    /// Settings can only be initialized once per device. Configure defaults before creating
+    /// tensors or initializing model parameters; tensor creation locks them, even with an explicit
+    /// dtype. Querying [`Device::settings`] does not lock them.
+    ///
+    /// Stops at the first error; devices configured before it keep their settings.
     ///
     /// See [`Device::configure`].
     pub fn configure(&mut self, config: impl Into<DeviceConfig>) -> Result<(), DeviceError> {
@@ -1106,6 +1387,12 @@ impl Devices {
 }
 
 // Loop over `&Devices` or `Devices` seamlessly
+impl FromIterator<Device> for Devices {
+    fn from_iter<I: IntoIterator<Item = Device>>(devices: I) -> Self {
+        Self(devices.into_iter().collect())
+    }
+}
+
 impl IntoIterator for Devices {
     type Item = Device;
     type IntoIter = alloc::vec::IntoIter<Device>;
@@ -1121,13 +1408,82 @@ impl core::ops::Deref for Devices {
     }
 }
 
+#[cfg(all(test, feature = "capture"))]
+mod capture_tests {
+    use super::*;
+
+    #[cfg(all(feature = "flex", feature = "autodiff"))]
+    #[test]
+    #[should_panic(expected = "Cannot move a tensor to a capture device with autodiff enabled")]
+    fn capture_transfer_rejects_autodiff_context() {
+        let tensor = crate::Tensor::<1, crate::Int>::from_ints([1, 2], &Device::flex().autodiff());
+        let capture = Device::capture();
+        let _ = capture.capture_scope(|scope| {
+            let _ = tensor.to_device(&capture);
+            scope.complete([], [])
+        });
+    }
+
+    #[cfg(all(feature = "flex", feature = "autodiff"))]
+    #[test]
+    #[should_panic(expected = "Cannot move a tensor to a capture device with autodiff enabled")]
+    fn capture_float_transfer_rejects_autodiff_context() {
+        let tensor =
+            crate::Tensor::<1>::from_floats([1.0, 2.0], &Device::flex().autodiff()).require_grad();
+        let capture = Device::capture();
+        let _ = capture.capture_scope(|scope| {
+            let _ = tensor.to_device(&capture);
+            scope.complete([], [])
+        });
+    }
+
+    #[test]
+    fn user_facing_capture_device_supports_repeated_scopes() {
+        let device = Device::capture();
+
+        let first = device
+            .capture_scope(|scope| scope.complete([], []))
+            .unwrap();
+        let second = device
+            .capture_scope(|scope| scope.complete([], []))
+            .unwrap();
+
+        assert!(first.graph.operations.is_empty());
+        assert!(second.graph.operations.is_empty());
+    }
+
+    #[test]
+    fn capture_scope_rejects_a_non_capture_device() {
+        let device = Device::default();
+
+        let result = device.capture_scope(|scope| scope.complete([], []));
+
+        assert!(matches!(result, Err(CaptureError::InvalidDevice)));
+    }
+
+    #[test]
+    fn capture_device_reports_recordable_dtype_support() {
+        let device = Device::capture();
+
+        let captured = device.capture_scope(|scope| {
+            assert!(device.supports_dtype(FloatDType::F32));
+            assert!(device.supports_dtype(FloatDType::F64));
+            assert!(device.supports_dtype(FloatDType::BF16));
+            assert!(device.supports_dtype(IntDType::I32));
+            assert!(device.supports_dtype(BoolDType::Native));
+            scope.complete([], [])
+        });
+
+        assert!(captured.is_ok());
+    }
+}
+
 #[cfg(all(test, feature = "flex", feature = "autodiff"))]
 mod autodiff_move_tests {
-    use crate::{Device, Tensor};
+    use crate::{Bool, Device, GradientCheckpointingStrategy, Int, Tensor, TensorData};
 
-    // A non-tracked float tensor (e.g. a gradient) can be moved onto an autodiff device; it
-    // lands on the underlying hardware and stays non-tracked. Regression test for a panic in
-    // `float_to_device` ("Cannot move between autodiff and non-autodiff instances").
+    // A tensor without autodiff (e.g. a gradient) can be moved onto an autodiff device; it lands
+    // on the underlying hardware and stays outside autodiff.
     #[test]
     fn move_non_autodiff_float_tensor_to_autodiff_device() {
         let device = Device::default();
@@ -1136,9 +1492,184 @@ mod autodiff_move_tests {
         let t = Tensor::<2>::from_floats([[1.0, 2.0], [3.0, 4.0]], &device);
         let moved = t.to_device(&ad_device);
 
+        assert!(!moved.is_autodiff());
+        assert!(!moved.is_tracked());
         assert_eq!(
-            moved.to_data().to_vec::<f32>().unwrap(),
+            moved.try_into_vec_as::<f32>().unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
         );
+    }
+
+    #[test]
+    fn move_autodiff_tensor_preserves_association_strategy_and_graph() {
+        let device = Device::default();
+        let ad_device = device.clone().autodiff().gradient_checkpointing();
+
+        let tensor = Tensor::<1>::from_floats([1.0, 2.0], &ad_device).require_grad();
+        let moved = tensor.clone().to_device(&device);
+
+        assert!(moved.is_autodiff());
+        assert!(moved.is_tracked());
+        // The transfer is a differentiable operation, so its result is a derived tensor whose own
+        // gradient isn't retained by default.
+        assert!(!moved.is_require_grad());
+        assert_eq!(
+            moved.gradient_checkpointing_strategy(),
+            Some(GradientCheckpointingStrategy::Balanced)
+        );
+
+        let grads = moved.sum().backward();
+        tensor
+            .grad(&grads)
+            .expect("the transfer should preserve the graph")
+            .into_data()
+            .assert_eq(&TensorData::from([1.0f32, 1.0]), true);
+    }
+
+    #[test]
+    fn move_non_float_tensors_preserves_context() {
+        let device = Device::default();
+        let ad_device = device.clone().autodiff().gradient_checkpointing();
+
+        let plain_int = Tensor::<1, Int>::from_ints([1, 2], &device).to_device(&ad_device);
+        assert!(!plain_int.is_autodiff());
+
+        let autodiff_bool =
+            Tensor::<1, Bool>::from_bool([true, false], &ad_device).to_device(&device);
+        assert!(autodiff_bool.is_autodiff());
+        assert_eq!(
+            autodiff_bool.gradient_checkpointing_strategy(),
+            Some(GradientCheckpointingStrategy::Balanced)
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Gradient checkpointing requires autodiff; use Device::autodiff().gradient_checkpointing()"
+    )]
+    fn gradient_checkpointing_requires_autodiff() {
+        let _ = Device::default().gradient_checkpointing();
+    }
+}
+
+#[cfg(all(test, feature = "cuda", feature = "wgpu"))]
+mod tests {
+    use super::*;
+
+    /// `cargo test -p cortex-tensor --features cuda,wgpu a_card_reached_by_two_runtimes -- --ignored`
+    #[test]
+    #[ignore = "needs an NVIDIA card reachable through CUDA and Vulkan"]
+    fn a_card_reached_by_two_runtimes_is_listed_once() {
+        let gpus = Device::enumerate_physical();
+        let nvidia: Vec<_> = gpus
+            .iter()
+            .filter(|gpu| gpu.physical.vendor == Some(PciVendor::Nvidia))
+            .collect();
+        assert!(!nvidia.is_empty(), "no NVIDIA card in {gpus:?}");
+        for gpu in &nvidia {
+            assert!(
+                gpu.physical.pci_address.is_some(),
+                "{} has no PCI address",
+                gpu.name
+            );
+            assert!(
+                gpu.devices.len() >= 2,
+                "{} is reached by {:?} only",
+                gpu.name,
+                gpu.devices
+            );
+        }
+        for (i, gpu) in gpus.iter().enumerate() {
+            for other in &gpus[i + 1..] {
+                assert!(
+                    !gpu.physical.is_same_card(&other.physical),
+                    "one card listed twice: {gpu:?} and {other:?}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(test, any(feature = "metal", feature = "vulkan", feature = "webgpu")))]
+mod enumerate_wgpu_tests {
+    use super::*;
+    use cortex_dispatch::devices::{CubeDevice, WgpuDevice, WgpuDeviceKind};
+
+    fn cube_device(kind: WgpuDeviceKind, backend: WgpuBackend) -> CubeDevice {
+        CubeDevice::Wgpu(WgpuDevice::new(kind).on(backend))
+    }
+
+    #[test]
+    fn enumerate_requested_api_independently_of_auto() {
+        for backend in [WgpuBackend::Metal, WgpuBackend::Vulkan, WgpuBackend::WebGpu] {
+            // An existing Auto device must not limit discovery on the requested API
+            // or be deduplicated with a device pinned to that API.
+            let auto = cube_device(WgpuDeviceKind::DiscreteGpu(0), WgpuBackend::Auto);
+            let expected = [
+                WgpuDeviceKind::DiscreteGpu(0),
+                WgpuDeviceKind::DiscreteGpu(1),
+                WgpuDeviceKind::IntegratedGpu(0),
+                WgpuDeviceKind::VirtualGpu(0),
+                WgpuDeviceKind::Cpu,
+                WgpuDeviceKind::Other(0),
+            ]
+            .map(|kind| cube_device(kind, backend));
+            let enumerate = |seed: DeviceId| {
+                let CubeDevice::Wgpu(seed_device) = CubeDevice::from_id(seed) else {
+                    panic!("expected a wgpu seed");
+                };
+                assert_eq!(seed_device.backend, backend);
+                expected
+                    .iter()
+                    .filter(|device| device.to_id().type_id == seed.type_id)
+                    .map(CubeDevice::to_id)
+                    .collect()
+            };
+
+            let mut devices = vec![Device::new(auto.clone())];
+            push_wgpu_with(&mut devices, backend, enumerate);
+            let expected_devices: Vec<_> = core::iter::once(&auto)
+                .chain(expected.iter())
+                .cloned()
+                .map(Device::new)
+                .collect();
+            assert_eq!(devices, expected_devices);
+
+            push_wgpu_with(&mut devices, backend, enumerate);
+            assert_eq!(
+                devices, expected_devices,
+                "repeated filters must not duplicate devices"
+            );
+        }
+    }
+
+    #[test]
+    fn enumerate_unavailable_api_is_empty() {
+        let mut devices = Vec::new();
+        push_wgpu_with(&mut devices, WgpuBackend::Vulkan, |_| Vec::new());
+        assert!(devices.is_empty());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn enumerate_pins_the_graphics_api() {
+        let cases = [
+            #[cfg(feature = "metal")]
+            (DeviceType::Metal, WgpuBackend::Metal),
+            #[cfg(feature = "vulkan")]
+            (DeviceType::Vulkan, WgpuBackend::Vulkan),
+            #[cfg(feature = "webgpu")]
+            (DeviceType::WebGpu, WgpuBackend::WebGpu),
+        ];
+        for (device_type, backend) in cases {
+            for device in Device::enumerate(device_type).iter() {
+                match device.as_dispatch() {
+                    DispatchDevice::Cube(CubeDevice::Wgpu(wgpu)) => {
+                        assert_eq!(wgpu.backend, backend);
+                    }
+                    other => panic!("expected a wgpu device, got {other:?}"),
+                }
+            }
+        }
     }
 }

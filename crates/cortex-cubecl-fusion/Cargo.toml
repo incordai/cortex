@@ -7,7 +7,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "gpu"]
 license.workspace = true
 name = "cortex-cubecl-fusion"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-cubecl-fusion"
 version.workspace = true
 
@@ -36,6 +36,7 @@ cortex-std = { workspace = true, features = ["default"] }
 cubecl = { workspace = true }
 cubek = { workspace = true, features = [
     "matmul",
+    "matmul-multi-level",
     "reduce",
     "quantization",
     "stdlib",
@@ -47,7 +48,7 @@ cortex-backend = { workspace = true, features = ["cubecl"] }
 
 derive-new = { workspace = true }
 hashbrown = { workspace = true }
-rmp-serde = { workspace = true }
+ciborium = { workspace = true }
 serde = { workspace = true }
 spin = { workspace = true }
 

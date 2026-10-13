@@ -140,36 +140,48 @@ Most backends support all operating systems, so we don't mention them in the tab
 | Wasm   | -            | ☑️   | -        |
 | no-std | -            | ☑️   | -        |
 
+The two native CPU backends are independent. [Cpu](https://github.com/tracel-ai/burn/tree/main/crates/burn-cpu) (`cpu` feature) is the CubeCL
+runtime for the CPU: it JIT-compiles the same kernels as the GPU backends through LLVM and supports
+fusion. [Flex](https://github.com/tracel-ai/burn/tree/main/crates/burn-flex) (`flex` feature) is a pure-Rust eager backend with no
+native dependencies that also runs on Wasm and `no_std`.
+
+> **Note:** The LibTorch backend is deprecated as of `0.22.0` and will be removed in a future
+> release. For GPU acceleration, use a [CubeCL](https://github.com/tracel-ai/cubecl) backend (CUDA,
+> ROCm, Metal, Vulkan, WebGPU). For CPU execution, use the CubeCL CPU backend or `cortex-flex`.
+
 <br />
 
-Compared to other frameworks, Cortex has a very different approach to supporting many backends. By
-design, most code is generic over the Backend trait, which allows us to build Cortex with swappable
-backends. This makes composing backend possible, augmenting them with additional functionalities
-such as autodifferentiation and automatic kernel fusion.
+Cortex's backend architecture lets you swap backends while keeping the same model code. You can enable
+multiple backends in the same application and choose the device for your tensors and modules at
+runtime through `Device`. This gives you the freedom to use different backends side by side and
+select the hardware best suited to each workload.
+
+Autodifferentiation and automatic kernel fusion integrate with the same tensor and module APIs, so
+models benefit from these capabilities on supported backends without changing their implementation.
 
 <details>
 <summary>
-Autodiff: Backend decorator that brings backpropagation to any backend 🔄
+Autodiff: Bringing backpropagation to any backend 🔄
 </summary>
 <br />
 
-Contrary to the aforementioned backends, Autodiff is actually a backend _decorator_. This means that
-it cannot exist by itself; it must encapsulate another backend.
+In application code, autodiff is runtime context carried by tensors. Devices provide the default
+context for newly created tensors, and each tensor can later enable or remove autodiff
+independently. Enabling autodiff permits graph recording; it does not by itself make a tensor retain
+gradients.
 
-The simple act of wrapping a base backend with Autodiff transparently equips it with
-autodifferentiation support, making it possible to call backward on your model.
+Internally, Cortex implements this by decorating a concrete backend, so autodiff cannot execute by
+itself. Enable it on a device before creating tensors or initializing a model. With the `autodiff`
+and `wgpu` features enabled:
 
 ```rust
-use cortex::backend::{Autodiff, Wgpu};
-use cortex::tensor::{Distribution, Tensor};
+use cortex::tensor::{Device, Distribution, Tensor};
 
 fn main() {
-    type Backend = Autodiff<Wgpu>;
+    let device = Device::wgpu(Default::default()).autodiff();
 
-    let device = Default::default();
-
-    let x: Tensor<Backend, 2> = Tensor::random([32, 32], Distribution::Default, &device);
-    let y: Tensor<Backend, 2> = Tensor::random([32, 32], Distribution::Default, &device).require_grad();
+    let x: Tensor<2> = Tensor::random([32, 32], Distribution::Default, &device);
+    let y: Tensor<2> = Tensor::random([32, 32], Distribution::Default, &device).require_grad();
 
     let tmp = x.clone() + y.clone();
     let tmp = tmp.matmul(x);
@@ -181,17 +193,18 @@ fn main() {
 }
 ```
 
-Of note, it is impossible to make the mistake of calling backward on a model that runs on a backend
-that does not support autodiff (for inference), as this method is only offered by an Autodiff
-backend.
+`backward()` checks graph participation at runtime. Enable autodiff before the forward pass and call
+`require_grad()` on source leaves whose gradients you need. `is_autodiff()`, `is_tracked()`, and
+`is_require_grad()` inspect autodiff association, graph participation, and gradient retention
+respectively. See the [autodiff guide](https://github.com/tracel-ai/burn/blob/main/burn-book/src/building-blocks/autodiff.md).
 
-See the [Autodiff Backend README](./crates/cortex-autodiff/README.md) for more details.
+See the [Autodiff Backend README](https://github.com/tracel-ai/burn/blob/main/crates/burn-autodiff/README.md) for more details.
 
 </details>
 
 <details>
 <summary>
-Fusion: Backend decorator that brings kernel fusion to all first-party backends
+Fusion: Backend decorator that brings kernel fusion to supported backends
 </summary>
 <br />
 
@@ -202,17 +215,16 @@ feature flag), so you typically don't need to apply it manually.
 
 ```rust
 #[cfg(not(feature = "fusion"))]
-pub type Cuda<F = f32, I = i32> = CubeBackend<CudaRuntime, F, I, u8>;
+pub type Cube = cortex_cubecl::CubeBackend;
 
 #[cfg(feature = "fusion")]
-pub type Cuda<F = f32, I = i32> = cortex_fusion::Fusion<CubeBackend<CudaRuntime, F, I, u8>>;
+pub type Cube = cortex_fusion::Fusion<cortex_cubecl::CubeBackend>;
 ```
 
-Of note, we plan to implement automatic gradient checkpointing based on compute bound and memory
-bound operations, which will work gracefully with the fusion backend to make your code run even
-faster during training, see [this issue](https://github.com/tracel-ai/burn/issues/936).
+`Device::autodiff().gradient_checkpointing()` enables the balanced gradient-checkpointing strategy,
+which trades recomputation for reduced activation storage during training.
 
-See the [Fusion Backend README](./crates/cortex-fusion/README.md) for more details.
+See the [Fusion Backend README](https://github.com/tracel-ai/burn/blob/main/crates/burn-fusion/README.md) for more details.
 
 </details>
 
@@ -222,27 +234,28 @@ Remote (Beta): Backend decorator for remote backend execution, useful for distri
 </summary>
 <br />
 
-That backend has two parts, one client and one server. The client sends tensor operations over the
-network to a remote compute backend. You can use any first-party backend as server in a single line
-of code:
+Remote execution has a client and a server. The server's devices select the compute backend;
+clients use a remote `Device` with the same tensor API. Iroh, the default transport, reaches a
+server across any network, authenticated and encrypted; see the [server example](https://github.com/tracel-ai/burn/tree/main/examples/server)
+and the [distributed computing guide](https://github.com/tracel-ai/burn/blob/main/burn-book/src/performance/distributed-computing.md). On a
+trusted network, WebSocket is the simplest setup: enable `remote-server`, `remote-websocket`, and
+`cuda` on the server, and `remote-websocket` plus `autodiff` on the client:
 
 ```rust
-fn main_server() {
-    // Start a server on port 3000.
-    cortex::server::start::<cortex::backend::Cuda>(Default::default(), 3000);
+use cortex::remote::RemoteHost;
+use cortex::server::{RemoteServer, ServeError, WebSocketTransport};
+use cortex::tensor::{Device, Distribution, Tensor};
+
+fn main_server() -> Result<(), ServeError> {
+    RemoteServer::new([Device::cuda(0)]).serve(WebSocketTransport::new(3000))
 }
 
-fn main_client() {
-    // Create a client that communicate with the server on port 3000.
-    use cortex::backend::{Autodiff, RemoteBackend};
-
-    type Backend = Autodiff<RemoteDevice>;
-
-    let device = RemoteDevice::new("ws://localhost:3000");
-    let tensor_gpu =
-        Tensor::<Backend, 2>::random([3, 3], Distribution::Default, &device);
+fn main_client() -> Result<(), cortex::remote::ConnectError> {
+    let host = RemoteHost::websocket("ws://localhost:3000");
+    let device = Device::remote_options(&host).init()?.autodiff();
+    let tensor_gpu = Tensor::<2>::random([3, 3], Distribution::Default, &device);
+    Ok(())
 }
-
 ```
 
 </details>
@@ -339,7 +352,7 @@ Several of our backends can run in WebAssembly environments: Flex for CPU execut
 GPU acceleration via WebGPU. This means that you can run inference directly within a browser. We
 provide several examples of this:
 
-- [MNIST](./examples/mnist-inference-web) where you can draw digits and a small convnet tries to
+- [MNIST](https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web) where you can draw digits and a small convnet tries to
   find which one it is! 2️⃣ 7️⃣ 😰
 - [Image Classification](https://github.com/tracel-ai/burn-onnx/tree/main/examples/image-classification-web)
   where you can upload images and classify them! 🌄
@@ -367,18 +380,6 @@ To evaluate performance across different backends and track improvements over ti
 dedicated benchmarking suite.
 
 Run and compare benchmarks using [burn-bench](https://github.com/tracel-ai/burn-bench).
-
-> ⚠️ **Warning** When using one of the `wgpu` backends, you may encounter compilation errors related
-> to recursive type evaluation. This is due to complex type nesting within the `wgpu` dependency
-> chain. To resolve this issue, add the following line at the top of your `main.rs` or `lib.rs`
-> file:
->
-> ```rust
-> #![recursion_limit = "256"]
-> ```
->
-> The default recursion limit (128) is often just below the required depth (typically 130-150) due
-> to deeply nested associated types and trait bounds.
 
 ## Getting Started
 
@@ -420,18 +421,18 @@ we declare a neural network module with some parameters along with its forward p
 ```rust
 use cortex::nn;
 use cortex::module::Module;
-use cortex::tensor::backend::Backend;
+use cortex::tensor::Tensor;
 
 #[derive(Module, Debug)]
-pub struct PositionWiseFeedForward<B: Backend> {
-    linear_inner: nn::Linear<B>,
-    linear_outer: nn::Linear<B>,
+pub struct PositionWiseFeedForward {
+    linear_inner: nn::Linear,
+    linear_outer: nn::Linear,
     dropout: nn::Dropout,
     gelu: nn::Gelu,
 }
 
-impl<B: Backend> PositionWiseFeedForward<B> {
-    pub fn forward<const D: usize>(&self, input: Tensor<B, D>) -> Tensor<B, D> {
+impl PositionWiseFeedForward {
+    pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
         let x = self.linear_inner.forward(input);
         let x = self.gelu.forward(x);
         let x = self.dropout.forward(x);
@@ -441,42 +442,42 @@ impl<B: Backend> PositionWiseFeedForward<B> {
 }
 ```
 
-We have a somewhat large amount of [examples](./examples) in the repository that shows how to use
+We have a somewhat large amount of [examples](https://github.com/tracel-ai/burn/tree/main/examples) in the repository that shows how to use
 the framework in different scenarios.
 
 Following [the book](https://burn.dev/books/burn/):
 
-- [Basic Workflow](./examples/guide) : Creates a custom CNN `Module` to train on the MNIST dataset
+- [Basic Workflow](https://github.com/tracel-ai/burn/tree/main/examples/guide) : Creates a custom CNN `Module` to train on the MNIST dataset
   and use for inference.
-- [Custom Training Loop](./examples/custom-training-loop) : Implements a basic training loop instead
+- [Custom Training Loop](https://github.com/tracel-ai/burn/tree/main/examples/custom-training-loop) : Implements a basic training loop instead
   of using the `Learner`.
-- [Custom WGPU Kernel](./examples/custom-wgpu-kernel) : Learn how to create your own custom
+- [Custom WGPU Kernel](https://github.com/tracel-ai/burn/tree/main/examples/custom-wgpu-kernel) : Learn how to create your own custom
   operation with the WGPU backend.
 
 Additional examples:
 
-- [Custom CSV Dataset](./examples/custom-csv-dataset) : Implements a dataset to parse CSV data for a
+- [Custom CSV Dataset](https://github.com/tracel-ai/burn/tree/main/examples/custom-csv-dataset) : Implements a dataset to parse CSV data for a
   regression task.
-- [Regression](./examples/simple-regression) : Trains a simple MLP on the California Housing dataset
+- [Regression](https://github.com/tracel-ai/burn/tree/main/examples/simple-regression) : Trains a simple MLP on the California Housing dataset
   to predict the median house value for a district.
-- [Custom Image Dataset](./examples/custom-image-dataset) : Trains a simple CNN on custom image
+- [Custom Image Dataset](https://github.com/tracel-ai/burn/tree/main/examples/custom-image-dataset) : Trains a simple CNN on custom image
   dataset following a simple folder structure.
-- [Custom Renderer](./examples/custom-renderer) : Implements a custom renderer to display the
-  [`Learner`](./building-blocks/learner.md) progress.
-- [Image Classification Web](./examples/image-classification-web) : Image classification web browser
+- [Custom Renderer](https://github.com/tracel-ai/burn/tree/main/examples/custom-renderer) : Implements a custom renderer to display the
+  [`Learner`](https://burn.dev/books/burn/building-blocks/learner.html) progress.
+- [Image Classification Web](https://github.com/tracel-ai/burn-onnx/tree/main/examples/image-classification-web) : Image classification web browser
   demo using Cortex, WGPU and WebAssembly.
-- [MNIST Inference on Web](./examples/mnist-inference-web) : An interactive MNIST inference demo in
-  the browser. The demo is available [online](https://burn.dev/demo/).
-- [MNIST Training](./examples/mnist) : Demonstrates how to train a custom `Module` (MLP) with the
+- [MNIST Inference on Web](https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web) : An interactive MNIST inference demo in
+  the browser.
+- [MNIST Training](https://github.com/tracel-ai/burn/tree/main/examples/mnist) : Demonstrates how to train a custom `Module` (MLP) with the
   `Learner` configured to log metrics and keep training checkpoints.
-- [PyTorch Import Inference](./examples/import-model-weights) : Imports a PyTorch model pre-trained
+- [PyTorch Import Inference](https://github.com/tracel-ai/burn/tree/main/examples/import-model-weights) : Imports a PyTorch model pre-trained
   on MNIST to perform inference on a sample image with Cortex.
-- [Text Classification](./examples/text-classification) : Trains a text classification transformer
+- [Text Classification](https://github.com/tracel-ai/burn/tree/main/examples/text-classification) : Trains a text classification transformer
   model on the AG News or DbPedia dataset. The trained model can then be used to classify a text
   sample.
-- [Text Generation](./examples/text-generation) : Trains a text generation transformer model on the
+- [Text Generation](https://github.com/tracel-ai/burn/tree/main/examples/text-generation) : Trains a text generation transformer model on the
   DbPedia dataset.
-- [Wasserstein GAN MNIST](./examples/wgan) : Trains a WGAN model to generate new handwritten digits
+- [Wasserstein GAN MNIST](https://github.com/tracel-ai/burn/tree/main/examples/wgan) : Trains a WGAN model to generate new handwritten digits
   based on MNIST.
 
 For more practical insights, you can clone the repository and run any of them directly on your
@@ -534,42 +535,23 @@ runtime to ship, running from servers down to `no_std` embedded targets.
 > keeping the data type as a field. If you are using `Data` in your code, make sure to switch to
 > `TensorData`.
 
-<!-- >
-> In the event that you are trying to load a model record saved in a previous version, make sure to
-> enable the `record-backward-compat` feature using a previous version of cortex (<=0.16.0). Otherwise,
-> the record won't be deserialized correctly and you will get an error message (which will also point
-> you to the backward compatible feature flag). The backward compatibility was maintained for
-> deserialization (loading), so as soon as you have saved the record again it will be saved according
-> to the new structure and you will be able to upgrade to this version. Please note that binary formats
-> are not backward compatible. Thus, you will need to load your record in a previous version and save it
-> to another of the self-describing record formats before using a compatible version (as described) with the
-> `record-backward-compat` feature flag. -->
-
 <details id="deprecation">
 <summary>
 Loading Model Records From Previous Versions ⚠️
 </summary>
 <br />
 
-In the event that you are trying to load a model record saved in a version older than `0.14.0`, make
-sure to use a compatible version (`0.14`, `0.15` or `0.16`) with the `record-backward-compat`
-feature flag.
+Cortex 0.22 uses cortexpack for native records and cannot directly read legacy `Recorder` formats such
+as `.mpk`, `.bin`, or JSON. Load the checkpoint in a compatible older Cortex project, export the model
+weights through `cortex-store`, and import them into your 0.22 model. See
+[Migrating checkpoints](https://github.com/tracel-ai/burn/blob/main/burn-book/src/migrating-to-0.22.md#migrating-checkpoints) for an example and
+the distinction between transferring weights and resuming training state.
 
-```
-features = [..., "record-backward-compat"]
-```
-
-Otherwise, the record won't be deserialized correctly and you will get an error message. This error
-will also point you to the backward compatible feature flag.
-
-The backward compatibility was maintained for deserialization when loading records. Therefore, as
-soon as you have saved the record again it will be saved according to the new structure and you can
-upgrade back to the current version
-
-Please note that binary formats are not backward compatible. Thus, you will need to load your record
-in a previous version and save it in any of the other self-describing record format (e.g., using the
-`NamedMpkFileRecorder`) before using a compatible version (as described) with the
-`record-backward-compat` feature flag.
+For records saved before `0.14.0`, an earlier migration step may also be needed: use Cortex `0.14`,
+`0.15`, or `0.16` with the `record-backward-compat` feature to load and re-save the record with the
+newer tensor-data representation. For legacy binary records, first use the version that wrote them
+to export a self-describing format such as `NamedMpkFileRecorder`. This historical migration does
+not convert records to the format required by 0.22; follow the checkpoint migration guide afterward.
 
 </details>
 
@@ -588,8 +570,8 @@ any background. You can ask your questions and share what you built with the com
 
 ### Contributing
 
-Before contributing, please read the [Contributing Guidelines](./CONTRIBUTING.md) and our
-[Code of Conduct](./CODE-OF-CONDUCT.md). The [Contributor Book](https://burn.dev/contributor-book/)
+Before contributing, please read the [Contributing Guidelines](https://github.com/tracel-ai/burn/blob/main/CONTRIBUTING.md) and our
+[Code of Conduct](https://github.com/tracel-ai/burn/blob/main/CODE-OF-CONDUCT.md). The [Contributor Book](https://burn.dev/books/contributor/)
 covers architecture, environment setup, and guides for common tasks.
 
 ## Status
@@ -600,7 +582,7 @@ issues are likely to be easy to fix, there are no guarantees at this stage.
 ## License
 
 Cortex is distributed under the terms of both the MIT license and the Apache License (Version 2.0).
-See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details. Opening a pull
+See [LICENSE-APACHE](https://github.com/tracel-ai/burn/blob/main/LICENSE-APACHE) and [LICENSE-MIT](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT) for details. Opening a pull
 request is assumed to signal agreement with these licensing terms.
 
 </div>

@@ -4,11 +4,12 @@
 
 [![Current Crates.io Version](https://img.shields.io/crates/v/burn-store.svg)](https://crates.io/crates/burn-store)
 [![Documentation](https://docs.rs/burn-store/badge.svg)](https://docs.rs/burn-store)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
 
 A comprehensive storage library for Cortex that enables efficient model serialization, cross-framework
 interoperability, and advanced tensor management.
 
-> **Migrating from cortex-import?** See the [Migration Guide](MIGRATION.md) for help moving from
+> **Migrating from cortex-import?** See the [Migration Guide](https://github.com/tracel-ai/burn/blob/main/crates/burn-store/MIGRATION.md) for help moving from
 > `PyTorchFileRecorder`/`SafetensorsFileRecorder` to the new Store API.
 
 ## Features
@@ -20,6 +21,9 @@ interoperability, and advanced tensor management.
   transformation
 - **Zero-Copy Loading** - Memory-mapped files and lazy tensor materialization for optimal
   performance
+- **Streaming Saves** - Cortexpack file saves read back one tensor at a time, bounding peak memory by
+  the largest tensor instead of the whole model, and replace the destination only once the
+  container is complete, so a failed save leaves the previous file intact
 - **Flexible Filtering** - Load/save specific model subsets with regex, exact paths, or custom
   predicates
 - **Tensor Remapping** - Rename tensors during load/save for framework compatibility
@@ -88,3 +92,10 @@ cargo bench --bench unified_loading --features metal
 ## License
 
 This project is dual-licensed under MIT and Apache-2.0.
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://burn.dev/books/burn/) and the [API documentation](https://docs.rs/burn).

@@ -1,124 +1,211 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! # Cortex
 //!
-//! Cortex is a new comprehensive dynamic Deep Learning Framework built using Rust
-//! with extreme flexibility, compute efficiency and portability as its primary goals.
+//! Cortex is a deep learning framework written in Rust. It covers tensors, automatic
+//! differentiation, neural network modules, optimizers, training and model storage, and runs
+//! the same model code on GPUs (CUDA, ROCm, Metal, Vulkan, WebGPU), CPUs and WebAssembly.
 //!
-//! ## Performance
+//! ## Quick start
 //!
-//! Because we believe the goal of a deep learning framework is to convert computation
-//! into useful intelligence, we have made performance a core pillar of Cortex.
-//! We strive to achieve top efficiency by leveraging multiple optimization techniques:
+//! Cortex ships no execution backend by default. Enable one or more with Cargo features:
 //!
-//! - Automatic kernel fusion
-//! - Asynchronous execution
-//! - Thread-safe building blocks
-//! - Intelligent memory management
-//! - Automatic kernel selection
-//! - Hardware specific features
-//! - Custom Backend Extension
+//! ```toml
+//! [dependencies]
+//! cortex = { version = "0.22", features = ["wgpu"] }
+//! ```
 //!
-//! ## Training & Inference
+//! Models are plain structs that derive [`Module`](module::Module). Tensors carry their rank in
+//! the type and their backend in their [`Device`](tensor::Device), so model code has no backend
+//! type parameter:
 //!
-//! The whole deep learning workflow is made easy with Cortex, as you can monitor your training progress
-//! with an ergonomic dashboard, and run inference everywhere from embedded devices to large GPU clusters.
+//! ```rust,no_run
+//! use cortex::nn::{Linear, LinearConfig, Relu};
+//! use cortex::prelude::*;
 //!
-//! Cortex was built from the ground up with training and inference in mind. It's also worth noting how Cortex,
-//! in comparison to frameworks like PyTorch, simplifies the transition from training to deployment,
-//! eliminating the need for code changes.
+//! #[derive(Module, Debug)]
+//! struct Mlp {
+//!     hidden: Linear,
+//!     activation: Relu,
+//!     output: Linear,
+//! }
+//!
+//! impl Mlp {
+//!     fn new(device: &Device) -> Self {
+//!         Self {
+//!             hidden: LinearConfig::new(784, 128).init(device),
+//!             activation: Relu::new(),
+//!             output: LinearConfig::new(128, 10).init(device),
+//!         }
+//!     }
+//!
+//!     fn forward(&self, input: Tensor<2>) -> Tensor<2> {
+//!         let x = self.activation.forward(self.hidden.forward(input));
+//!         self.output.forward(x)
+//!     }
+//! }
+//!
+//! // An enabled backend in priority order (GPUs before CPUs), unless `CORTEX_DEVICE` names one.
+//! // `Device::wgpu(..)`, `Device::cuda(0)`, ... pick one explicitly.
+//! let device = Device::default();
+//! let model = Mlp::new(&device);
+//! let logits = model.forward(Tensor::zeros([32, 784], &device));
+//! ```
+//!
+//! The [Cortex Book](https://burn.dev/books/burn/) walks through a full training workflow.
+//!
+//! ## Crate map
+//!
+//! - [`tensor`]: [`Tensor`], [`Device`](tensor::Device), dtypes and tensor
+//!   operations.
+//! - [`module`] and [`nn`]: the [`Module`](module::Module) trait and neural network layers.
+//! - [`config`]: serializable configuration structs with `#[derive(Config)]`.
+//! - [`optim`], [`lr_scheduler`], [`grad_clipping`]: optimizers and training utilities.
+//! - [`data`]: datasets, transformations and data loaders.
+//! - [`store`]: saving and loading weights in cortexpack, SafeTensors and PyTorch formats.
+//! - `train`: the `Learner`, metrics and the training dashboard (`train` feature).
+//! - `vision`, `signal`, `linalg`: domain-specific tensor operations (features of the same
+//!   names).
+//! - `remote` and `server`: run tensors on devices hosted by another machine (`remote` and
+//!   `remote-server` features).
+//! - [`prelude`]: the types most programs import.
 //!
 //! ## Backends
 //!
-//! Cortex strives to be as fast as possible on as many hardwares as possible, with robust implementations.
-//! We believe this flexibility is crucial for modern needs where you may train your models in the cloud,
-//! then deploy on customer hardwares, which vary from user to user.
+//! Every enabled backend is available at runtime through a `Device` constructor, and several can
+//! be used side by side:
 //!
-//! Compared to other frameworks, Cortex has a very different approach to supporting many backends.
-//! By design, most code is generic over the Backend trait, which allows us to build Cortex with swappable backends.
-//! This makes composing backend possible, augmenting them with additional functionalities such as
-//! autodifferentiation and automatic kernel fusion.
+//! | Backend                 | Feature  | Device                               |
+//! | ----------------------- | -------- | ------------------------------------ |
+//! | CUDA                    | `cuda`   | `Device::cuda(0)`                    |
+//! | ROCm                    | `rocm`   | `Device::rocm(0)`                    |
+//! | wgpu (any graphics API) | `wgpu`   | `Device::wgpu(Default::default())`   |
+//! | Metal                   | `metal`  | `Device::metal(Default::default())`  |
+//! | Vulkan                  | `vulkan` | `Device::vulkan(Default::default())` |
+//! | WebGPU                  | `webgpu` | `Device::webgpu(Default::default())` |
+//! | CubeCL CPU              | `cpu`    | `Device::cpu()`                      |
+//! | Flex (pure Rust CPU)    | `flex`   | `Device::flex()`                     |
 //!
-//! - WGPU (WebGPU): Cross-Platform GPU Backend
-//! - Candle: Backend using the Candle bindings
-//! - LibTorch: Backend using the LibTorch bindings
-//! - Flex: Pure-Rust CPU backend (std, no_std, WebAssembly)
-//! - Autodiff: Backend decorator that brings backpropagation to any backend
-//! - Fusion: Backend decorator that brings kernel fusion to backends that support it
+//! Autodiff and kernel fusion are decorators over these backends: `device.autodiff()` enables
+//! gradients for tensors created on a device, and the CubeCL backends fuse operations by default.
+//! NdArray (`ndarray`) and LibTorch (`tch`) are deprecated.
 //!
-//! # Quantization
+//! ## Quantization
 //!
-//! Quantization techniques perform computations and store tensors in lower precision data types like
-//! 8-bit integer instead of floating point precision. There are multiple approaches to quantize a deep
-//! learning model categorized as post-training quantization (PTQ) and quantization aware training (QAT).
-//!
-//! In post-training quantization, the model is trained in floating point precision and later converted
-//! to the lower precision data type. There are two types of post-training quantization:
-//!
-//! 1. Static quantization: quantizes the weights and activations of the model. Quantizing the
-//!    activations statically requires data to be calibrated (i.e., recording the activation values to
-//!    compute the optimal quantization parameters with representative data).
-//! 2. Dynamic quantization: quantized the weights ahead of time (like static quantization) but the
-//!    activations are dynamically at runtime.
-//!
-//! Sometimes post-training quantization is not able to achieve acceptable task accuracy. In general,
-//! this is where quantization-aware training (QAT) can be used: during training, fake-quantization
-//! modules are inserted in the forward and backward passes to simulate quantization effects, allowing
-//! the model to learn representations that are more robust to reduced precision.
-//!
-//! Cortex does not currently support QAT. Only post-training quantization (PTQ) is implemented at this
-//! time.
-//!
-//! Quantization support in Cortex is currently in active development. It supports the following PTQ modes on some backends:
-//! - Per-tensor and per-block quantization to 8-bit, 4-bit and 2-bit representations
+//! Cortex supports post-training quantization of weights and activations, per tensor or per
+//! block, to 8, 4 and 2-bit integers and to FP8 and FP4 formats on supported backends.
+//! Quantization-aware training is not supported yet. See the
+//! [quantization chapter](https://burn.dev/books/burn/performance/quantization.html).
 //!
 //! ## Feature Flags
 //!
 //! The following feature flags are available.
-//! By default, the feature `std` is activated.
+//! Default features include `std` and `optim` (and therefore `autodiff`), but no execution backend.
+//! Select a backend explicitly, for example `features = ["wgpu"]` or `["flex"]`.
+//! Specialized operations are also opt-in, for example `features = ["flex", "signal"]`.
+//! Backend-free builds can define tensor/model APIs without installing an execution backend.
+//! `Device::default()` panics if no execution backend is available; graph capture remains
+//! available through `Device::capture()` with the `capture` feature.
 //!
 //! - Training
-//!   - `train`: Enables features `dataset` and `autodiff` and provides a training environment
-//!   - `tui`: Includes Text UI with progress bar and plots
-//!   - `metrics`: Includes system info metrics (CPU/GPU usage, etc.)
+//!   - `train`: Enables features `dataset` and `optim` and provides a training environment
+//!   - `optim`: Enables optimizers and learning rate schedulers (implies `autodiff`)
+//!   - `rl`: Enables reinforcement learning utilities
+//!   - `tui`: Includes Text UI with progress bar and plots (requires `train`)
+//!   - `metrics`: Includes system info metrics (CPU/GPU usage, etc.) (requires `train`)
 //! - Dataset
 //!   - `dataset`: Includes a datasets library
 //!   - `audio`: Enables audio datasets (SpeechCommandsDataset)
-//!   - `sqlite`: Stores datasets in SQLite database
-//!   - `sqlite_bundled`: Use bundled version of SQLite
-//!   - `vision`: Enables vision datasets (MnistDataset)
+//!   - `sqlite`: Stores datasets in an SQLite database, backed by [Turso](https://turso.tech/)
+//!   - `sqlite-bundled`: Deprecated alias for `sqlite`
+//!   - `vision`: Enables vision datasets (MnistDataset) and the `cortex-vision` ops module
 //! - Backends
-//!   - `wgpu`: Makes available the WGPU backend
-//!   - `webgpu`: Makes available the `wgpu` backend with the WebGPU Shading Language (WGSL) compiler
-//!   - `vulkan`: Makes available the `wgpu` backend with the alternative SPIR-V compiler
+//!   - `wgpu`: Makes available the WGPU backend, on whichever graphics API the platform provides
+//!   - `webgpu`: Adds `Device::webgpu`, pinned to WebGPU (implies `wgpu`)
+//!   - `vulkan`: Adds `Device::vulkan`, pinned to Vulkan (implies `wgpu`)
+//!   - `metal`: Adds `Device::metal`, pinned to Metal with native MSL (implies `wgpu`)
 //!   - `cuda`: Makes available the CUDA backend
-//!   - `metal`: Makes available the Metal backend
 //!   - `rocm`: Makes available the ROCm backend
 //!   - `cpu`: Makes available the CubeCL CPU backend
-//!   - `candle`: Makes available the Candle backend
-//!   - `tch`: Makes available the LibTorch backend
+//!   - `tch`: Makes available the LibTorch backend (deprecated - use a CubeCL backend instead)
 //!   - `flex`: Makes available the Flex backend (pure-Rust CPU, std/no_std/WASM)
-//!   - `ndarray`: Makes available the NdArray backend (legacy - prefer `flex` for new projects)
+//!   - `ndarray`: Makes available the NdArray backend (deprecated - use `flex` instead)
 //! - Backend specifications
-//!   - `accelerate`: If supported, Accelerate will be used
-//!   - `blas-netlib`: If supported, Blas Netlib will be use
-//!   - `openblas`: If supported, Openblas will be use
-//!   - `openblas-system`: If supported, Openblas installed on the system will be use
+//!   - `simd`: Enable SIMD kernels in the Flex and NdArray backends
+//!   - `rayon`: Enable multi-threaded execution in the Flex and NdArray backends
+//!   - `accelerate`, `blas-netlib`, `openblas`, `openblas-system`: BLAS providers for the NdArray
+//!     backend
 //!   - `autotune`: Enable running benchmarks to select the best kernel in backends that support it.
+//!   - `autotune-checks`: Check that every autotune candidate produces the same output (debugging).
+//!   - `x86-v4`: Enable AVX-512 matmul kernels in the Flex backend.
+//!   - `apple-amx`: Enable the experimental Apple AMX matmul kernels in the Flex backend.
+//!   - `template`: Enable hand-written, non-JIT custom kernels in the CubeCL backends.
 //!   - `fusion`: Enable operation fusion in backends that support it.
+//!   - `tracing`: Enable diagnostic tracing in the selected backends (disabled by default).
 //! - Backend decorators
 //!   - `autodiff`: Makes available the Autodiff backend
 //! - Model Storage
-//!   - `store`: Enables model storage with SafeTensors format and PyTorch interoperability
+//!   - `store`: Enables the `cortex-store` snapshot tooling and cortexpack stores; with `std`, this
+//!     also includes SafeTensors
+//!   - `safetensors`: Enables SafeTensors import and export in `no_std` builds (implies `store`)
+//!   - `pytorch`: Enables PyTorch checkpoint import (implies `store`)
 //! - Others:
 //!   - `std`: Activates the standard library (deactivate for no_std)
-//!   - `server`: Enables the remote server.
+//!   - `linalg`: Enables linear algebra operations
+//!   - `capture`: Makes the non-executing graph capture backend available.
+//!   - `ir`: Makes Cortex's operation intermediate representation available.
+//!   - `cubecl`: Re-exports CubeCL as `cortex::cubecl` for writing custom kernels.
+//!   - `signal`: Enables signal processing operations from `cortex-signal`.
+//!   - `extension`: Enables the backend extension API, including `Tensor::from_primitive`.
+//!   - `remote`: Enables remote devices over Iroh; `remote-websocket` adds the WebSocket transport.
+//!   - `remote-server`: Enables the remote server (implies `remote`).
 //!   - `network`: Enables network utilities (currently, only a file downloader with progress bar)
 //!
-//! You can also check the details in sub-crates [`burn-core`](https://docs.rs/burn-core) and [`burn-train`](https://docs.rs/burn-train).
+//! You can also check the details in sub-crates [`cortex-core`](https://docs.rs/burn-core) and [`cortex-train`](https://docs.rs/burn-train).
+//!
+//! ### Backend tracing
+//!
+//! Add `"tracing"` to the features of your `cortex` dependency to compile backend instrumentation,
+//! including autodiff and fusion spans. When depending directly on `cortex-autodiff` or
+//! `cortex-fusion`, enable their `tracing` feature instead. These spans are opt-in: configuring a
+//! tracing subscriber alone does not enable them. Configure your subscriber to include the
+//! `trace` level to observe tensor operation spans.
+//!
+//! The feature propagates to enabled backends without selecting an additional backend. Normal
+//! training logs remain available without this feature.
 
 pub use cortex_core::*;
+
+/// Linear algebra operations.
+#[cfg(feature = "linalg")]
+pub mod linalg {
+    pub use cortex_linalg::*;
+}
+
+/// Core module infrastructure and neural-network initializers.
+pub mod module {
+    pub use cortex_core::module::*;
+    pub use cortex_nn::Initializer;
+}
+
+/// Tensor types and compatibility re-exports.
+pub mod tensor {
+    pub use cortex_core::tensor::*;
+
+    /// Compatibility path for signal processing operations.
+    #[cfg(feature = "signal")]
+    pub mod signal {
+        pub use cortex_signal::*;
+    }
+
+    /// Compatibility path for linear algebra operations.
+    #[cfg(feature = "linalg")]
+    pub mod linalg {
+        pub use cortex_linalg::*;
+    }
+}
 
 /// Train module
 #[cfg(feature = "train")]
@@ -132,11 +219,14 @@ pub mod rl {
     pub use cortex_rl::*;
 }
 
+#[cfg(feature = "remote")]
+pub use cortex_core::tensor::remote;
 #[cfg(feature = "remote-server")]
 pub use cortex_core::tensor::server;
 
-/// Model storage and serialization: the non-generic record system (always available), plus —
-/// with the `store` feature — the snapshot tooling and importers (SafeTensors, PyTorch, cortexpack).
+/// Model storage and serialization: the non-generic record system (always available), plus,
+/// with the `store` feature, the snapshot tooling and cortexpack stores. The `safetensors` and
+/// `pytorch` features add those importers.
 pub mod store {
     pub use cortex_core::store::*;
     #[cfg(feature = "store")]
@@ -149,6 +239,44 @@ pub mod nn {
 }
 
 pub use cortex_std::config::{CortexConfig, config as runtime_config};
+
+#[cfg(all(test, feature = "capture"))]
+mod capture_tests {
+    use crate::{module::Module, nn::BatchNormConfig, tensor::Device};
+
+    #[test]
+    fn capture_feature_exposes_the_user_facing_device_api() {
+        let device = Device::capture();
+        let captured = device
+            .capture_scope(|scope| scope.complete([], []))
+            .unwrap();
+
+        assert!(captured.graph.operations.is_empty());
+    }
+
+    #[test]
+    fn shared_running_state_moves_across_capture_scopes() {
+        let module = BatchNormConfig::new(3).init(&Device::default());
+        let first_device = Device::capture();
+        let second_device = Device::capture();
+
+        let first = first_device
+            .capture_scope(|scope| {
+                let _module = module.clone().to_device(&first_device);
+                scope.complete([], [])
+            })
+            .unwrap();
+        let second = second_device
+            .capture_scope(|scope| {
+                let _module = module.clone().to_device(&second_device);
+                scope.complete([], [])
+            })
+            .unwrap();
+
+        assert_eq!(first.values.len(), 4);
+        assert_eq!(second.values.len(), 4);
+    }
+}
 
 /// Optimizers module.
 #[cfg(feature = "optim")]
@@ -179,6 +307,12 @@ pub mod cubecl {
 /// Vision module.
 pub mod vision {
     pub use cortex_vision::*;
+}
+
+#[cfg(feature = "signal")]
+/// Signal processing module.
+pub mod signal {
+    pub use cortex_signal::*;
 }
 
 pub mod prelude {

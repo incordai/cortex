@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 use cortex::tensor::{Device, DeviceConfig, Element};
 use text_classification::AgNewsDataset;
 
@@ -104,6 +102,8 @@ fn main() {
     tch_cpu::run();
     #[cfg(feature = "wgpu")]
     wgpu::run();
+    #[cfg(feature = "metal")]
+    metal::run();
     #[cfg(feature = "cuda")]
     cuda::run();
 }

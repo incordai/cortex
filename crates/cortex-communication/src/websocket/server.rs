@@ -1,40 +1,22 @@
 use std::net::SocketAddr;
 
-use crate::base::{CommunicationChannel, CommunicationError, Message, ProtocolServer};
+use crate::{
+    base::{CommunicationChannel, CommunicationError, Message, ProtocolServer},
+    websocket::base::{DeadPeerTimeout, MAX_MESSAGE_SIZE},
+};
 use axum::{
     Router,
     extract::{
-        State, WebSocketUpgrade,
+        ConnectInfo, State, WebSocketUpgrade,
         ws::{self, WebSocket},
     },
     routing::get,
+    serve::ListenerExt,
 };
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use tracing_core::{Level, LevelFilter};
-use tracing_subscriber::{
-    Layer, filter::filter_fn, layer::SubscriberExt, registry, util::SubscriberInitExt,
-};
-
-fn init_logging() {
-    let layer = tracing_subscriber::fmt::layer()
-        .with_filter(LevelFilter::INFO)
-        .with_filter(filter_fn(|m| {
-            if let Some(path) = m.module_path() {
-                // The wgpu crate is logging too much, so we skip `info` level.
-                if path.starts_with("wgpu") && *m.level() >= Level::INFO {
-                    return false;
-                }
-            }
-            true
-        }));
-
-    // If we start multiple servers in the same process, this will fail, it's ok
-    let _ = registry().with(layer).try_init();
-}
-
 #[derive(Clone, Debug)]
 pub struct WsServer {
     port: u16,
@@ -43,6 +25,7 @@ pub struct WsServer {
 
 pub struct WsServerChannel {
     inner: WebSocket,
+    peer_addr: SocketAddr,
 }
 
 impl WsServer {
@@ -66,8 +49,6 @@ impl WsServer {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        init_logging();
-
         // Report the address the listener actually bound to (resolves an ephemeral `:0` port to
         // the real one), so the log confirms the server is accepting connections and tells the
         // operator where.
@@ -75,6 +56,8 @@ impl WsServer {
             Ok(addr) => log::info!("Server started, listening on {addr}"),
             Err(err) => log::info!("Server started (could not resolve bound address: {err})"),
         }
+
+        let listener = listener.tap_io(|tcp| tcp.set_dead_peer_timeout());
 
         axum::serve(
             listener,
@@ -116,11 +99,22 @@ impl ProtocolServer for WsServer {
             format!("/{path}")
         };
 
-        let method = get(|ws: WebSocketUpgrade, _: State<()>| async {
-            ws.on_upgrade(async move |socket| {
-                callback(WsServerChannel { inner: socket }).await;
-            })
-        });
+        let method = get(
+            |ws: WebSocketUpgrade,
+             ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+             _: State<()>| async move {
+                // Left unset, axum reads with tungstenite's defaults: 16 MiB a frame, 64 MiB a message.
+                ws.max_message_size(MAX_MESSAGE_SIZE)
+                    .max_frame_size(MAX_MESSAGE_SIZE)
+                    .on_upgrade(async move |socket| {
+                        callback(WsServerChannel {
+                            inner: socket,
+                            peer_addr,
+                        })
+                        .await;
+                    })
+            },
+        );
 
         self.router = self.router.route(&path, method);
 
@@ -176,6 +170,11 @@ impl CommunicationChannel for WsServerChannel {
 }
 
 impl WsServerChannel {
+    /// The address the client connected from.
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr
+    }
+
     /// Split into independently-owned send and receive halves, so a writer task and a reader loop
     /// can run concurrently over one full-duplex socket.
     pub fn split(self) -> (WsServerSink, WsServerStream) {

@@ -2,9 +2,8 @@ use super::Reduction;
 use alloc::vec;
 use cortex::config::Config;
 use cortex::module::Module;
-use cortex::tensor::{Bool, Device, Int, Tensor, s};
+use cortex::tensor::{Bool, Device, Int, Tensor, assert_shape, s};
 use cortex_core as cortex;
-use core::f32;
 
 /// Configuration for [RNNTLoss](RNNTLoss).
 #[derive(Config, Debug)]
@@ -253,34 +252,9 @@ impl RNNTLoss {
             self.blank,
             v
         );
-        assert_eq!(
-            targets.dims()[0],
-            b,
-            "targets batch dimension {} must equal batch_size {}",
-            targets.dims()[0],
-            b
-        );
-        assert_eq!(
-            targets.dims()[1],
-            max_u,
-            "targets length dimension {} must equal max_target_len (max_u) {}",
-            targets.dims()[1],
-            max_u
-        );
-        assert_eq!(
-            logit_lengths.dims()[0],
-            b,
-            "logit_lengths length {} must equal batch_size {}",
-            logit_lengths.dims()[0],
-            b
-        );
-        assert_eq!(
-            target_lengths.dims()[0],
-            b,
-            "target_lengths length {} must equal batch_size {}",
-            target_lengths.dims()[0],
-            b
-        );
+        assert_shape!(targets, [b, max_u]);
+        assert_shape!(logit_lengths, [b]);
+        assert_shape!(target_lengths, [b]);
     }
 
     /// Numerically stable `log(exp(a) + exp(b))`, handling `-inf` inputs.
@@ -329,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must equal batch_size")]
+    #[should_panic(expected = "assert_shape!(targets, [b, max_u]): axis 0 expected 2, got 1")]
     fn panics_on_batch_mismatch() {
         let dev = Default::default();
         let rnnt = RNNTLossConfig::new().init();
@@ -342,7 +316,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "logit_lengths length")]
+    #[should_panic(expected = "assert_shape!(targets, [b, max_u]): axis 1 expected 2, got 1")]
+    fn panics_on_target_length_mismatch() {
+        let dev = Default::default();
+        let rnnt = RNNTLossConfig::new().init();
+        rnnt.forward(
+            Tensor::<4>::zeros([2, 3, 3, 3], &dev),
+            Tensor::<2, Int>::from_data([[1_i32], [2]], &dev),
+            Tensor::<1, Int>::from_data([3, 3], &dev),
+            Tensor::<1, Int>::from_data([1, 1], &dev),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_shape!(logit_lengths, [b]): axis 0 expected 2, got 1")]
     fn panics_on_logit_lengths_mismatch() {
         let dev = Default::default();
         let rnnt = RNNTLossConfig::new().init();
@@ -355,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "target_lengths length")]
+    #[should_panic(expected = "assert_shape!(target_lengths, [b]): axis 0 expected 2, got 1")]
     fn panics_on_target_lengths_mismatch() {
         let dev = Default::default();
         let rnnt = RNNTLossConfig::new().init();
@@ -566,8 +553,7 @@ mod pytorch_comparison_tests {
         let grad = logits
             .grad(&grads)
             .unwrap()
-            .into_data()
-            .to_vec::<f32>()
+            .try_into_vec_as::<f32>()
             .unwrap();
 
         // Spot-check first, middle, and last (t, u) positions against torchaudio
@@ -598,8 +584,7 @@ mod pytorch_comparison_tests {
         let grad = logits
             .grad(&grads)
             .unwrap()
-            .into_data()
-            .to_vec::<f32>()
+            .try_into_vec_as::<f32>()
             .unwrap();
 
         // Spot-check: first position of each sample, and last position
@@ -637,7 +622,7 @@ mod pytorch_comparison_tests {
             .grad(&grads)
             .unwrap()
             .into_data()
-            .to_vec::<f32>()
+            .try_into_vec::<f32>()
             .unwrap();
         let stride = 4 * 5; // U+1 * V per time step
         let zeros = vec![0.0f32; 5];
@@ -725,8 +710,7 @@ mod pytorch_comparison_tests {
         let g = logits
             .grad(&grads)
             .unwrap()
-            .into_data()
-            .to_vec::<f32>()
+            .try_into_vec_as::<f32>()
             .unwrap();
         TensorData::from(&g[..4]).assert_approx_eq::<f32>(
             &TensorData::from([-0.3161f32, -0.3113, 0.2796, 0.3479]),
@@ -755,8 +739,7 @@ mod pytorch_comparison_tests {
         let g = logits
             .grad(&grads)
             .unwrap()
-            .into_data()
-            .to_vec::<f32>()
+            .try_into_vec_as::<f32>()
             .unwrap();
         TensorData::from(&g[..4]).assert_approx_eq::<f32>(
             &TensorData::from([-0.1581f32, -0.1557, 0.1398, 0.1739]),

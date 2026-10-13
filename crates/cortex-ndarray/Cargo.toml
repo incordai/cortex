@@ -1,13 +1,13 @@
 [package]
 authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
 categories = ["science", "no-std", "embedded", "wasm"]
-description = "Ndarray backend for the Cortex framework"
+description = "[Deprecated] Ndarray backend for the Cortex framework - use cortex-flex, cortex-cuda, cortex-rocm, or cortex-wgpu instead"
 documentation = "https://docs.rs/burn-ndarray"
 edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "data"]
 license.workspace = true
 name = "cortex-ndarray"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-ndarray"
 version.workspace = true
 
@@ -75,16 +75,12 @@ rand = { workspace = true, default-features = false }
 
 # SIMD
 bytemuck = { workspace = true, optional = true }
-itertools = { version = "0.14", optional = true }
+itertools = { version = "0.15", optional = true }
 macerator = { workspace = true, optional = true }
 seq-macro = { version = "0.3", optional = true }
 
 # Parallel
 rayon = { workspace = true, optional = true }
-
-[target.'cfg(not(target_has_atomic = "ptr"))'.dependencies]
-portable-atomic = { workspace = true }
-portable-atomic-util = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }

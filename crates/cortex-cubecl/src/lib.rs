@@ -1,7 +1,30 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// TODO: remove when fixed in cubecl
+#![allow(semicolon_in_expressions_from_non_local_macros)]
 
-//! Cortex JIT Backend
+//! The Cortex backend for every [CubeCL](https://github.com/tracel-ai/cubecl) runtime.
+//!
+//! [`CubeBackend`] implements Cortex's tensor operations as CubeCL kernels, compiled just in time
+//! for the device they run on. CUDA, ROCm, Metal, Vulkan, WebGPU, wgpu and the CubeCL CPU
+//! runtime all share this one backend type: a tensor's [`CubeDevice`] says which runtime it
+//! uses. [`Cube`] is the type dispatch uses, wrapped in `cortex_fusion::Fusion` when the `fusion`
+//! feature is on.
+//!
+//! Applications reach this backend through a `cortex` feature such as `cuda`, `wgpu` or `cpu`
+//! and a `Device` constructor; the runtime crates (`cortex-cuda`, `cortex-wgpu`, `cortex-rocm`,
+//! `cortex-cpu`) are thin wrappers that select a runtime. Use this crate directly to write
+//! custom kernels: [`kernel`] and [`ops`] hold the building blocks, and [`cubecl`] is
+//! re-exported so kernels use the same CubeCL version.
+//!
+//! # Feature flags
+//!
+//! - `cuda`, `hip`, `wgpu`, `metal`, `vulkan`, `webgpu`, `cpu`: compile in a CubeCL runtime.
+//! - `fusion`: kernel fusion through `cortex-fusion`.
+//! - `autotune`: benchmark kernel variants at runtime and keep the fastest.
+//! - `fft`: FFT kernels.
+//! - `template`: launch hand-written, non-JIT kernels (see [`template`]).
+//! - `tracing`: instrument operations with the `tracing` crate.
 
 #[macro_use]
 extern crate derive_new;
@@ -18,7 +41,6 @@ pub mod tensor;
 /// Elements for JIT backend
 pub mod element;
 
-use cubecl::{CubeTask, Runtime};
 pub use element::{BoolElement, CubeElement, FloatElement, IntElement};
 
 mod backend;
@@ -39,12 +61,23 @@ pub mod fusion;
 /// Module for compiling custom non-jit kernels
 pub mod template;
 
-/// Just-in-Time runtime extending the [cube runtime](Runtime).
-pub trait CubeRuntime: Runtime<Device = Self::CubeDevice, Server = Self::CubeServer> {
-    /// The device that should also implement [cortex_backend::backend::DeviceOps].
-    type CubeDevice: cortex_backend::DeviceOps;
-    /// The cube server with the [CubeAutotuneKey].
-    type CubeServer: cubecl::server::ComputeServer<Kernel = Box<dyn CubeTask<Self::Compiler>>>;
-}
+/// The device a cube tensor lives on.
+///
+/// One type across every runtime: which runtime a tensor runs on is what its
+/// device *says*, not what its type is.
+pub use cubecl::Device as CubeDevice;
 
 pub use cubecl::CubeTuneId;
+
+/// The tensor backend for every cubecl runtime.
+///
+/// CUDA, ROCm, Metal, Vulkan, WebGPU, wgpu and the CPU runtime are all this one
+/// type; which of them a tensor runs on is what its [`CubeDevice`] says. Fusion
+/// wraps it when the `fusion` feature is on.
+#[cfg(not(feature = "fusion"))]
+pub type Cube = CubeBackend;
+
+/// The tensor backend for every cubecl runtime, fusing operations across
+/// streams. See [`CubeBackend`] for the unfused type.
+#[cfg(feature = "fusion")]
+pub type Cube = cortex_fusion::Fusion<CubeBackend>;

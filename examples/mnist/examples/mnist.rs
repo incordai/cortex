@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 use cortex::tensor::Device;
 use mnist::training;
 
@@ -29,9 +27,6 @@ fn select_device() -> Device {
 
     #[cfg(feature = "rocm")]
     return Device::rocm(cortex::tensor::DeviceIndex::Default);
-
-    #[cfg(feature = "remote")]
-    return Device::remote_websocket("ws://localhost:3000", 0);
 
     unreachable!("At least one backend will be selected.")
 }

@@ -92,15 +92,13 @@ impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
             let (items, progress) = match step.step(iterators.as_mut_slice(), &learner.model()) {
                 Ok(result) => result,
                 Err(err) => {
-                    interrupter.stop(Some(&format!("dataset error during training step: {err}")));
+                    interrupter.fail(err);
                     break;
                 }
             };
             if items.is_empty() {
                 break;
             }
-
-            learner.lr_step();
 
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
@@ -111,8 +109,9 @@ impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
 
             accumulation_current += 1;
 
-            if accumulation <= accumulation_current {
+            if accumulation <= accumulation_current || progress.is_completed() {
                 let grads = accumulator.grads();
+                learner.lr_step();
                 learner.optimizer_step(grads);
                 accumulation_current = 0;
             }
@@ -126,7 +125,9 @@ impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
                     Some(learner.lr_current()),
                 );
 
-                event_processor.process_train(LearnerEvent::ProcessedItem(item));
+                interrupter.fail_on_error(
+                    event_processor.process_train(LearnerEvent::ProcessedItem(item)),
+                );
             }
 
             if interrupter.should_stop() {
@@ -168,15 +169,13 @@ impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
             let (items, progress) = match step.step(iterators.as_mut_slice(), &learner.model()) {
                 Ok(result) => result,
                 Err(err) => {
-                    interrupter.stop(Some(&format!("dataset error during training step: {err}")));
+                    interrupter.fail(err);
                     break;
                 }
             };
             if items.is_empty() {
                 break;
             }
-
-            learner.lr_step();
 
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
@@ -187,12 +186,13 @@ impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
 
             accumulation_current += 1;
 
-            if accumulation <= accumulation_current {
+            if accumulation <= accumulation_current || progress.is_completed() {
                 let mut grads = MultiGradientsParams::default();
                 for (device_id, accumulator) in accumulators.iter_mut().enumerate() {
                     let grad = accumulator.grads();
                     grads.grads.push((grad, devices[device_id].clone()));
                 }
+                learner.lr_step();
                 learner.optimizer_step_multi(grads);
                 accumulation_current = 0;
             }
@@ -206,7 +206,9 @@ impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
                     Some(learner.lr_current()),
                 );
 
-                event_processor.process_train(LearnerEvent::ProcessedItem(item));
+                interrupter.fail_on_error(
+                    event_processor.process_train(LearnerEvent::ProcessedItem(item)),
+                );
             }
 
             if interrupter.should_stop() {

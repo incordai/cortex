@@ -1,9 +1,10 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use alloc::vec::Vec;
 
 use cortex::config::Config;
-use cortex::module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
 use cortex::tensor::{Bool, Device, Tensor};
 
 use crate::activation::ActivationConfig;

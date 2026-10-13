@@ -13,7 +13,7 @@ keywords = [
 ]
 license.workspace = true
 name = "cortex-pack"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-pack"
 version.workspace = true
 
@@ -33,4 +33,5 @@ ciborium = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+bytes = { workspace = true }
 tempfile = { workspace = true }

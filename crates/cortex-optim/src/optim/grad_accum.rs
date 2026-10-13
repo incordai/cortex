@@ -2,7 +2,7 @@ use cortex_core as cortex;
 
 use core::marker::PhantomData;
 
-use cortex::module::{AutodiffModule, ModuleVisitor, Param};
+use cortex::module::{Module, ModuleVisitor, Param};
 use cortex::tensor::Tensor;
 
 use super::GradientsParams;
@@ -33,7 +33,7 @@ impl<M> GradientsAccumulator<M> {
     /// Accumulate the given gradients for each parameter in the given module.
     pub fn accumulate(&mut self, module: &M, grads: GradientsParams)
     where
-        M: AutodiffModule,
+        M: Module,
     {
         let mut visitor = ModuleGradsAccumulator::<M>::new(&mut self.grads, grads);
         module.visit(&mut visitor);
@@ -55,7 +55,7 @@ struct ModuleGradsAccumulator<'a, M> {
     phantom: PhantomData<M>,
 }
 
-impl<M: AutodiffModule> ModuleVisitor for ModuleGradsAccumulator<'_, M> {
+impl<M: Module> ModuleVisitor for ModuleGradsAccumulator<'_, M> {
     fn visit_float<const D: usize>(&mut self, param: &Param<Tensor<D>>) {
         let grad_updated = match self.grads_new.remove::<D>(param.id) {
             Some(new) => match self.grads.remove::<D>(param.id) {

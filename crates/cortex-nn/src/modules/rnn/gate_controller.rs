@@ -1,7 +1,8 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use crate::{Linear, LinearConfig, LinearLayout};
-use cortex::module::{Initializer, Module};
+use cortex::module::Module;
 use cortex::tensor::{Device, Tensor};
 
 /// A GateController represents a gate in an LSTM cell. An

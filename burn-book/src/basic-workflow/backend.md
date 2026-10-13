@@ -4,8 +4,14 @@ We have effectively written most of the necessary code to train our model. Howev
 explicitly designated the backend to be used at any point. This will be defined in the main
 entrypoint of our program, namely the `main` function defined in `src/main.rs`.
 
+Cortex's default Cargo features do not include an execution backend. Applications select
+one explicitly, for example WGPU:
+
+```toml
+cortex = { version = "0.22", features = ["wgpu"] }
+```
+
 ```rust , ignore
-# #![recursion_limit = "256"]
 # mod data;
 # mod model;
 # mod training;
@@ -31,8 +37,9 @@ fn main() {
 }
 ```
 
-In this code snippet, we select a WGPU device, which is compatible with any operating system and
-uses the GPU. For other options, see the Cortex README. The model itself remains backend-agnostic:
+In this code snippet, we select a WGPU device, which uses an available graphics API on the platform.
+For other options, see the [backend and device table](../building-blocks/backend.md#selecting-a-device).
+The model itself remains backend-agnostic:
 tensor operations are dispatched according to their device. The training function creates an
 autodiff-enabled device internally.
 

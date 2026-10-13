@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use cortex_backend::{TensorMetadata, TensorPrimitive, get_device_settings};
+use cortex_backend::{TensorMetadata, TensorPrimitive, get_or_init_device_settings};
 use cortex_dispatch::{Dispatch, DispatchTensor};
 use cortex_std::DeviceSettings;
 
@@ -359,7 +359,7 @@ impl BridgeTensor {
             BridgeTensorVariant::QFloat(tensor) => tensor.device(),
         };
 
-        get_device_settings::<Dispatch>(&device)
+        get_or_init_device_settings::<Dispatch>(&device)
     }
 }
 

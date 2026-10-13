@@ -4,7 +4,7 @@ use cortex_backend::{
     ops::{BoolTensorOps, FloatTensorOps, IntTensorOps, QTensorOps, TransactionPrimitive},
 };
 use cortex_dispatch::Dispatch;
-use cortex_std::{DType, ExecutionError, IndexingUpdateOp, Shape, Slice};
+use cortex_std::{DType, ExecutionError, IndexingUpdateOp, PadMode, Shape, Slice};
 
 use crate::{
     Device, Float,
@@ -118,6 +118,7 @@ impl BasicOps for Float {
     }
 
     fn slice_assign(tensor: BridgeTensor, slices: &[Slice], value: BridgeTensor) -> BridgeTensor {
+        // Slice assign is ambiguous for QFloat, so both operands are dequantized first.
         BridgeTensor::float(Dispatch::float_slice_assign(
             tensor.into_float(),
             slices,
@@ -273,7 +274,7 @@ impl BasicOps for Float {
     }
 
     fn from_data(data: TensorData, device: &Device, dtype: DType) -> BridgeTensor {
-        if matches!(data.dtype, DType::QFloat(_)) {
+        if matches!(data.dtype(), DType::QFloat(_)) {
             // When the source is QFloat, there is no conversion path possible.
             BridgeTensor::qfloat(Dispatch::q_from_data(data, device.as_dispatch()))
         } else if dtype.is_float() {
@@ -387,6 +388,10 @@ impl BasicOps for Float {
 }
 
 impl Numeric for Float {
+    fn pad(tensor: BridgeTensor, padding: &[(usize, usize)], mode: PadMode) -> BridgeTensor {
+        BridgeTensor::float(Dispatch::float_pad(tensor.into_float(), padding, mode))
+    }
+
     fn add(lhs: BridgeTensor, rhs: BridgeTensor) -> BridgeTensor {
         q_bin_ops!(lhs, rhs, float_add, q_add)
     }
@@ -492,6 +497,20 @@ impl Numeric for Float {
                 TensorPrimitive::Float(out) => BridgeTensor::float(out),
                 TensorPrimitive::QFloat(out) => BridgeTensor::qfloat(out),
             },
+            _ => panic!("Should be Float primitive kind"),
+        }
+    }
+
+    fn sum_dims(tensor: BridgeTensor, dims: &[usize]) -> BridgeTensor {
+        let (kind, tensor) = tensor.into_parts();
+        match kind {
+            BridgeKind::Float => BridgeTensor::float(Dispatch::float_sum_dims(tensor, dims)),
+            // Quantized reductions have no multi-dimension form; one at a time.
+            BridgeKind::QFloat => dims
+                .iter()
+                .fold(BridgeTensor::qfloat(tensor), |tensor, &dim| {
+                    Self::sum_dim(tensor, dim)
+                }),
             _ => panic!("Should be Float primitive kind"),
         }
     }

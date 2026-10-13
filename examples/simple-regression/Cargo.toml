@@ -10,12 +10,12 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["cortex/dataset", "cortex/sqlite-bundled"]
+default = ["cortex/dataset", "cortex/sqlite"]
 flex = ["cortex/flex"]
 tch-cpu = ["cortex/tch"]
 tch-gpu = ["cortex/tch"]
 wgpu = ["cortex/wgpu"]
-remote = ["cortex/remote"]
+remote = ["cortex/remote-websocket"]
 
 [dependencies]
 cortex = { workspace = true, features = ["default", "train"] }
@@ -26,4 +26,4 @@ serde = { workspace = true, features = ["std", "derive"] }
 
 # Displaying results
 textplots = "0.8.7"
-rgb = "0.8.52"
+rgb = "0.8.53"

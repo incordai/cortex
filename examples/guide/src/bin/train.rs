@@ -1,4 +1,3 @@
-#![recursion_limit = "131"]
 use cortex::{data::dataset::Dataset, optim::AdamConfig, prelude::*};
 use guide::{
     inference,

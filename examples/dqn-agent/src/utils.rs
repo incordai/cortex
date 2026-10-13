@@ -67,8 +67,8 @@ pub struct EpsilonGreedyPolicyOutput {
 }
 
 impl ItemLazy for EpsilonGreedyPolicyOutput {
-    fn sync(self) -> Self {
-        self
+    fn sync(self) -> Result<Self, cortex::tensor::ExecutionError> {
+        Ok(self)
     }
 }
 

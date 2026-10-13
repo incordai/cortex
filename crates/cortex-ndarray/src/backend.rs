@@ -1,9 +1,9 @@
 use crate::rand::NdArrayRng;
 use crate::{NdArrayQTensor, NdArrayTensor};
 use alloc::string::String;
-use cortex_backend::quantization::{QuantLevel, QuantMode, QuantScheme, QuantStore, QuantValue};
+use cortex_backend::quantization::{QuantMode, QuantScheme, QuantStore, QuantValue, quantizable};
 use cortex_backend::tensor::{BoolTensor, FloatTensor, IntTensor, QuantizedTensor};
-use cortex_backend::{Backend, BackendTypes, DType, DeviceId, DeviceOps};
+use cortex_backend::{Backend, BackendTypes, DType, DeviceId, DeviceOps, ExecutionError};
 use cortex_ir::{BackendIr, HandleKind, TensorHandle};
 use cortex_std::sync::Mutex;
 use cortex_std::{BoolStore, DeviceSettings, QuantConfig};
@@ -98,7 +98,6 @@ impl Backend for NdArray {
             DType::QFloat(scheme) => {
                 match scheme {
                     QuantScheme {
-                        level: QuantLevel::Tensor | QuantLevel::Block(_),
                         mode: QuantMode::Symmetric,
                         #[cfg(not(feature = "export_tests"))]
                             value: QuantValue::Q8F | QuantValue::Q8S,
@@ -114,7 +113,8 @@ impl Backend for NdArray {
                             | QuantValue::Q2S,
                         store: QuantStore::Native,
                         ..
-                    } => cortex_backend::DTypeUsage::general(),
+                    // The value and store alone do not say which levels `quantize` will accept.
+                    } if quantizable(&scheme) => cortex_backend::DTypeUsage::general(),
                     _scheme => cortex_backend::DTypeUsageSet::empty(),
                 }
             }
@@ -125,7 +125,9 @@ impl Backend for NdArray {
         1
     }
 
-    fn flush(_device: &Self::Device) {}
+    fn flush(_device: &Self::Device) -> Result<(), ExecutionError> {
+        Ok(())
+    }
 }
 
 impl BackendIr for NdArray {
@@ -206,6 +208,39 @@ mod tests {
         assert!(!B::supports_dtype(
             &device,
             DType::QFloat(QuantScheme::default())
+        ));
+    }
+
+    /// A scheme this claims and then panics on is worse than one it declines, because the panic
+    /// lands on the first tensor rather than where the scheme was chosen.
+    #[test]
+    fn should_support_the_two_level_schemes_it_can_quantize() {
+        use cortex_backend::ops::{FloatTensorOps, QTensorOps};
+        use cortex_std::{ScaleDtype, TensorData};
+
+        type B = NdArray;
+        let device = NdArrayDevice::Cpu;
+        let scheme = device
+            .defaults()
+            .quantization
+            .scheme
+            .with_value(QuantValue::Q8S)
+            .per_block([4], ScaleDtype::UE4M3)
+            .per_tensor(ScaleDtype::F32);
+
+        assert!(B::supports_dtype(&device, DType::QFloat(scheme)));
+
+        let tensor = B::float_from_data(
+            TensorData::from([0.1f32, -0.4, 0.2, 0.9, -1.5, 0.3, 0.05, -0.02]),
+            &device,
+        );
+        let quantized = B::quantize_dynamic(tensor, &scheme);
+        assert_eq!(quantized.scheme.num_levels(), 2);
+
+        // Block scales already spanning f32's range are rejected by `quantize`.
+        assert!(!B::supports_dtype(
+            &device,
+            DType::QFloat(scheme.per_block([4], ScaleDtype::F32))
         ));
     }
 }

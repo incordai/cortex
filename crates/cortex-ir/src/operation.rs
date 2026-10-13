@@ -11,7 +11,7 @@ use cortex_backend::{
     DType, Distribution, Slice,
     ops::{
         ConvOptions, ConvTransposeOptions, DeformConvOptions, GridSampleOptions,
-        GridSamplePaddingMode, InterpolateMode, InterpolateOptions,
+        GridSamplePaddingMode, InterpolateMode, InterpolateOptions, PadMode,
     },
     quantization::QuantScheme,
 };
@@ -219,6 +219,9 @@ pub enum FloatOperationIr {
 /// Operation intermediate representation specific to module.
 #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
 pub enum ModuleOperationIr {
+    /// Batch normalization with explicitly supplied statistics, corresponding
+    /// to [batch_norm](cortex_backend::ops::ModuleOps::batch_norm).
+    BatchNorm(BatchNormOpIr),
     /// Operation corresponding to [embedding](cortex_backend::ops::ModuleOps::embedding).
     Embedding(EmbeddingOpIr),
     /// Operation corresponding to [embedding_backward](cortex_backend::ops::ModuleOps::embedding_backward).
@@ -315,10 +318,6 @@ pub enum ModuleOperationIr {
     Interpolate(InterpolateOpIr),
     /// Operation corresponding to [interpolate backward](cortex_backend::ops::ModuleOps::interpolate_backward).
     InterpolateBackward(InterpolateBackwardOpIr),
-    /// Operation corresponding to [rfft](cortex_backend::ops::ModuleOps::rfft)
-    Rfft(RfftOpIr),
-    /// Operation corresponding to [irfft](cortex_backend::ops::ModuleOps::irfft)
-    IRfft(IRfftOpIr),
     /// Operation corresponding to [attention](cortex_backend::ops::ModuleOps::attention).
     Attention(AttentionOpIr),
     /// Operation corresponding to [ctc_loss](cortex_backend::ops::ModuleOps::ctc_loss).
@@ -435,8 +434,8 @@ pub enum BaseOperationIr {
     Gather(GatherOpIr),
     /// Operation corresponding to:
     ///
-    /// Float => [scatter](cortex_backend::ops::FloatTensorOps::float_scatter_add).
-    /// Int => [scatter](cortex_backend::ops::IntTensorOps::int_scatter_add).
+    /// Float => [scatter](cortex_backend::ops::FloatTensorOps::float_scatter).
+    /// Int => [scatter](cortex_backend::ops::IntTensorOps::int_scatter).
     /// Bool => [scatter](cortex_backend::ops::BoolTensorOps::bool_scatter_or).
     Scatter(ScatterOpIr),
     /// Multi-dimensional scatter operation.
@@ -595,6 +594,8 @@ pub enum NumericOperationIr {
     /// Float => [sum dim](cortex_backend::ops::FloatTensorOps::float_sum_dim).
     /// Int => [sum dim](cortex_backend::ops::IntTensorOps::int_sum_dim).
     SumDim(ReduceDimOpIr),
+    /// Operation corresponding to summing several dimensions at once.
+    SumDims(ReduceDimsOpIr),
     /// Operation corresponding to:
     ///
     /// Float => [prod](cortex_backend::ops::FloatTensorOps::float_prod).
@@ -777,6 +778,11 @@ pub enum NumericOperationIr {
     ///
     /// Shares [`SortOpIr`] with [`Sort`](Self::Sort); only the output dtype differs.
     ArgSort(SortOpIr),
+    /// Operation corresponding to:
+    ///
+    /// Float => [pad](cortex_backend::ops::FloatTensorOps::float_pad).
+    /// Int => [pad](cortex_backend::ops::IntTensorOps::int_pad).
+    Pad(PadOpIr),
 }
 
 /// Operation intermediate representation specific to an int tensor.
@@ -925,6 +931,50 @@ pub struct FlipOpIr {
     pub axes: Vec<usize>,
 }
 
+/// Padding operation intermediate representation.
+#[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
+pub struct PadOpIr {
+    /// Input tensor intermediate representation.
+    pub input: TensorIr,
+    /// Output tensor intermediate representation.
+    pub out: TensorIr,
+    /// One `(before, after)` padding pair per dimension.
+    pub padding: Vec<(usize, usize)>,
+    /// Padding mode.
+    pub mode: PadModeIr,
+}
+
+/// Serializable padding mode intermediate representation.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Serialize, Deserialize)]
+pub enum PadModeIr {
+    /// Fill padded regions with a constant value.
+    Constant(ScalarIr),
+    /// Reflect values at the boundary, excluding the edge value.
+    Reflect,
+    /// Replicate boundary values.
+    Edge,
+}
+
+impl From<PadMode> for PadModeIr {
+    fn from(value: PadMode) -> Self {
+        match value {
+            PadMode::Constant(value) => Self::Constant(ScalarIr::Float(value as f64)),
+            PadMode::Reflect => Self::Reflect,
+            PadMode::Edge => Self::Edge,
+        }
+    }
+}
+
+impl From<PadModeIr> for PadMode {
+    fn from(value: PadModeIr) -> Self {
+        match value {
+            PadModeIr::Constant(value) => Self::Constant(value.elem()),
+            PadModeIr::Reflect => Self::Reflect,
+            PadModeIr::Edge => Self::Edge,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(missing_docs)]
 pub struct RandomOpIr {
@@ -1014,6 +1064,35 @@ pub struct ReduceDimOpIr {
     pub out: TensorIr,
     pub axis: usize,
     pub accumulator_len: usize,
+}
+
+/// A reduction over several dimensions at once, each kept with length one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Hash)]
+#[allow(missing_docs)]
+pub struct ReduceDimsOpIr {
+    pub input: TensorIr,
+    pub out: TensorIr,
+    pub axes: Vec<usize>,
+}
+
+#[allow(missing_docs)]
+impl ReduceDimsOpIr {
+    pub fn create<F>(input: TensorIr, axes: Vec<usize>, mut new_id: F) -> Self
+    where
+        F: FnMut() -> crate::TensorId,
+    {
+        let mut shape = input.shape.clone();
+        for axis in &axes {
+            shape[*axis] = 1;
+        }
+        let dtype = input.dtype;
+
+        Self {
+            out: TensorIr::uninit(new_id(), shape, dtype),
+            input,
+            axes,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
@@ -1225,6 +1304,21 @@ pub struct EmbeddingBackwardOpIr {
     pub weights: TensorIr,
     pub out_grad: TensorIr,
     pub indices: TensorIr,
+    pub out: TensorIr,
+}
+
+/// Batch normalization using explicitly supplied channel statistics.
+///
+/// This operation neither calculates nor updates the supplied statistics.
+#[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
+#[allow(missing_docs)]
+pub struct BatchNormOpIr {
+    pub x: TensorIr,
+    pub gamma: TensorIr,
+    pub beta: TensorIr,
+    pub mean: TensorIr,
+    pub variance: TensorIr,
+    pub epsilon: ScalarIr,
     pub out: TensorIr,
 }
 
@@ -1440,7 +1534,7 @@ pub struct ConvTranspose3dOpIr {
 #[allow(missing_docs)]
 pub struct Conv1dOptionsIr {
     pub stride: [usize; 1],
-    pub padding: [usize; 1],
+    pub padding: [(usize, usize); 1],
     pub dilation: [usize; 1],
     pub groups: usize,
 }
@@ -1449,7 +1543,7 @@ pub struct Conv1dOptionsIr {
 #[allow(missing_docs)]
 pub struct Conv2dOptionsIr {
     pub stride: [usize; 2],
-    pub padding: [usize; 2],
+    pub padding: [(usize, usize); 2],
     pub dilation: [usize; 2],
     pub groups: usize,
 }
@@ -1506,8 +1600,11 @@ pub struct ConvTranspose3dOptionsIr {
 /// Quantization parameters intermediate representation.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuantizationParametersIr {
-    /// The scaling factor.
+    /// The scaling factor, one per block or a single one for a per-tensor level.
     pub scales: TensorIr,
+    /// The per-tensor scale that [`scales`](Self::scales) are expressed relative to, for a
+    /// two-level scheme.
+    pub global: Option<TensorIr>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
@@ -1552,7 +1649,7 @@ impl From<ConvOptions<3>> for Conv3dOptionsIr {
     fn from(value: ConvOptions<3>) -> Self {
         Self {
             stride: value.stride,
-            padding: value.padding,
+            padding: value.symmetric_padding(),
             dilation: value.dilation,
             groups: value.groups,
         }
@@ -1633,7 +1730,7 @@ impl From<Conv3dOptionsIr> for ConvOptions<3> {
     fn from(val: Conv3dOptionsIr) -> Self {
         ConvOptions {
             stride: val.stride,
-            padding: val.padding,
+            padding: val.padding.map(|padding| (padding, padding)),
             dilation: val.dilation,
             groups: val.groups,
         }
@@ -1888,83 +1985,6 @@ pub struct InterpolateOpIr {
     pub output_size: [usize; 2],
     pub options: InterpolateOptionsIr,
     pub out: TensorIr,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
-#[allow(missing_docs)]
-pub struct RfftOpIr {
-    pub signal: TensorIr,
-    pub dim: usize,
-    pub n: Option<usize>,
-    pub out_re: TensorIr,
-    pub out_im: TensorIr,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
-#[allow(missing_docs)]
-pub struct IRfftOpIr {
-    pub input_re: TensorIr,
-    pub input_im: TensorIr,
-    pub dim: usize,
-    pub n: Option<usize>,
-    pub out_signal: TensorIr,
-}
-
-#[allow(missing_docs)]
-impl RfftOpIr {
-    pub fn create<F>(signal: TensorIr, dim: usize, n: Option<usize>, mut new_id: F) -> Self
-    where
-        F: FnMut() -> crate::TensorId,
-    {
-        // `n` is required to be a power of two at the public API boundary, so
-        // the output has `n / 2 + 1` bins (matching scipy/torch for pow2 n).
-        let mut shape = signal.shape.clone();
-        let fft_len = n.unwrap_or(shape[dim]);
-        shape[dim] = fft_len / 2 + 1;
-        let dtype = signal.dtype;
-
-        Self {
-            signal,
-            dim,
-            n,
-            out_re: TensorIr::uninit(new_id(), shape.clone(), dtype),
-            out_im: TensorIr::uninit(new_id(), shape, dtype),
-        }
-    }
-}
-
-#[allow(missing_docs)]
-impl IRfftOpIr {
-    pub fn create<F>(
-        input_re: TensorIr,
-        input_im: TensorIr,
-        dim: usize,
-        n: Option<usize>,
-        mut new_id: F,
-    ) -> Self
-    where
-        F: FnMut() -> crate::TensorId,
-    {
-        debug_assert!(
-            input_re.shape[dim] >= 1,
-            "IRfftOpIr: input spectrum dimension must be >= 1"
-        );
-        debug_assert!(
-            !matches!(n, Some(0)),
-            "IRfftOpIr: n must be >= 1 when specified"
-        );
-        let mut shape = input_re.shape.clone();
-        shape[dim] = n.unwrap_or((shape[dim] - 1) * 2);
-        let dtype = input_re.dtype;
-
-        Self {
-            input_re,
-            input_im,
-            dim,
-            n,
-            out_signal: TensorIr::uninit(new_id(), shape, dtype),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
@@ -2619,6 +2639,7 @@ impl NumericOperationIr {
             NumericOperationIr::Mean(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::Sum(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::SumDim(repr) => Box::new([&repr.input].into_iter()),
+            NumericOperationIr::SumDims(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::Prod(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::ProdDim(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::Max(repr) => Box::new([&repr.input].into_iter()),
@@ -2644,6 +2665,7 @@ impl NumericOperationIr {
             NumericOperationIr::Sort(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::SortWithIndices(repr) => Box::new([&repr.input].into_iter()),
             NumericOperationIr::ArgSort(repr) => Box::new([&repr.input].into_iter()),
+            NumericOperationIr::Pad(repr) => Box::new([&repr.input].into_iter()),
         }
     }
 
@@ -2678,6 +2700,7 @@ impl NumericOperationIr {
             NumericOperationIr::Mean(repr) => Box::new([&repr.out].into_iter()),
             NumericOperationIr::Sum(repr) => Box::new([&repr.out].into_iter()),
             NumericOperationIr::SumDim(repr) => Box::new([&repr.out].into_iter()),
+            NumericOperationIr::SumDims(repr) => Box::new([&repr.out].into_iter()),
             NumericOperationIr::Prod(repr) => Box::new([&repr.out].into_iter()),
             NumericOperationIr::ProdDim(repr) => Box::new([&repr.out].into_iter()),
             NumericOperationIr::Max(repr) => Box::new([&repr.out].into_iter()),
@@ -2711,6 +2734,7 @@ impl NumericOperationIr {
                 Box::new([&repr.out, &repr.out_indices].into_iter())
             }
             NumericOperationIr::ArgSort(repr) => Box::new([&repr.out].into_iter()),
+            NumericOperationIr::Pad(repr) => Box::new([&repr.out].into_iter()),
         }
     }
     fn mark_read_only(&mut self, nodes: &[TensorId]) -> Vec<TensorIr> {
@@ -2811,6 +2835,9 @@ impl NumericOperationIr {
             NumericOperationIr::SumDim(repr) => {
                 repr.input.mark_read_only(nodes, &mut output);
             }
+            NumericOperationIr::SumDims(repr) => {
+                repr.input.mark_read_only(nodes, &mut output);
+            }
             NumericOperationIr::Prod(repr) => {
                 repr.input.mark_read_only(nodes, &mut output);
             }
@@ -2883,6 +2910,9 @@ impl NumericOperationIr {
                 repr.input.mark_read_only(nodes, &mut output);
             }
             NumericOperationIr::ArgSort(repr) => {
+                repr.input.mark_read_only(nodes, &mut output);
+            }
+            NumericOperationIr::Pad(repr) => {
                 repr.input.mark_read_only(nodes, &mut output);
             }
         };
@@ -3028,6 +3058,10 @@ impl NumericOperationIr {
                 v.visit_tensor_mut(&mut repr.input);
                 v.visit_tensor_mut(&mut repr.out);
             }
+            NumericOperationIr::SumDims(repr) => {
+                v.visit_tensor_mut(&mut repr.input);
+                v.visit_tensor_mut(&mut repr.out);
+            }
             NumericOperationIr::Prod(repr) => {
                 v.visit_tensor_mut(&mut repr.input);
                 v.visit_tensor_mut(&mut repr.out);
@@ -3135,6 +3169,13 @@ impl NumericOperationIr {
                 v.visit_tensor_mut(&mut repr.input);
                 v.visit_tensor_mut(&mut repr.out);
             }
+            NumericOperationIr::Pad(repr) => {
+                v.visit_tensor_mut(&mut repr.input);
+                v.visit_tensor_mut(&mut repr.out);
+                if let PadModeIr::Constant(value) = &mut repr.mode {
+                    v.visit_scalar_mut(value);
+                }
+            }
         }
     }
 }
@@ -3160,9 +3201,11 @@ impl FloatOperationIr {
             FloatOperationIr::Ceil(repr) => Box::new([&repr.input].into_iter()),
             FloatOperationIr::Trunc(repr) => Box::new([&repr.input].into_iter()),
             FloatOperationIr::IntoInt(repr) => Box::new([&repr.input].into_iter()),
-            FloatOperationIr::Quantize(repr) => {
-                Box::new([&repr.tensor, &repr.qparams.scales].into_iter())
-            }
+            FloatOperationIr::Quantize(repr) => Box::new(
+                [&repr.tensor, &repr.qparams.scales]
+                    .into_iter()
+                    .chain(repr.qparams.global.iter()),
+            ),
             FloatOperationIr::Dequantize(repr) => Box::new([&repr.input].into_iter()),
             FloatOperationIr::IsNan(repr) => Box::new([&repr.input].into_iter()),
             FloatOperationIr::IsInf(repr) => Box::new([&repr.input].into_iter()),
@@ -3281,6 +3324,9 @@ impl FloatOperationIr {
             FloatOperationIr::Quantize(repr) => {
                 repr.tensor.mark_read_only(nodes, &mut output);
                 repr.qparams.scales.mark_read_only(nodes, &mut output);
+                if let Some(global) = &mut repr.qparams.global {
+                    global.mark_read_only(nodes, &mut output);
+                }
             }
             FloatOperationIr::Dequantize(repr) => {
                 repr.input.mark_read_only(nodes, &mut output);
@@ -3403,6 +3449,9 @@ impl FloatOperationIr {
             FloatOperationIr::Quantize(repr) => {
                 v.visit_tensor_mut(&mut repr.tensor);
                 v.visit_tensor_mut(&mut repr.qparams.scales);
+                if let Some(global) = &mut repr.qparams.global {
+                    v.visit_tensor_mut(global);
+                }
                 v.visit_tensor_mut(&mut repr.out);
             }
             FloatOperationIr::Dequantize(repr) => {
@@ -3724,6 +3773,9 @@ impl BoolOperationIr {
 impl ModuleOperationIr {
     fn inputs(&self) -> Box<dyn Iterator<Item = &TensorIr> + '_> {
         match self {
+            ModuleOperationIr::BatchNorm(repr) => {
+                Box::new([&repr.x, &repr.gamma, &repr.beta, &repr.mean, &repr.variance].into_iter())
+            }
             ModuleOperationIr::Embedding(repr) => {
                 Box::new([&repr.weights, &repr.indices].into_iter())
             }
@@ -3883,10 +3935,6 @@ impl ModuleOperationIr {
             ModuleOperationIr::InterpolateBackward(repr) => {
                 Box::new([&repr.x, &repr.grad].into_iter())
             }
-            ModuleOperationIr::Rfft(repr) => Box::new([&repr.signal].into_iter()),
-            ModuleOperationIr::IRfft(repr) => {
-                Box::new([&repr.input_re, &repr.input_im].into_iter())
-            }
             ModuleOperationIr::Attention(repr) => {
                 if let Some(mask) = &repr.mask {
                     if let Some(attn_bias) = &repr.attn_bias {
@@ -3946,6 +3994,7 @@ impl ModuleOperationIr {
     }
     fn outputs(&self) -> Box<dyn Iterator<Item = &TensorIr> + '_> {
         match self {
+            ModuleOperationIr::BatchNorm(repr) => Box::new([&repr.out].into_iter()),
             ModuleOperationIr::Embedding(repr) => Box::new([&repr.out].into_iter()),
             ModuleOperationIr::EmbeddingBackward(repr) => Box::new([&repr.out].into_iter()),
             ModuleOperationIr::Linear(repr) => Box::new([&repr.out].into_iter()),
@@ -4029,8 +4078,6 @@ impl ModuleOperationIr {
             }
             ModuleOperationIr::Interpolate(repr) => Box::new([&repr.out].into_iter()),
             ModuleOperationIr::InterpolateBackward(repr) => Box::new([&repr.out].into_iter()),
-            ModuleOperationIr::Rfft(repr) => Box::new([&repr.out_re, &repr.out_im].into_iter()),
-            ModuleOperationIr::IRfft(repr) => Box::new([&repr.out_signal].into_iter()),
             ModuleOperationIr::Attention(repr) => Box::new([&repr.out].into_iter()),
             ModuleOperationIr::CtcLoss(repr) => Box::new([&repr.out].into_iter()),
             ModuleOperationIr::CtcLossBackward(repr) => Box::new([&repr.out].into_iter()),
@@ -4061,6 +4108,13 @@ impl ModuleOperationIr {
         let mut output = Vec::new();
 
         match self {
+            ModuleOperationIr::BatchNorm(repr) => {
+                repr.x.mark_read_only(nodes, &mut output);
+                repr.gamma.mark_read_only(nodes, &mut output);
+                repr.beta.mark_read_only(nodes, &mut output);
+                repr.mean.mark_read_only(nodes, &mut output);
+                repr.variance.mark_read_only(nodes, &mut output);
+            }
             ModuleOperationIr::Embedding(repr) => {
                 repr.weights.mark_read_only(nodes, &mut output);
                 repr.indices.mark_read_only(nodes, &mut output);
@@ -4276,13 +4330,6 @@ impl ModuleOperationIr {
                 repr.x.mark_read_only(nodes, &mut output);
                 repr.grad.mark_read_only(nodes, &mut output);
             }
-            ModuleOperationIr::Rfft(repr) => {
-                repr.signal.mark_read_only(nodes, &mut output);
-            }
-            ModuleOperationIr::IRfft(repr) => {
-                repr.input_re.mark_read_only(nodes, &mut output);
-                repr.input_im.mark_read_only(nodes, &mut output);
-            }
             ModuleOperationIr::Attention(repr) => {
                 repr.query.mark_read_only(nodes, &mut output);
                 repr.key.mark_read_only(nodes, &mut output);
@@ -4354,6 +4401,15 @@ impl ModuleOperationIr {
 
     fn visit_mut(&mut self, v: &mut impl IrVisitorMut) {
         match self {
+            ModuleOperationIr::BatchNorm(repr) => {
+                v.visit_tensor_mut(&mut repr.x);
+                v.visit_tensor_mut(&mut repr.gamma);
+                v.visit_tensor_mut(&mut repr.beta);
+                v.visit_tensor_mut(&mut repr.mean);
+                v.visit_tensor_mut(&mut repr.variance);
+                v.visit_scalar_mut(&mut repr.epsilon);
+                v.visit_tensor_mut(&mut repr.out);
+            }
             ModuleOperationIr::Embedding(repr) => {
                 v.visit_tensor_mut(&mut repr.weights);
                 v.visit_tensor_mut(&mut repr.indices);
@@ -4605,16 +4661,6 @@ impl ModuleOperationIr {
                 v.visit_tensor_mut(&mut repr.x);
                 v.visit_tensor_mut(&mut repr.grad);
                 v.visit_tensor_mut(&mut repr.out);
-            }
-            ModuleOperationIr::Rfft(repr) => {
-                v.visit_tensor_mut(&mut repr.signal);
-                v.visit_tensor_mut(&mut repr.out_re);
-                v.visit_tensor_mut(&mut repr.out_im);
-            }
-            ModuleOperationIr::IRfft(repr) => {
-                v.visit_tensor_mut(&mut repr.input_re);
-                v.visit_tensor_mut(&mut repr.input_im);
-                v.visit_tensor_mut(&mut repr.out_signal);
             }
             ModuleOperationIr::Attention(repr) => {
                 v.visit_tensor_mut(&mut repr.query);
@@ -5125,9 +5171,18 @@ activation_ir_tensor_access! {
 }
 
 #[cfg(test)]
-mod visit_mut_tests {
+mod tests {
     use super::*;
     use cortex_backend::{DType, Shape};
+
+    #[test]
+    #[should_panic(expected = "expected symmetric convolution padding")]
+    fn conv3d_options_ir_rejects_asymmetric_padding() {
+        let options =
+            ConvOptions::new_with_padding([1, 1, 1], [(0, 1), (2, 2), (3, 3)], [1, 1, 1], 1);
+
+        let _: Conv3dOptionsIr = options.into();
+    }
 
     fn tensor(id: u64) -> TensorIr {
         TensorIr::uninit(TensorId::new(id), Shape::from([2, 2]), DType::F32)
@@ -5201,5 +5256,37 @@ mod visit_mut_tests {
             .collect();
         assert_eq!(ids, vec![110, 111]);
         assert_eq!(visitor.scalars.len(), 0);
+    }
+
+    #[test]
+    fn pad_ir_tracks_shape_tensors_and_constant_value() {
+        let input = TensorIr::uninit(TensorId::new(1), Shape::from([2, 3]), DType::F32);
+        let desc = PadOpIr::create(
+            input,
+            vec![(1, 2), (3, 4)],
+            PadModeIr::Constant(ScalarIr::Float(5.0)),
+            || TensorId::new(2),
+        );
+        assert_eq!(desc.out.shape, Shape::from([5, 10]));
+
+        let mut op = OperationIr::NumericFloat(DType::F32, NumericOperationIr::Pad(desc));
+        let mut visitor = CollectVisitor {
+            rewrite_scalar: Some(ScalarIr::Float(7.0)),
+            ..Default::default()
+        };
+        op.visit_mut(&mut visitor);
+
+        let ids = op
+            .inputs()
+            .chain(op.outputs())
+            .map(|tensor| tensor.id.value())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![101, 102]);
+        assert_eq!(visitor.scalars, vec![ScalarIr::Float(5.0)]);
+
+        let OperationIr::NumericFloat(_, NumericOperationIr::Pad(desc)) = op else {
+            panic!("expected pad operation");
+        };
+        assert_eq!(desc.mode, PadModeIr::Constant(ScalarIr::Float(7.0)));
     }
 }

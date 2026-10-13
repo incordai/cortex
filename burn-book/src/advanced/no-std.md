@@ -25,11 +25,11 @@ Some other dependencies have to be added
 ```toml
 [dependencies]
 embedded-alloc = "0.6.0" # Only if there is no default allocator for your chip
-cortex = { version = "0.21", default-features = false, features = ["flex"] } # Flex supports no_std
-cortex-store = { version = "0.21", default-features = false, features = ["cortexpack"] }
+cortex = { version = "0.22", default-features = false, features = ["flex"] } # Flex supports no_std
+cortex-store = { version = "0.22", default-features = false }
 
 [build-dependencies]
-cortex-onnx = { version = "0.21" } # Used to auto generate the rust code to import the model
+cortex-onnx = { version = "0.22" } # Used to auto generate the rust code to import the model
 ```
 
 ### Import the Model

@@ -3,7 +3,8 @@
 > [Burn](https://github.com/tracel-ai/burn) ndarray backend
 
 [![Current Crates.io Version](https://img.shields.io/crates/v/burn-ndarray.svg)](https://crates.io/crates/burn-ndarray)
-[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn-ndarray/blob/master/README.md)
+[![Documentation](https://docs.rs/burn-ndarray/badge.svg)](https://docs.rs/burn-ndarray)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
 
 > **New projects should use [`burn-flex`](https://crates.io/crates/burn-flex).** It is a
 > from-scratch pure-Rust CPU backend that replaces `cortex-ndarray` with faster gemm, zero-copy view
@@ -34,3 +35,10 @@ initialized by `Backend::seed` method.
 | Accelerate | Yes | No  |  No   |  Yes  |   No    |   No    | Yes |  No  |
 | Netlib     | Yes | No  |  Yes  |  Yes  |   Yes   |   No    | No  |  No  |
 | Openblas   | Yes | No  |  Yes  |  Yes  |   Yes   |   Yes   | Yes |  No  |
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://burn.dev/books/burn/) and the [API documentation](https://docs.rs/burn).

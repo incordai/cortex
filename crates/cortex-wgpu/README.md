@@ -3,57 +3,71 @@
 [Burn](https://github.com/tracel-ai/burn) WGPU backend
 
 [![Current Crates.io Version](https://img.shields.io/crates/v/burn-wgpu.svg)](https://crates.io/crates/burn-wgpu)
-[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn-wgpu/blob/master/README.md)
+[![Documentation](https://docs.rs/burn-wgpu/badge.svg)](https://docs.rs/burn-wgpu)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
 
 This crate provides a WGPU backend for [Burn](https://github.com/tracel-ai/burn) using the
 [wgpu](https://github.com/gfx-rs/wgpu).
 
-The backend supports Vulkan, Metal, DirectX11/12, OpenGL, WebGPU.
+The backend supports Vulkan, Metal, DirectX 12, OpenGL, and WebGPU.
 
 ## Usage Example
 
-```rust
-#[cfg(feature = "wgpu")]
-mod wgpu {
-    use cortex_autodiff::Autodiff;
-    use cortex_wgpu::{Wgpu, WgpuDevice};
-    use mnist::training;
+For application code, enable Cortex's `wgpu` feature and select the device at runtime:
 
-    pub fn run() {
-        let device = WgpuDevice::default();
-        training::run::<Autodiff<Wgpu<f32, i32>>>(device);
-    }
-}
+```toml
+cortex = { version = "0.22", features = ["wgpu"] }
 ```
 
-> ⚠️ **Warning**  
-> When using one of the `wgpu` backends, you may encounter compilation errors related to recursive type evaluation. This is due to complex type nesting within the `wgpu` dependency chain.  
-> To resolve this issue, add the following line at the top of your `main.rs` or `lib.rs` file:
-> ```rust
-> #![recursion_limit = "256"]
-> ```
-> The default recursion limit (128) is often just below the required depth (typically 130-150) due to deeply nested associated types and trait bounds.
+```rust
+use cortex::tensor::{Device, Tensor};
 
+let device = Device::wgpu(Default::default());
+let input = Tensor::<2>::ones([2, 3], &device);
+let output = input + 1.0;
+```
+
+For training, enable `autodiff` (also enabled by `train`) and use `device.autodiff()` before
+initializing model parameters and inputs. Tensor and model types have no backend parameter.
 
 ## Configuration
 
-You can set `CORTEX_WGPU_MAX_TASKS` to a positive integer that determines how many computing tasks are
-submitted in batches to the graphics API.
+Use `Device::wgpu_options()` to configure the runtime before creating tensors:
 
-## Alternative SPIR-V backend
+```rust,ignore
+use cortex::tensor::{Device, wgpu::WgpuBackend};
 
-When targeting Vulkan, the `spirv` feature flag can be enabled to enable the SPIR-V compiler
-backend, which performs significantly better than WGSL. This is especially true for matrix
-multiplication, where SPIR-V can make use of TensorCores and run at `f16` precision. This isn't
-currently supported by WGSL. The compiler can also be selected at runtime by setting the
-corresponding generic parameter to either `SpirV` or `Wgsl`.
+let device = Device::wgpu_options()
+    .graphics_api(WgpuBackend::Vulkan)
+    .tasks_max(32)
+    .init()?;
+```
+
+Use `.init_async().await?` in browsers or async applications. Options also include
+`.memory_config(...)` and `.setup(...)` for existing wgpu handles.
+Use `Device::configure` for dtype defaults.
+
+## Graphics API and shader compiler
+
+Enable `vulkan`, `metal`, or `webgpu` and select the corresponding `Device` constructor to target
+that graphics API. `AutoCompiler` selects the shader compiler at runtime. There is no `spirv`
+feature or compiler type parameter on `Wgpu` in 0.22. Multiple backend features can be enabled
+together. The `Vulkan`, `Metal`, and `WebGpu` aliases are deprecated: use `Wgpu` with an explicit
+device constructor to select the graphics API.
 
 ## Platform Support
 
-| Option    | CPU | GPU | Linux | MacOS | Windows | Android | iOS | WASM |
-| :-------- | :-: | :-: | :---: | :---: | :-----: | :-----: | :-: | :--: |
-| Metal     | No  | Yes |  No   |  Yes  |   No    |   No    | Yes |  No  |
-| Vulkan    | Yes | Yes |  Yes  |  Yes  |   Yes   |   Yes   | Yes |  No  |
-| OpenGL    | No  | Yes |  Yes  |  Yes  |   Yes   |   Yes   | Yes |  No  |
-| WebGpu    | No  | Yes |  No   |  No   |   No    |   No    | No  | Yes  |
-| Dx11/Dx12 | No  | Yes |  No   |  No   |   Yes   |   No    | No  |  No  |
+| Option | CPU | GPU | Linux | MacOS | Windows | Android | iOS | WASM |
+| :----- | :-: | :-: | :---: | :---: | :-----: | :-----: | :-: | :--: |
+| Metal  | No  | Yes |  No   |  Yes  |   No    |   No    | Yes |  No  |
+| Vulkan | Yes | Yes |  Yes  |  Yes  |   Yes   |   Yes   | Yes |  No  |
+| OpenGL | No  | Yes |  Yes  |  Yes  |   Yes   |   Yes   | Yes |  No  |
+| WebGpu | No  | Yes |  No   |  No   |   No    |   No    | No  | Yes  |
+| Dx12   | No  | Yes |  No   |  No   |   Yes   |   No    | No  |  No  |
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://burn.dev/books/burn/) and the [API documentation](https://docs.rs/burn).

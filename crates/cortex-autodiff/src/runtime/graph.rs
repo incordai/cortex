@@ -9,13 +9,8 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-#[cfg(target_has_atomic = "ptr")]
-use alloc::sync::Arc;
-
-#[cfg(not(target_has_atomic = "ptr"))]
-use portable_atomic_util::Arc;
-
 use cortex_backend::Backend;
+use cortex_std::sync::Arc;
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashSet;

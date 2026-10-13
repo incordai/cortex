@@ -2,11 +2,11 @@ use alloc::format;
 
 use cortex_core as cortex;
 
-use crate::{PaddingConfig1d, conv::checks};
-use cortex::tensor::{Device, Tensor, module::conv1d, ops::PaddedConvOptions};
+use crate::{Initializer, PaddingConfig1d, conv::checks};
+use cortex::tensor::{Device, Tensor, module::conv1d, ops::ConvOptions};
 use cortex::{
     config::Config,
-    module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay, Param},
+    module::{Content, DisplaySettings, Module, ModuleDisplay, Param},
 };
 
 /// Configuration to create a [1D convolution](Conv1d) layer using the [init function](Conv1dConfig::init).
@@ -152,10 +152,9 @@ impl Conv1d {
             self.padding
                 .calculate_padding_1d_pair(length, self.kernel_size, self.stride);
 
-        let options = PaddedConvOptions::asymmetric(
+        let options = ConvOptions::new_with_padding(
             [self.stride],
-            [left],
-            [right],
+            [(left, right)],
             [self.dilation],
             self.groups,
         );

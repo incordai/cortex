@@ -9,12 +9,12 @@ This crate provides examples for importing model weights from different formats 
 Imports weights from a PyTorch `.pt` file using `cortex-store`.
 
 ```bash
-cargo run --bin pytorch -- <image_index>
+cargo run -p import-model-weights --bin pytorch -- <image_index>
 ```
 
 Example:
 ```bash
-cargo run --bin pytorch -- 15
+cargo run -p import-model-weights --bin pytorch -- 15
 
 Loading PyTorch model weights from file: weights/mnist.pt
 Image index: 15
@@ -30,12 +30,12 @@ https://huggingface.co/datasets/ylecun/mnist/viewer/mnist/test?row=15
 Imports weights from a Safetensors file using `cortex-store`.
 
 ```bash
-cargo run --bin safetensors -- <image_index>
+cargo run -p import-model-weights --bin safetensors -- <image_index>
 ```
 
 Example:
 ```bash
-cargo run --bin safetensors -- 42
+cargo run -p import-model-weights --bin safetensors -- 42
 
 Loading Safetensors model weights from file: weights/mnist.safetensors
 Image index: 42
@@ -51,7 +51,7 @@ https://huggingface.co/datasets/ylecun/mnist/viewer/mnist/test?row=42
 Converts between different weight formats (PyTorch or Safetensors) to Cortex's native Cortexpack format.
 
 ```bash
-cargo run --bin convert -- <format> <output_directory>
+cargo run -p import-model-weights --bin convert -- <format> <output_directory>
 ```
 
 Where:
@@ -60,7 +60,7 @@ Where:
 
 Example with PyTorch:
 ```bash
-cargo run --bin convert -- pytorch /tmp/cortex-convert
+cargo run -p import-model-weights --bin convert -- pytorch /tmp/cortex-convert
 
 Loading PyTorch weights from 'weights/mnist.pt'...
 Saving model to '/tmp/cortex-convert/mnist.bpk'...
@@ -69,7 +69,7 @@ Model successfully saved to '/tmp/cortex-convert/mnist.bpk'.
 
 Example with Safetensors:
 ```bash
-cargo run --bin convert -- safetensors /tmp/cortex-convert
+cargo run -p import-model-weights --bin convert -- safetensors /tmp/cortex-convert
 
 Loading Safetensors weights from 'weights/mnist.safetensors'...
 Saving model to '/tmp/cortex-convert/mnist.bpk'...
@@ -81,7 +81,7 @@ Model successfully saved to '/tmp/cortex-convert/mnist.bpk'.
 Demonstrates loading and using a model from Cortex's native Cortexpack format.
 
 ```bash
-cargo run --bin cortexpack -- <image_index> <model_path>
+cargo run -p import-model-weights --bin cortexpack -- <image_index> <model_path>
 ```
 
 Where:
@@ -90,7 +90,7 @@ Where:
 
 Example:
 ```bash
-cargo run --bin cortexpack -- 35 /tmp/cortex-convert/mnist
+cargo run -p import-model-weights --bin cortexpack -- 35 /tmp/cortex-convert/mnist
 
 Loading model weights from file: /tmp/cortex-convert/mnist.bpk
 Image index: 35

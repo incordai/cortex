@@ -6,7 +6,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "tensor"]
 license.workspace = true
 name = "cortex-ir"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-ir"
 documentation = "https://docs.rs/burn-ir"
 version.workspace = true
@@ -16,7 +16,7 @@ workspace = true
 
 [features]
 default = ["std"]
-std = ["cortex-backend/std"]
+std = ["cortex-backend/std", "cortex-std/std"]
 doc = ["default"]
 tracing = [
     "cortex-backend/tracing",
@@ -27,6 +27,10 @@ serde = { workspace = true }
 hashbrown = { workspace = true } # no_std compatible
 
 cortex-backend = { workspace = true }
+# `Arc`, on targets without pointer-width atomics too (`cortex_std::sync::Arc`):
+# `alloc::sync` does not exist on thumbv6m, and an errored handle's cause is
+# shared behind one.
+cortex-std = { workspace = true }
 
 [package.metadata.docs.rs]
 features = ["doc"]

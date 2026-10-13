@@ -1,9 +1,10 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use crate::GateController;
 use crate::activation::{Activation, ActivationConfig};
 use cortex::config::Config;
-use cortex::module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
 
@@ -651,7 +652,7 @@ mod tests {
         let (_, state) = rnn.forward(input, None);
 
         // Verify output values are within the clip range
-        let hidden_state: Vec<f32> = state.hidden.to_data().to_vec().unwrap();
+        let hidden_state: Vec<f32> = state.hidden.try_into_vec_as().unwrap();
         for val in hidden_state {
             assert!(
                 val >= -clip_value as f32 && val <= clip_value as f32,

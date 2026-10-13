@@ -1,9 +1,24 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![recursion_limit = "256"]
 
-//! Cortex neural network module.
+//! Neural network building blocks for Cortex.
+//!
+//! Every layer is a [`Module`](cortex_core::module::Module) built from a `Config`:
+//! `LinearConfig::new(784, 128).init(&device)` returns a [`Linear`]. Applications use these through
+//! `cortex::nn`.
+//!
+//! - Layers: linear, convolution and transposed convolution (1D to 3D), pooling, normalization
+//!   (batch, layer, group, instance, RMS), embeddings, dropout, recurrent layers (LSTM, GRU),
+//!   attention and transformers, positional and rotary encodings, interpolation, and more.
+//! - [`activation`]: activation functions as modules.
+//! - [`loss`]: loss functions, from mean squared error and cross-entropy to CTC.
+//! - [`Initializer`]: weight initialization schemes.
+//!
+//! # Feature flags
+//!
+//! - `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
+//! - `tracing`: instrument operations with the `tracing` crate.
 
 /// Loss module
 pub mod loss;
@@ -19,11 +34,15 @@ pub use activation::{
     tanh::*, thresholded_relu::*,
 };
 
+mod initializer;
 mod padding;
 
+pub use initializer::*;
 pub use padding::*;
 
-// For backward compat, `cortex::nn::Initializer`
-pub use cortex_core::module::Initializer;
-
 extern crate alloc;
+
+#[cfg(test)]
+fn test_device() -> cortex_core::tensor::Device {
+    cortex_core::tensor::Device::flex()
+}

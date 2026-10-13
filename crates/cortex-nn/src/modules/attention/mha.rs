@@ -1,11 +1,12 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use crate::activation::Gelu;
 use crate::cache::TensorCache;
 use crate::{Dropout, DropoutConfig, Linear, LinearConfig};
 use cortex::config::Config;
-use cortex::module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay};
-use cortex::tensor::{Bool, Device, Tensor};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use cortex::tensor::{Bool, Device, Tensor, assert_shape};
 
 use cortex::tensor::activation::{quiet_softmax, softmax};
 #[cfg(not(feature = "std"))]
@@ -193,6 +194,7 @@ impl MhaInput {
 #[derive(Debug, Clone)]
 pub struct MhaOutput {
     /// The attention weights `[batch_size, n_heads, seq_length_1, seq_length_2]`.
+    /// During training, dropout is applied to these weights after softmax, so rows may not sum to 1.
     pub weights: Tensor<4>,
     /// The context tensor `[batch_size, seq_length_1, d_model]`.
     pub context: Tensor<3>,
@@ -209,8 +211,18 @@ impl MultiHeadAttention {
     /// - key: `[batch_size, seq_length_2, d_model]`
     /// - value: `[batch_size, seq_length_2, d_model]`
     /// - output: `[batch_size, seq_length_1, d_model]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the last axis of `query`, `key` or `value` is not `d_model`, if the batch size
+    /// of `key` or `value` differs from `query`, or if the sequence length of `value` differs
+    /// from `key`.
     pub fn forward(&self, input: MhaInput) -> MhaOutput {
         let [batch_size, seq_length_1, d_model] = input.query.dims();
+        let [_, seq_length_2, _] = input.key.dims();
+        assert_shape!(input.query, [_, _, self.d_model]);
+        assert_shape!(input.key, [batch_size, _, self.d_model]);
+        assert_shape!(input.value, [batch_size, seq_length_2, self.d_model]);
 
         let query = self.attention_linear(input.query, &self.query);
         let key = self.attention_linear(input.key, &self.key);
@@ -236,8 +248,18 @@ impl MultiHeadAttention {
     /// - key: `[batch_size, seq_length_2, d_model]`
     /// - value: `[batch_size, seq_length_2, d_model]`
     /// - output: `[batch_size, seq_length_1, d_model]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the last axis of `query`, `key` or `value` is not `d_model`, if the batch size
+    /// of `key` or `value` differs from `query`, or if the sequence length of `value` differs
+    /// from `key`.
     pub fn forward_cache(&self, input: MhaInput, cache: &mut MhaCache) -> MhaOutput {
         let [batch_size, seq_length_1, d_model] = input.query.dims();
+        let [_, seq_length_2, _] = input.key.dims();
+        assert_shape!(input.query, [_, _, self.d_model]);
+        assert_shape!(input.key, [batch_size, _, self.d_model]);
+        assert_shape!(input.value, [batch_size, seq_length_2, self.d_model]);
 
         let query = cache
             .query
@@ -263,11 +285,9 @@ impl MultiHeadAttention {
     }
 
     fn attn_scores(&self, query: Tensor<4>, key: Tensor<4>) -> Tensor<4> {
-        let attn_scores = query
+        query
             .matmul(key.transpose())
-            .div_scalar((self.d_k as f32).sqrt());
-
-        self.dropout.forward(attn_scores)
+            .div_scalar((self.d_k as f32).sqrt())
     }
 
     fn attn_weights(
@@ -294,11 +314,13 @@ impl MultiHeadAttention {
             );
         }
 
-        if self.quiet_softmax {
+        let weights = if self.quiet_softmax {
             quiet_softmax(attn_scores, 3)
         } else {
             softmax(attn_scores, 3)
-        }
+        };
+
+        self.dropout.forward(weights)
     }
 
     fn attention_linear(&self, x: Tensor<3>, linear: &Linear) -> Tensor<4> {
@@ -371,6 +393,64 @@ mod tests {
     use cortex::tensor::Int;
     use cortex::tensor::Tolerance;
     use cortex::tensor::{Distribution, Shape};
+
+    #[test]
+    fn attention_dropout_applies_after_softmax() {
+        let device = Device::default().autodiff();
+        device.seed(42);
+        let mha = MultiHeadAttentionConfig::new(1, 1)
+            .with_dropout(0.5)
+            .init(&device);
+
+        // Equal logits give probabilities of 0.5. Inverted dropout then makes
+        // every returned weight either 0 or 1, regardless of the random mask.
+        let scores = Tensor::<4>::ones([64, 1, 1, 2], &device).mul_scalar(-1.0);
+        let weights = mha.attn_weights(scores, None, None).into_data();
+        for &weight in weights.as_slice::<f32>().unwrap() {
+            assert!(
+                (weight - 0.0).abs() < 1e-6 || (weight - 1.0).abs() < 1e-6,
+                "expected post-softmax dropout weight 0 or 1, got {weight}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "assert_shape!(input.key, [batch_size, _, self.d_model]): axis 0 expected 2, got 1"
+    )]
+    fn key_batch_must_match_query_batch() {
+        let device = Default::default();
+        let mha = MultiHeadAttentionConfig::new(8, 2).init(&device);
+        let query = Tensor::zeros([2, 3, 8], &device);
+        let key = Tensor::zeros([1, 3, 8], &device);
+        let _ = mha.forward(MhaInput::new(query, key.clone(), key));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "assert_shape!(input.value, [batch_size, seq_length_2, self.d_model]): axis 0 expected 2, got 1"
+    )]
+    fn value_batch_must_match_query_batch() {
+        let device = Default::default();
+        let mha = MultiHeadAttentionConfig::new(8, 2).init(&device);
+        let query = Tensor::zeros([2, 3, 8], &device);
+        let key = Tensor::zeros([2, 3, 8], &device);
+        let value = Tensor::zeros([1, 3, 8], &device);
+        let _ = mha.forward(MhaInput::new(query, key, value));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "assert_shape!(input.key, [batch_size, _, self.d_model]): axis 0 expected 2, got 1"
+    )]
+    fn cache_key_batch_must_match_query_batch() {
+        let device = Default::default();
+        let mha = MultiHeadAttentionConfig::new(8, 2).init(&device);
+        let mut cache = MhaCache::autoregressive();
+        let query = Tensor::zeros([2, 3, 8], &device);
+        let key = Tensor::zeros([1, 3, 8], &device);
+        let _ = mha.forward_cache(MhaInput::new(query, key.clone(), key), &mut cache);
+    }
 
     #[test]
     fn test_enable_bias() {

@@ -1,6 +1,6 @@
-use cortex::server::{Channel, RemoteSecret};
+use cortex::remote::{EndpointId, RemoteHost};
+use cortex::server::{IrohIdentity, IrohTransport, RemoteServer};
 use cortex::tensor::{Device, Distribution, Tensor};
-use iroh::{Endpoint, EndpointId, endpoint::presets};
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn init_logging() {
@@ -11,40 +11,34 @@ fn init_logging() {
 
 /// Derive a stable server identity from a human-friendly topic, so both ends agree on the address
 /// without exchanging keys. The topic acts as a shared secret here (anyone who knows it can host as
-/// this identity), which suits a demo; a real deployment would use `RemoteSecret::random()` and
+/// this identity), which suits a demo; a real deployment would use `IrohIdentity::random()` and
 /// share its `id()`.
-fn topic_secret(topic: &str) -> RemoteSecret {
+fn topic_identity(topic: &str) -> IrohIdentity {
     let hash = blake3::hash(format!("cortex-p2p:{topic}").as_bytes());
-    RemoteSecret::from_bytes(*hash.as_bytes())
+    IrohIdentity::from_bytes(*hash.as_bytes())
 }
 
-pub async fn run_server(topic: &str) {
+pub fn run_server(topic: &str) {
     init_logging();
-    let secret = topic_secret(topic);
-    tracing::info!(topic, server_id = %secret.id(), "server ready");
+    let transport = IrohTransport::new(topic_identity(topic));
+    tracing::info!(topic, server_id = %transport.id(), "server ready");
     tracing::info!("waiting for clients (press Ctrl-C to stop)");
-    cortex::server::start_async(
-        Device::flex(),
-        Channel::Iroh {
-            secret: Box::new(secret),
-        },
-    )
-    .await;
+    RemoteServer::new([Device::flex()])
+        .serve(transport)
+        .expect("The server can serve");
     tracing::info!("server stopped");
 }
 
-pub async fn run_client(topic: &str) {
-    let server_id: EndpointId = topic_secret(topic).id();
+pub fn run_client(topic: &str) {
+    let server_id: EndpointId = topic_identity(topic).id();
 
     println!("topic     : {topic}");
     println!("server id : {server_id}");
     println!("connecting...");
 
-    let endpoint = Endpoint::builder(presets::N0)
-        .bind()
-        .await
-        .expect("bind failed");
-    let device = Device::remote_iroh(&endpoint, server_id, 0);
+    let device = Device::remote_options(&RemoteHost::iroh(server_id))
+        .init()
+        .expect("The server can be dialed");
 
     println!("connected\n");
     train(&device);
@@ -77,13 +71,13 @@ fn train(device: &Device) {
         b = b - db * LR;
 
         if step % 10 == 0 || step == STEPS - 1 {
-            let loss_val = loss.to_data().to_vec::<f32>().unwrap()[0];
+            let loss_val = loss.try_into_vec_as::<f32>().unwrap()[0];
             println!("{:>5}  {:>10.6}", step + 1, loss_val);
         }
     }
 
-    let w_val = w.to_data().to_vec::<f32>().unwrap()[0];
-    let b_val = b.to_data().to_vec::<f32>().unwrap()[0];
+    let w_val = w.try_into_vec_as::<f32>().unwrap()[0];
+    let b_val = b.try_into_vec_as::<f32>().unwrap()[0];
 
     println!("\nlearned: y = {w_val:.4} * x + {b_val:.4}");
     println!("target : y = 2.5000 * x + 0.5000");

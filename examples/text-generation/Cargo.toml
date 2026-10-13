@@ -10,7 +10,7 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["cortex/dataset", "cortex/sqlite-bundled"]
+default = ["cortex/dataset", "cortex/sqlite"]
 f16 = []
 flex32 = []
 tch-cpu = ["cortex/tch"]
@@ -28,12 +28,11 @@ rocm = ["cortex/rocm"]
 cortex = { workspace = true, features = ["default", "train"] }
 
 # Tokenizer
-tokenizers = { version = "0.22.2", default-features = false, features = [
+tokenizers = { version = "0.23.2", default-features = false, features = [
   "onig",
   "http",
 ] }
 
 # Utils
 derive-new = { workspace = true }
-log = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }

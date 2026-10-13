@@ -37,3 +37,22 @@ fn should_support_int_remainder_basic_scalar() {
 
     output.into_data().assert_eq(&expected, false);
 }
+
+#[test]
+fn should_support_int_remainder_near_limits() {
+    // `(a % b) + b` can overflow even though the floor modulo is representable.
+    // MIN % -1 is outside the portable contract; Flex and NdArray cover their
+    // zero result in backend-specific tests.
+    let device = Default::default();
+    let lhs = TestTensorInt::<1>::from_data(TensorData::from([IntElem::MAX - 1]), &device);
+    let rhs = TestTensorInt::<1>::from_data(TensorData::from([IntElem::MAX]), &device);
+
+    lhs.remainder(rhs)
+        .into_data()
+        .assert_eq(&TensorData::from([IntElem::MAX - 1]), false);
+
+    TestTensorInt::<1>::from_data(TensorData::from([IntElem::MAX - 1]), &device)
+        .remainder_scalar(IntElem::MAX)
+        .into_data()
+        .assert_eq(&TensorData::from([IntElem::MAX - 1]), false);
+}

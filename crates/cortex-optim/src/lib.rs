@@ -1,9 +1,28 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![recursion_limit = "256"]
 
-//! Cortex optimizers.
+//! Optimizers and learning rate schedulers for Cortex.
+//!
+//! Applications use these through `cortex::optim`, `cortex::lr_scheduler` and `cortex::grad_clipping`.
+//! An optimizer is built from its config and applied to a module with gradients from a backward pass:
+//!
+//! ```rust,ignore
+//! let mut optimizer = AdamConfig::new().init();
+//! let grads = GradientsParams::from_grads(loss.backward(), &model);
+//! model = optimizer.step(learning_rate, model, grads);
+//! ```
+//!
+//! - Optimizers: SGD, Adam, AdamW, Adagrad, Adafactor, Adan, LAMB, L-BFGS, Lion, Muon and RMSprop,
+//!   with momentum, weight decay and gradient accumulation helpers.
+//! - [`lr_scheduler`]: constant, step, exponential, linear, cosine, Noam, and sequential or
+//!   composed schedules.
+//! - [`grad_clipping`]: clipping by value or by norm.
+//!
+//! # Feature flags
+//!
+//! - `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
+//! - `tracing`: instrument operations with the `tracing` crate.
 
 #[macro_use]
 extern crate derive_new;

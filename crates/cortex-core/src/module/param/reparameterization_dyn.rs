@@ -25,7 +25,7 @@ use alloc::{boxed::Box, vec::Vec};
 use cortex_tensor::{Bool, Device, Int, Tensor};
 use core::{any::Any, fmt::Debug};
 
-use crate::module::{AutodiffModule, ModuleMapper, ModuleVisitor};
+use crate::module::{Flag, Module, ModuleMapper, ModuleVisitor};
 
 use super::{Param, Reparameterization};
 
@@ -33,8 +33,8 @@ use super::{Param, Reparameterization};
 pub trait DynReparameterization: Debug + Send + Sync {
     /// Stable path component used for nested parameters.
     fn name(&self) -> &'static str;
-    /// Materialize a type-erased tensor.
-    fn materialize_dyn(&self, base: Box<dyn Any + Send>) -> Box<dyn Any + Send>;
+    /// Apply the reparameterization to a type-erased tensor.
+    fn apply_dyn(&self, base: Box<dyn Any + Send>) -> Box<dyn Any + Send>;
     /// Visit nested module state.
     fn visit_dyn(&self, visitor: &mut dyn DynModuleVisitor);
     /// Map nested module state.
@@ -44,8 +44,10 @@ pub trait DynReparameterization: Debug + Send + Sync {
     fn to_device_dyn(self: Box<Self>, device: &Device) -> Box<dyn DynReparameterization>;
     /// Fork nested module state to a device.
     fn fork_dyn(self: Box<Self>, device: &Device) -> Box<dyn DynReparameterization>;
-    /// Convert nested module state from its inner backend.
-    fn from_inner_dyn(self: Box<Self>) -> Box<dyn DynReparameterization>;
+    /// Enable autodiff and restore configured training state in the nested module.
+    fn train_dyn(self: Box<Self>) -> Box<dyn DynReparameterization>;
+    /// Disable autodiff and training flags while preserving nested module structure.
+    fn valid_dyn(&self) -> Box<dyn DynReparameterization>;
     /// Collect devices from nested module state.
     fn collect_devices_dyn(&self, devices: Vec<Device>) -> Vec<Device>;
     /// Access the concrete reparameterization for internal downcasting.
@@ -83,11 +85,11 @@ where
         R::NAME
     }
 
-    fn materialize_dyn(&self, base: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
+    fn apply_dyn(&self, base: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
         let base = *base
             .downcast::<Tensor<D>>()
             .expect("Reparameterization tensor should match its attached rank");
-        Box::new(self.inner.materialize(base))
+        Box::new(self.inner.apply(base))
     }
 
     fn visit_dyn(&self, visitor: &mut dyn DynModuleVisitor) {
@@ -111,8 +113,12 @@ where
         Box::new(Self::new(self.inner.fork(device)))
     }
 
-    fn from_inner_dyn(self: Box<Self>) -> Box<dyn DynReparameterization> {
-        Box::new(Self::new(AutodiffModule::from_inner(self.inner)))
+    fn train_dyn(self: Box<Self>) -> Box<dyn DynReparameterization> {
+        Box::new(Self::new(Module::train(self.inner)))
+    }
+
+    fn valid_dyn(&self) -> Box<dyn DynReparameterization> {
+        Box::new(Self::new(self.inner.valid()))
     }
 
     fn collect_devices_dyn(&self, devices: Vec<Device>) -> Vec<Device> {
@@ -223,6 +229,7 @@ pub trait DynModuleVisitor {
     fn visit_float(&mut self, param: DynParamRef<'_>);
     fn visit_int(&mut self, param: DynParamRef<'_>);
     fn visit_bool(&mut self, param: DynParamRef<'_>);
+    fn visit_flag(&mut self, param: &Param<Flag>);
     fn enter_module(&mut self, name: &str, container_type: &str);
     fn exit_module(&mut self, name: &str, container_type: &str);
 }
@@ -232,6 +239,7 @@ pub trait DynModuleMapper {
     fn map_float(&mut self, param: DynParam) -> DynParam;
     fn map_int(&mut self, param: DynParam) -> DynParam;
     fn map_bool(&mut self, param: DynParam) -> DynParam;
+    fn map_flag(&mut self, param: Param<Flag>) -> Param<Flag>;
     fn enter_module(&mut self, name: &str, container_type: &str);
     fn exit_module(&mut self, name: &str, container_type: &str);
 }
@@ -253,6 +261,10 @@ impl ModuleVisitor for ModuleVisitorToDyn<'_> {
 
     fn visit_bool<const D: usize>(&mut self, param: &Param<Tensor<D, Bool>>) {
         self.inner.visit_bool(DynParamRef::new(D, param));
+    }
+
+    fn visit_flag(&mut self, param: &Param<Flag>) {
+        self.inner.visit_flag(param);
     }
 
     fn enter_module(&mut self, name: &str, container_type: &str) {
@@ -286,6 +298,10 @@ impl ModuleMapper for ModuleMapperToDyn<'_> {
         self.inner.map_bool(DynParam::new(D, param)).downcast()
     }
 
+    fn map_flag(&mut self, param: Param<Flag>) -> Param<Flag> {
+        self.inner.map_flag(param)
+    }
+
     fn enter_module(&mut self, name: &str, container_type: &str) {
         self.inner.enter_module(name, container_type);
     }
@@ -317,6 +333,10 @@ impl<V: ModuleVisitor> DynModuleVisitor for DynVisitor<'_, V> {
         dispatch_rank!(param.rank, D => {
             self.visitor.visit_bool(param.value.downcast_ref::<Param<Tensor<D, Bool>>>().unwrap());
         })
+    }
+
+    fn visit_flag(&mut self, param: &Param<Flag>) {
+        self.visitor.visit_flag(param);
     }
 
     fn enter_module(&mut self, name: &str, container_type: &str) {
@@ -353,6 +373,10 @@ impl<M: ModuleMapper> DynModuleMapper for DynMapper<'_, M> {
         dispatch_rank!(rank, D => {
             DynParam::new(D, self.mapper.map_bool(param.downcast::<Param<Tensor<D, Bool>>>() ))
         })
+    }
+
+    fn map_flag(&mut self, param: Param<Flag>) -> Param<Flag> {
+        self.mapper.map_flag(param)
     }
 
     fn enter_module(&mut self, name: &str, container_type: &str) {

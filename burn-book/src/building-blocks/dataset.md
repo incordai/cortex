@@ -11,11 +11,26 @@ implemented on your type. The dataset trait is quite similar to the dataset abst
 PyTorch:
 
 ```rust, ignore
-pub trait Dataset<I>: Send + Sync {
-    fn get(&self, index: usize) -> Option<I>;
+use cortex::data::dataset::DatasetError;
+use std::error::Error;
+
+pub trait Dataset<I, E = DatasetError>: Send + Sync
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn get(&self, index: usize) -> Result<I, E>;
     fn len(&self) -> usize;
 }
 ```
+
+`get` returns `Ok(item)` for a retrieved item and `Err(error)` for a failure to retrieve an
+in-bounds item. Accessing an index at or beyond `len()` must panic, as with indexing a slice.
+`DatasetError` is the default error type; implementations can supply their own error type instead.
+`DatasetError::new(error)` wraps an error when a default-error implementation needs to propagate it.
+
+Dataset iteration yields `Result<I, E>` for each index. The iterator advances past a failed item,
+so callers can choose whether to stop or continue. Only exhaustion ends the iterator. In 0.21,
+`get` returned `Option<I>`; see [Migrating to Cortex 0.22](../migrating-to-0.22.md#datasets-and-dataloaders).
 
 The dataset trait assumes a fixed-length set of items that can be randomly accessed in constant
 time. This is a major difference from datasets that use Apache Arrow underneath to improve streaming
@@ -24,6 +39,11 @@ collection of items.
 
 However, you can compose multiple dataset transformations to lazily obtain what you want with zero
 pre-processing, so that your training can start instantly!
+
+The built-in dataloader currently accepts only datasets using the default `DatasetError` type.
+For a custom error type (including `SqliteDatasetError`), wrap the dataset and map retrieval errors
+with `DatasetError::new` before passing it to `DataLoaderBuilder::build`. Forward `get_many` as well
+as `get` to preserve a dataset's batched retrieval optimization.
 
 ## Transformation
 
@@ -53,12 +73,31 @@ found at the [API reference](https://burn.dev/docs/burn/data/dataset/transform/i
   is now controlled by the sampling size. Sample usage:
 
 ```rust, ignore
-type DbPedia = SqliteDataset<DbPediaItem>;
-let dataset: DbPedia = HuggingfaceDatasetLoader::new("fancyzhx/dbpedia_14")
-        .dataset("train").
-        .unwrap();
+// `SamplerDataset` and `ShuffledDataset` accept only the default `DatasetError`,
+// so map the `SqliteDatasetError` first.
+struct DbPedia(SqliteDataset<DbPediaItem>);
 
-let dataset = SamplerDataset<DbPedia, DbPediaItem>::new(dataset, 10000);
+impl Dataset<DbPediaItem> for DbPedia {
+    fn get(&self, index: usize) -> Result<DbPediaItem, DatasetError> {
+        self.0.get(index).map_err(DatasetError::new)
+    }
+
+    fn get_many(&self, indexes: Vec<usize>) -> Result<Vec<DbPediaItem>, DatasetError> {
+        self.0.get_many(indexes).map_err(DatasetError::new)
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+let dataset = DbPedia(
+    HuggingfaceDatasetLoader::new("fancyzhx/dbpedia_14")
+        .dataset("train")
+        .unwrap(),
+);
+
+let dataset = SamplerDataset::<DbPedia, DbPediaItem>::new(dataset, 10000);
 ```
 
 - **SelectionDataset**: This transform can be used to select a subset of items from a dataset by
@@ -77,7 +116,7 @@ let explicit = SelectionDataset::from_indices_checked(dataset.clone(), vec![0, 1
 let shuffled = SelectionDataset::new_shuffled(dataset.clone(), &mut rng);
 let shuffled = SelectionDataset::new_shuffled(dataset.clone(), 42);
 
-let mut mutable = SelectionDataset::new_select_all(dataset.clone(), vec![0, 1, 2, 0]);
+let mut mutable = SelectionDataset::new_select_all(dataset.clone());
 mutable.shuffle(42);
 mutable.shuffle(&mut rng);
 ```
@@ -89,8 +128,8 @@ mutable.shuffle(&mut rng);
   The `ShuffledDataset` is a thin wrapper around the `SelectionDataset`.
 
 ```rust, ignore
-let dataset = ShuffledDataset<DbPedia, DbPediaItem>::new(dataset, &mut rng);
-let dataset = ShuffledDataset<DbPedia, DbPediaItem>::new(dataset, 42);
+let dataset = ShuffledDataset::<DbPedia, DbPediaItem>::new(dataset, &mut rng);
+let dataset = ShuffledDataset::<DbPedia, DbPediaItem>::new(dataset, 42);
 ```
 
 - **PartialDataset**: This transform is useful to return a view of the dataset with specified start
@@ -99,7 +138,7 @@ let dataset = ShuffledDataset<DbPedia, DbPediaItem>::new(dataset, 42);
 
 ```rust, ignore
 // define chained dataset type here for brevity
-type PartialData = PartialDataset<ShuffledDataset<DbPedia, DbPediaItem>>;
+type PartialData = PartialDataset<ShuffledDataset<DbPedia, DbPediaItem>, DbPediaItem>;
 let len = dataset.len();
 let split = "train"; // or "val"/"test"
 
@@ -128,8 +167,11 @@ dataset to use should be based on the dataset's size as well as its intended pur
 | Storage            | Description                                                                                                                                          |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `InMemDataset`     | In-memory dataset that uses a vector to store items. Well-suited for smaller datasets.                                                               |
-| `SqliteDataset`    | Dataset that uses [SQLite](https://www.sqlite.org/) to index items that can be saved in a simple SQL database file. Well-suited for larger datasets. |
+| `SqliteDataset`    | Dataset that uses [Turso](https://turso.tech/) to index items that can be saved in a simple SQLite database file. Well-suited for larger datasets.   |
 | `DataframeDataset` | Dataset that uses [Polars](https://www.pola.rs/) dataframe to store and manage data. Well-suited for efficient data manipulation and analysis.       |
+
+`SqliteDataset` and the Hugging Face loader below require the `sqlite` feature of `cortex`, which the
+`dataset` and `train` features do not enable on their own.
 
 ## Sources
 
@@ -174,6 +216,22 @@ loader.
 `ImageFolderDataset` is a generic vision dataset used to load images from disk. It is currently
 available for multi-class and multi-label classification tasks as well as semantic segmentation and
 object detection tasks.
+
+Each `ImageDatasetItem` stores its image in a `PixelData` buffer. The `U8`, `U16`, and `F32` variants
+hold a vector of components with that element type. Match the variant to process the packed values
+directly, or use `item.image.iter()` to iterate over individual `PixelDepth` values regardless of
+the buffer's type. For example, this extracts an 8-bit image buffer:
+
+```rust,ignore
+use cortex::data::dataset::vision::{ImageDatasetItem, PixelData};
+
+fn into_u8_pixels(item: ImageDatasetItem) -> Vec<u8> {
+    match item.image {
+        PixelData::U8(pixels) => pixels,
+        _ => panic!("This preprocessing pipeline expects an 8-bit image"),
+    }
+}
+```
 
 ```rust, ignore
 // Create an image classification dataset from the root folder,
@@ -290,6 +348,28 @@ step to prepare the batch data, as is done [in the basic workflow guide](../basi
 The process is illustrated in the figure below for the MNIST dataset.
 
 <img title="Cortex Data Loading Pipeline" alt="Cortex Data Loading Pipeline" src="./dataset.png">
+
+Dataloader iterators yield `Result<Batch, DatasetError>`. Handle each result before using the batch.
+For example, this helper stops at the first retrieval error and returns it to the caller:
+
+```rust,ignore
+use cortex::data::{dataloader::DataLoader, dataset::DatasetError};
+
+fn for_each_batch<Batch>(
+    dataloader: &dyn DataLoader<Batch>,
+    mut consume: impl FnMut(Batch),
+) -> Result<(), DatasetError> {
+    for batch in dataloader.iter() {
+        let batch = batch?;
+        consume(batch);
+    }
+    Ok(())
+}
+```
+
+The callback can run a model's forward pass and optimization step. A custom loop can instead match
+on each result to report or skip a failed batch. The [custom training loop](../custom-training-loop.md)
+shows how batch processing fits into training and validation.
 
 Although we have conveniently implemented the
 [`MnistDataset`](https://github.com/tracel-ai/burn/blob/main/crates/burn-dataset/src/vision/mnist.rs)
@@ -514,8 +594,10 @@ Since the `MnistDataset` simply wraps a `MapperDataset` instance with `InMemData
 implement the `Dataset` trait.
 
 ```rust, ignore
+use cortex::data::dataset::{Dataset, DatasetError};
+
 impl Dataset<MnistItem> for MnistDataset {
-    fn get(&self, index: usize) -> Option<MnistItem> {
+    fn get(&self, index: usize) -> Result<MnistItem, DatasetError> {
         self.dataset.get(index)
     }
 

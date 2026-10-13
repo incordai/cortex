@@ -1,9 +1,11 @@
+#![allow(clippy::approx_constant)]
+
 use cortex_core as cortex;
 
 use cortex::config::Config;
 use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
 use cortex::tensor::Tensor;
-use cortex::tensor::linalg::cosine_similarity;
+use cortex_linalg::cosine_similarity;
 
 /// Configuration to create a [CosineSimilarity](CosineSimilarity) layer using the
 /// [init function](CosineSimilarityConfig::init).

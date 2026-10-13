@@ -2,7 +2,7 @@ use super::{
     argwhere::argwhere_data, cat::cat_with_slice_assign, repeat_dim::repeat_with_slice_assign,
 };
 use crate::tensor::{BoolTensor, Device, FloatTensor, IntTensor};
-use crate::{Backend, TensorData, TensorMetadata, get_device_settings};
+use crate::{Backend, TensorData, TensorMetadata, get_or_init_device_settings};
 use crate::{ExecutionError, Scalar};
 use alloc::vec::Vec;
 use cortex_std::{BoolDType, FloatDType, IntDType, Shape, Slice};
@@ -209,7 +209,7 @@ pub trait BoolTensorOps<B: Backend> {
             // Data-dependent output length, so we defer to `bool_argwhere` (the only pre-existing
             // data-dependent op) to collect the flat indices of the true mask values, then select.
             let n = mask.shape().num_elements();
-            let int_dtype = get_device_settings::<B>(&mask.device()).int_dtype;
+            let int_dtype = get_or_init_device_settings::<B>(&mask.device()).int_dtype;
             let mask = B::bool_reshape(mask, Shape::new([n]));
             let indices = B::bool_argwhere(mask, int_dtype).await; // [count, 1]
             let count = indices.shape()[0];
@@ -493,7 +493,7 @@ pub trait BoolTensorOps<B: Backend> {
     /// A boolean tensor with a single element, True if any element in the tensor is True, False otherwise.
     fn bool_any(tensor: BoolTensor<B>) -> BoolTensor<B> {
         let dtype = tensor.dtype();
-        let int_dtype = get_device_settings::<B>(&tensor.device()).int_dtype;
+        let int_dtype = get_or_init_device_settings::<B>(&tensor.device()).int_dtype;
         let sum = B::int_sum(B::bool_into_int(tensor, int_dtype));
         B::int_greater_elem(sum, 0.into(), dtype.into())
     }
@@ -507,12 +507,12 @@ pub trait BoolTensorOps<B: Backend> {
     ///
     /// # Returns
     ///
-    /// A boolean tensor `Tensor<B, D, Bool>` with the same size as input `tensor`, except in the `dim` axis
+    /// A boolean tensor primitive with the same size as input `tensor`, except in the `dim` axis
     /// where the size is 1. The elem in the `dim` axis is True if any element along this dim in the input
     /// evaluates to True, False otherwise.
     fn bool_any_dim(tensor: BoolTensor<B>, dim: usize) -> BoolTensor<B> {
         let dtype = tensor.dtype();
-        let int_dtype = get_device_settings::<B>(&tensor.device()).int_dtype;
+        let int_dtype = get_or_init_device_settings::<B>(&tensor.device()).int_dtype;
         let sum = B::int_sum_dim(B::bool_into_int(tensor, int_dtype), dim);
         B::int_greater_elem(sum, 0.into(), dtype.into())
     }
@@ -525,11 +525,11 @@ pub trait BoolTensorOps<B: Backend> {
     ///
     /// # Returns
     ///
-    /// A boolean tensor `Tensor<B, 1, Bool>` with a single element, True if all elements in the input tensor
+    /// A boolean tensor primitive with a single element, True if all elements in the input tensor
     /// evaluate to True, False otherwise.
     fn bool_all(tensor: BoolTensor<B>) -> BoolTensor<B> {
         let dtype = tensor.dtype();
-        let int_dtype = get_device_settings::<B>(&tensor.device()).int_dtype;
+        let int_dtype = get_or_init_device_settings::<B>(&tensor.device()).int_dtype;
         let num_elems = tensor.shape().num_elements() as i64;
         let sum = B::int_sum(B::bool_into_int(tensor, int_dtype));
         B::int_equal_elem(sum, num_elems.into(), dtype.into())
@@ -544,12 +544,12 @@ pub trait BoolTensorOps<B: Backend> {
     ///
     /// # Returns
     ///
-    /// A boolean tensor `Tensor<B, D, Bool>` with the same size as input `tensor`, except in the `dim` axis
+    /// A boolean tensor primitive with the same size as input `tensor`, except in the `dim` axis
     /// where the size is 1. The elem in the `dim` axis is True if all elements along this dim in the input
     /// evaluates to True, False otherwise.
     fn bool_all_dim(tensor: BoolTensor<B>, dim: usize) -> BoolTensor<B> {
         let dtype = tensor.dtype();
-        let int_dtype = get_device_settings::<B>(&tensor.device()).int_dtype;
+        let int_dtype = get_or_init_device_settings::<B>(&tensor.device()).int_dtype;
         let num_elems = tensor.shape()[dim] as i64;
         let sum = B::int_sum_dim(B::bool_into_int(tensor, int_dtype), dim);
         B::int_equal_elem(sum, num_elems.into(), dtype.into())
@@ -589,7 +589,8 @@ pub trait BoolTensorOps<B: Backend> {
     /// Returns a view of the tensor with all complete windows of size `size` in dimension `dim`;
     /// where windows are advanced by `step` at each index.
     ///
-    /// The number of windows is `max(0, (shape[dim] - size).ceil_div(step))`.
+    /// The number of windows is `0` when `shape[dim] < size`, and otherwise
+    /// `(shape[dim] - size) / step + 1`.
     ///
     /// # Arguments
     ///

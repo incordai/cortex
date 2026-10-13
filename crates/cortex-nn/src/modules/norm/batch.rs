@@ -1,8 +1,9 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
-use cortex::module::Initializer;
+use cortex::module::Flag;
 use cortex::module::{Content, DisplaySettings, ModuleDisplay};
-use cortex::tensor::{Device, Tensor};
+use cortex::tensor::{Device, Tensor, assert_shape};
 use cortex::{
     config::Config,
     module::{Module, Param, RunningState},
@@ -13,12 +14,15 @@ use cortex::{
 /// Used to create a [`BatchNorm`] layer using the [`BatchNormConfig::init`].
 #[derive(Config, Debug)]
 pub struct BatchNormConfig {
-    /// The number of features.
+    /// The number of features. Must be greater than zero.
     pub num_features: usize,
-    /// A value required for numerical stability. Default: 1e-5
+    /// A finite, positive value required for numerical stability. Default: 1e-5
     #[config(default = 1e-5)]
     pub epsilon: f64,
-    /// Momentum used to update the metrics. Default: 0.1
+    /// A finite momentum in `[0, 1]` used to update the running statistics. Default: 0.1
+    ///
+    /// A value of 0 preserves the running statistics; 1 replaces them with the current
+    /// batch statistics.
     #[config(default = 0.1)]
     pub momentum: f64,
 }
@@ -46,6 +50,8 @@ pub struct BatchNorm {
     pub gamma: Param<Tensor<1>>,
     /// The learnable weight beta.
     pub beta: Param<Tensor<1>>,
+    /// Whether training behavior is enabled for this layer.
+    pub training: Param<Flag>,
     /// The running mean.
     pub running_mean: RunningState<Tensor<1>>,
     /// The running variance.
@@ -58,7 +64,25 @@ pub struct BatchNorm {
 
 impl BatchNormConfig {
     /// Initializes a new [batch norm](BatchNorm) module.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num_features` is zero, `epsilon` is not finite and positive,
+    /// or `momentum` is not finite and within `[0, 1]`.
     pub fn init(&self, device: &Device) -> BatchNorm {
+        assert!(
+            self.num_features > 0,
+            "num_features must be greater than zero."
+        );
+        assert!(
+            self.epsilon.is_finite() && self.epsilon > 0.0,
+            "epsilon must be finite and positive."
+        );
+        assert!(
+            self.momentum.is_finite() && (0.0..=1.0).contains(&self.momentum),
+            "momentum must be finite and within [0, 1]."
+        );
+
         let gamma = Initializer::Ones.init([self.num_features], device);
         let beta = Initializer::Zeros.init([self.num_features], device);
 
@@ -68,6 +92,7 @@ impl BatchNormConfig {
         BatchNorm {
             gamma,
             beta,
+            training: Param::from_bool(true),
             running_mean: RunningState::new(running_mean),
             running_var: RunningState::new(running_var),
             momentum: self.momentum,
@@ -83,24 +108,29 @@ impl BatchNorm {
     ///
     /// # Shapes
     ///
-    /// - `input`: ``[batch_size, channels, ...]``
-    /// - `output`: ``[batch_size, channels, ...]``
+    /// - `input`: ``[batch_size, num_features, ...]``
+    /// - `output`: ``[batch_size, num_features, ...]``
     ///
     /// # Panics
     ///
-    /// This function will panic if the input tensor has rank < 2.
+    /// Panics if the input has rank < 2 or its second axis is not `num_features`.
     pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
-        // Should be move to a compilation error when const generic support that kind of
-        // validation. https://github.com/rust-lang/rust/issues/76560
-        if D < 2 {
-            panic!(
-                "BatchNorm can only be applied on tensors of rank >= 2 with the following shape \
-                 [batch_size, channels, ...], received {}D tensor",
-                D
-            );
-        }
+        let [num_features] = self.gamma.shape().dims();
+        assert_shape!(input, [_, num_features, ..]);
 
-        match input.device().is_autodiff() {
+        // Training behavior is selected by the device *and* the layer state. The device alone
+        // says a backward is possible, not that this layer takes part in one: partial finetuning
+        // freezes whole subtrees with [`freeze`](Module::freeze) or
+        // [`freeze_group`](Module::freeze_group) and leaves them on the training device, because
+        // that is where the rest of the graph lives.
+        //
+        // A frozen batch norm that still took the training path would recompute
+        // the batch statistics — a second and third pass over an activation that
+        // is already the layer's dominant cost — and then write them into
+        // `running_mean` and `running_var`, mutating state the caller has said it does not want
+        // trained. The identified flag lets a structural group select this behavior without
+        // inferring the state of the whole layer from one tensor parameter.
+        match input.device().is_autodiff() && self.training.is_enabled() {
             true => self.forward_train(input),
             false => self.forward_inference(input),
         }
@@ -108,86 +138,42 @@ impl BatchNorm {
 
     fn forward_inference<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
         let device = input.device();
-        let channels = input.dims()[1];
         let mean = self.running_mean.value().to_device(&device);
         let var = self.running_var.value().to_device(&device);
-
-        let mut shape = [1; D];
-        shape[1] = channels;
-
-        self.forward_shared(input, mean.reshape(shape), var.reshape(shape))
+        cortex::tensor::module::batch_norm(
+            input,
+            self.gamma.val(),
+            self.beta.val(),
+            mean,
+            var,
+            self.epsilon,
+        )
     }
 
     fn forward_train<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
         let device = input.device();
-        let dims = input.dims();
-        let batch_size = dims[0];
-        let channels = dims[1];
 
-        let mut shape_unsqueeze = [1; D];
-        let mut flatten_size = batch_size;
-        shape_unsqueeze[1] = channels;
-
-        for dim in dims.iter().take(D).skip(2) {
-            flatten_size *= dim;
-        }
-
-        let mean = input
-            .clone()
-            .swap_dims(0, 1)
-            .reshape([channels, flatten_size])
-            .mean_dim(1)
-            .reshape(shape_unsqueeze);
-
-        let var = input
-            .clone()
-            .sub(mean.clone())
-            .square()
-            .swap_dims(0, 1)
-            .reshape([channels, flatten_size])
-            .mean_dim(1)
-            .reshape(shape_unsqueeze);
+        let result = cortex::tensor::module::batch_norm_train(
+            input,
+            self.gamma.val(),
+            self.beta.val(),
+            self.epsilon,
+        );
 
         let running_mean = self.running_mean.value_sync().to_device(&device);
         let running_var = self.running_var.value_sync().to_device(&device);
 
-        let running_mean = running_mean.mul_scalar(1.0 - self.momentum).add(
-            mean.clone()
-                .detach()
-                .mul_scalar(self.momentum)
-                .reshape([channels]),
-        );
-        let running_var = running_var.mul_scalar(1.0 - self.momentum).add(
-            var.clone()
-                .detach()
-                .mul_scalar(self.momentum)
-                .reshape([channels]),
-        );
+        let running_mean = running_mean
+            .mul_scalar(1.0 - self.momentum)
+            .add(result.mean.detach().mul_scalar(self.momentum));
+        let running_var = running_var
+            .mul_scalar(1.0 - self.momentum)
+            .add(result.variance.detach().mul_scalar(self.momentum));
 
         self.running_mean.update(running_mean.detach());
         self.running_var.update(running_var.detach());
 
-        self.forward_shared(input, mean, var)
-    }
-
-    fn forward_shared<const D: usize>(
-        &self,
-        x: Tensor<D>,
-        mean: Tensor<D>,
-        var: Tensor<D>,
-    ) -> Tensor<D> {
-        let channels = x.dims()[1];
-        let mut shape = [1; D];
-        shape[1] = channels;
-
-        let std = var.add_scalar(self.epsilon).sqrt();
-
-        let x = x.sub(mean);
-        let x = x.div(std);
-
-        let x = x.mul(self.gamma.val().reshape(shape));
-
-        x.add(self.beta.val().reshape(shape))
+        result.output
     }
 }
 
@@ -201,11 +187,14 @@ impl ModuleDisplay for BatchNorm {
     fn custom_content(&self, content: Content) -> Option<Content> {
         let [num_features] = self.beta.shape().dims();
 
-        content
+        let content = content
             .add("num_features", &num_features)
             .add("momentum", &self.momentum)
-            .add("epsilon", &self.epsilon)
-            .optional()
+            .add("epsilon", &self.epsilon);
+        match self.training.is_enabled() {
+            true => content.optional(),
+            false => content.add("training", &self.training).optional(),
+        }
     }
 }
 
@@ -213,10 +202,96 @@ impl ModuleDisplay for BatchNorm {
 #[cfg(test)]
 mod tests_1d {
     use super::*;
-    use cortex::module::AutodiffModule;
+    use cortex::module::Module;
     use cortex::tensor::TensorData;
     use cortex::tensor::Tolerance;
+    use rstest::rstest;
     type FT = f32;
+
+    #[test]
+    #[should_panic(expected = "num_features must be greater than zero.")]
+    fn zero_features_is_rejected() {
+        BatchNormConfig::new(0).init(&Default::default());
+    }
+
+    #[rstest]
+    #[case::zero(0.0)]
+    #[case::negative(-1e-5)]
+    #[case::nan(f64::NAN)]
+    #[case::positive_infinity(f64::INFINITY)]
+    #[case::negative_infinity(f64::NEG_INFINITY)]
+    #[should_panic(expected = "epsilon must be finite and positive.")]
+    fn invalid_epsilon_is_rejected(#[case] epsilon: f64) {
+        BatchNormConfig::new(1)
+            .with_epsilon(epsilon)
+            .init(&Default::default());
+    }
+
+    #[rstest]
+    #[case::negative(-0.1)]
+    #[case::above_one(1.1)]
+    #[case::nan(f64::NAN)]
+    #[case::positive_infinity(f64::INFINITY)]
+    #[case::negative_infinity(f64::NEG_INFINITY)]
+    #[should_panic(expected = "momentum must be finite and within [0, 1].")]
+    fn invalid_momentum_is_rejected(#[case] momentum: f64) {
+        BatchNormConfig::new(1)
+            .with_momentum(momentum)
+            .init(&Default::default());
+    }
+
+    #[rstest]
+    #[case::zero(0.0, 0.0, 1.0)]
+    #[case::one(1.0, 4.0, 4.0)]
+    fn momentum_boundaries_update_running_statistics(
+        #[case] momentum: f64,
+        #[case] expected_mean: f32,
+        #[case] expected_var: f32,
+    ) {
+        let device = Device::default().autodiff();
+        let module = BatchNormConfig::new(1)
+            .with_momentum(momentum)
+            .init(&device);
+
+        // Two batches verify that momentum 1 replaces the previous statistics.
+        module.forward(Tensor::<2>::from_floats([[1.0], [3.0]], &device));
+        let output = module.forward(Tensor::<2>::from_floats([[2.0], [6.0]], &device));
+
+        // Both boundaries still use batch statistics to normalize during training.
+        output
+            .to_data()
+            .assert_approx_eq::<FT>(&TensorData::from([[-1.0], [1.0]]), Tolerance::default());
+        module
+            .running_mean
+            .value_sync()
+            .to_data()
+            .assert_approx_eq::<FT>(&TensorData::from([expected_mean]), Tolerance::default());
+        module
+            .running_var
+            .value_sync()
+            .to_data()
+            .assert_approx_eq::<FT>(&TensorData::from([expected_var]), Tolerance::default());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "assert_shape!(input, [_, num_features, ..]): expected rank at least 2, got 1"
+    )]
+    fn input_rank_must_be_at_least_two() {
+        let device = Default::default();
+        let module = BatchNormConfig::new(3).init(&device);
+        let _ = module.forward(Tensor::<1>::zeros([4], &device));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "assert_shape!(input, [_, num_features, ..]): axis 1 expected 3, got 4"
+    )]
+    fn input_channels_must_match() {
+        let device = Default::default();
+        let module = BatchNormConfig::new(3).init(&device);
+        let _ = module.forward(Tensor::<3>::zeros([1, 4, 2], &device));
+    }
 
     #[test]
     fn batch_norm_forward_train() {
@@ -243,6 +318,19 @@ mod tests_1d {
         output
             .to_data()
             .assert_approx_eq::<FT>(&expected_valid(), Tolerance::default());
+    }
+
+    #[test]
+    fn batch_norm_trains_under_gradient_checkpointing() {
+        let device = Device::default().autodiff().gradient_checkpointing();
+        let module = BatchNormConfig::new(3).init(&device);
+
+        let output = module.forward(input_tensor(&device));
+
+        output
+            .to_data()
+            .assert_approx_eq::<FT>(&expected_train(), Tolerance::rel_abs(0.1, 0.001));
+        assert_eq!(module.running_mean.value_sync().dims(), [3]);
     }
 
     fn expected_valid() -> TensorData {
@@ -303,7 +391,7 @@ mod tests_1d {
 #[cfg(test)]
 mod tests_2d {
     use super::*;
-    use cortex::module::AutodiffModule;
+    use cortex::module::Module;
     use cortex::tensor::TensorData;
     use cortex::tensor::Tolerance;
     type FT = f32;
@@ -373,6 +461,86 @@ mod tests_2d {
             .reshape([3])
             .into_data()
             .assert_approx_eq::<FT>(&expected, Tolerance::default());
+    }
+
+    #[test]
+    fn frozen_batch_norm_on_a_training_device_uses_the_running_statistics() {
+        let device = Device::default().autodiff();
+        // Frozen where partial finetuning leaves it: still on the training
+        // device, because the rest of the graph is there, but not being trained.
+        let module = BatchNormConfig::new(3).init(&device).freeze();
+
+        let input = input_tensor(&device);
+        let output = module.forward(input.clone());
+
+        // Freshly initialized, the inference path is the identity: running mean
+        // is zero, running variance is one, gamma is one and beta is zero. So
+        // the input coming back out is proof the training path did not run —
+        // that one normalizes the batch, and `batch_norm_forward_train` above
+        // holds the quite different numbers it produces from this same input.
+        output
+            .to_data()
+            .assert_approx_eq::<FT>(&input.to_data(), Tolerance::rel_abs(0.001, 0.001));
+    }
+
+    #[test]
+    fn frozen_batch_norm_does_not_update_its_running_statistics() {
+        let device = Device::default().autodiff();
+        let module = BatchNormConfig::new(3).init(&device).freeze();
+
+        let before = module.running_mean.value_sync().into_data();
+        let _output = module.forward(input_tensor(&device));
+        let after = module.running_mean.value_sync().into_data();
+
+        // Freezing says the caller does not want this trained, and the running
+        // statistics are state the training path writes. Untouched is the whole
+        // point: a finetuning run that silently drifted them would corrupt the
+        // frozen layer over its epochs and only show up at inference.
+        after.assert_approx_eq::<FT>(&before, Tolerance::default());
+    }
+
+    #[test]
+    fn enabling_gradients_does_not_make_running_statistics_trainable() {
+        use cortex::module::ParamGroup;
+
+        let device = Device::default().autodiff();
+        let module = BatchNormConfig::new(3).init(&device).freeze();
+        let group = ParamGroup::ids_from_module(module.clone());
+
+        let module = module.set_require_grad_group(group, true);
+
+        assert!(module.gamma.is_require_grad());
+        assert!(module.beta.is_require_grad());
+        assert!(!module.training.is_enabled());
+        assert!(!module.running_mean.value_sync().is_require_grad());
+        assert!(!module.running_var.value_sync().is_require_grad());
+
+        let grads = module.forward(input_tensor(&device)).sum().backward();
+
+        assert!(module.gamma.grad(&grads).is_some());
+        assert!(module.beta.grad(&grads).is_some());
+        assert!(module.running_mean.value_sync().grad(&grads).is_none());
+        assert!(module.running_var.value_sync().grad(&grads).is_none());
+    }
+
+    #[test]
+    fn freezing_only_gamma_keeps_batch_norm_training_behavior() {
+        use cortex::module::ParamGroup;
+
+        let device = Device::default().autodiff();
+        let module = BatchNormConfig::new(3)
+            .init(&device)
+            .freeze_group(ParamGroup::from_path("gamma"));
+
+        assert!(!module.gamma.is_require_grad());
+        assert!(module.beta.is_require_grad());
+        assert!(module.training.is_enabled());
+
+        let before = module.running_mean.value_sync().into_data();
+        let _output = module.forward(input_tensor(&device));
+        let after = module.running_mean.value_sync().into_data();
+
+        assert_ne!(before, after);
     }
 
     #[test]
@@ -478,8 +646,14 @@ mod tests_2d {
         let batch_norm = BatchNormConfig::new(3).init(&Default::default());
 
         assert_eq!(
-            format!("{batch_norm}"),
+            alloc::format!("{batch_norm}"),
             "BatchNorm {num_features: 3, momentum: 0.1, epsilon: 0.00001, params: 12}"
+        );
+
+        let frozen = batch_norm.freeze();
+        assert_eq!(
+            alloc::format!("{frozen}"),
+            "BatchNorm {num_features: 3, momentum: 0.1, epsilon: 0.00001, training: disabled, params: 12}"
         );
     }
 }

@@ -1,3 +1,4 @@
+use crate::Initializer;
 use alloc::format;
 use cortex::tensor::ops::DeformConvOptions;
 
@@ -5,7 +6,6 @@ use cortex_core as cortex;
 
 use crate::PaddingConfig2d;
 use cortex::config::Config;
-use cortex::module::Initializer;
 use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay, Param};
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;

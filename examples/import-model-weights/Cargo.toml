@@ -18,9 +18,4 @@ cortex = { workspace = true, features = [
     "vision",
 ] }
 
-cortex-store = { workspace = true, features = [
-    "std",
-    "pytorch",
-    "safetensors",
-    "cortexpack",
-] }
+cortex-store = { workspace = true, features = ["std", "pytorch", "safetensors"] }

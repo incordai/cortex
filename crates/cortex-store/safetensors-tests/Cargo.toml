@@ -10,4 +10,3 @@ cortex-flex = { workspace = true, features = ["default"] }
 cortex-autodiff = { workspace = true, features = ["default"] }
 cortex-store = { workspace = true, features = ["default", "std", "safetensors"] }
 serde = { workspace = true }
-float-cmp = { workspace = true }

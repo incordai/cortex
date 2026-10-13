@@ -6,7 +6,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "gpu", "rocm", "hip"]
 license.workspace = true
 name = "cortex-rocm"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-rocm"
 documentation = "https://docs.rs/burn-rocm"
 version.workspace = true
@@ -32,11 +32,8 @@ autotune-checks = ["cortex-cubecl/autotune-checks"]
 
 [dependencies]
 cubecl = { workspace = true, features = ["hip"] }
-cortex-cubecl = { workspace = true, features = ["default"] }
-cortex-backend = { workspace = true, features = [
-    "default",
-    "cubecl-hip",
-] }
+cortex-cubecl = { workspace = true }
+cortex-backend = { workspace = true, features = ["cubecl-hip"] }
 cortex-fusion = { workspace = true, optional = true, features = ["default"] }
 
 [package.metadata.docs.rs]

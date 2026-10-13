@@ -69,11 +69,15 @@
 //! - [`PathFilter`]: Flexible filtering system for selective tensor loading/saving
 //! - [`KeyRemapper`]: Advanced tensor name remapping with regex patterns
 //! - [`ModuleAdapter`]: Framework adapters for cross-framework compatibility
+//! - [`bridge`]: Conversions between cortex-core tensors and the [`cortex_pack::Tensor`] entries the stores move around
 //!
 //! ## Feature Flags
 //!
 //! - `std`: Enables file I/O and other std-only features (default)
 //! - `safetensors`: Enables SafeTensors format support (default)
+//! - `pytorch`: Enables loading PyTorch `.pt`/`.pth` files (default)
+//! - `memmap`: Implied by `std` and adds nothing on top of it. Loading a SafeTensors file
+//!   memory-maps it whenever `std` is on, regardless of this flag.
 
 extern crate alloc;
 
@@ -82,43 +86,70 @@ mod applier;
 mod apply_result;
 mod collector;
 mod filter;
-mod tensor_snapshot;
 mod traits;
+
+pub mod bridge;
 
 pub use adapter::{
     CortexToPyTorchAdapter, ChainAdapter, FloatCastAdapter, HalfPrecisionAdapter, IdentityAdapter,
-    ModuleAdapter, PyTorchToCortexAdapter,
+    ModuleAdapter, ModuleContext, PyTorchToCortexAdapter,
 };
 pub use applier::Applier;
 pub use apply_result::{ApplyError, ApplyResult};
 pub use collector::Collector;
 pub use filter::PathFilter;
-pub use tensor_snapshot::{TensorSnapshot, TensorSnapshotError};
 pub use traits::{ModuleSnapshot, ModuleStore};
 
 #[cfg(feature = "std")]
 mod keyremapper;
 #[cfg(feature = "std")]
-pub use keyremapper::{KeyRemapper, map_indices_contiguous};
-
-/// Serde-based deserialization of nested values, used for importing model weights from external
-/// formats (e.g. PyTorch's pickle `.pt` files).
-#[cfg(feature = "pytorch")]
-pub mod nested;
+pub use keyremapper::{KeyRemapper, map_indices_contiguous, map_indices_contiguous_except};
 
 #[cfg(feature = "pytorch")]
 pub mod pytorch;
 #[cfg(feature = "pytorch")]
 pub use pytorch::{PytorchStore, PytorchStoreError};
 
+/// The PyTorch checkpoint reader crate, re-exported.
+///
+/// [`PytorchStore`] is built on it, and [`bridge::from_pytorch`] turns one of its tensors
+/// into the [`cortex_pack::Tensor`] the rest of cortex-store works with. The crate itself reads
+/// a checkpoint without going through cortex-pack at all, and exposes the serde deserializer
+/// behind [`load_config`](pytorch::PytorchReader::load_config) as
+/// [`pytorch_reader::nested`].
+#[cfg(feature = "pytorch")]
+pub use pytorch_reader;
+
 #[cfg(feature = "safetensors")]
 mod safetensors;
 #[cfg(feature = "safetensors")]
 pub use safetensors::{SafetensorsStore, SafetensorsStoreError};
 
-#[cfg(feature = "cortexpack")]
-mod bridge;
-#[cfg(feature = "cortexpack")]
 mod cortexpack;
-#[cfg(feature = "cortexpack")]
 pub use cortexpack::CortexpackStore;
+
+/// The cortexpack format crate, re-exported.
+///
+/// [`cortex_pack::Tensor`] is cortex-store's tensor-transport type: what
+/// [`ModuleSnapshot::collect`] returns and what [`ModuleSnapshot::apply`] takes. A crate
+/// holding some can drive a [`cortex_pack::Writer`] itself instead of going through
+/// [`CortexpackStore`], which is what you want when the tensors did not come from a
+/// [`Module`](cortex_core::module::Module) (weights read out of an ONNX file during codegen,
+/// say). Nothing is materialized by collecting; each tensor is read back only when the writer
+/// reaches it:
+///
+/// ```
+/// use cortex_store::cortex_pack::{Bytes, Error, Tensor, Writer};
+///
+/// fn pack(tensors: Vec<Tensor>) -> Result<Bytes, Error> {
+///     Writer::new(tensors).into_bytes()
+/// }
+/// ```
+///
+/// With cortex-pack's `std` feature, `Writer::write_to_file` is the better choice for a large
+/// model: it streams to disk instead of building the container in memory. This example uses
+/// [`into_bytes`](cortex_pack::Writer::into_bytes) so it compiles in no-std builds too.
+///
+/// Reach for this rather than depending on `cortex-pack` directly, so the version always matches
+/// the one cortex-store was built against.
+pub use cortex_pack;

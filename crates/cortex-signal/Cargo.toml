@@ -1,0 +1,68 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science", "no-std", "embedded", "wasm"]
+description = "Signal processing operations for Cortex tensors"
+documentation = "https://docs.rs/burn-signal"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "signal", "audio"]
+license.workspace = true
+name = "cortex-signal"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-signal"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex-core/default", "fusion", "std"]
+std = ["cortex-core/std", "cortex-std/std", "cortex-fusion?/std", "cortex-autodiff?/std"]
+tracing = ["cortex-core/tracing", "cortex-fusion?/tracing", "cortex-autodiff?/tracing"]
+autodiff = ["cortex-core/autodiff", "cortex-autodiff"]
+autotune = ["cortex-core/autotune", "cortex-cubecl?/autotune"]
+
+cubecl-backend = ["cortex-cubecl"]
+fusion = ["cortex-fusion", "cortex-core/fusion", "cortex-core/ir"]
+
+cuda = ["cubecl-backend", "cortex-core/cuda"]
+rocm = ["cubecl-backend", "cortex-core/rocm"]
+wgpu = ["cubecl-backend", "cortex-core/wgpu"]
+vulkan = ["cubecl-backend", "cortex-core/vulkan"]
+webgpu = ["cubecl-backend", "cortex-core/webgpu"]
+metal = ["cubecl-backend", "cortex-core/metal"]
+cpu = ["cubecl-backend", "cortex-core/cpu"]
+flex = ["cortex-core/flex", "cortex-flex"]
+tch = ["cortex-core/tch", "cortex-tch", "dep:tch"]
+remote-websocket = ["remote", "cortex-core/remote-websocket"]
+# Enable the remote transport integration test and its server dependencies.
+remote-tests = ["autodiff", "remote-websocket", "cortex-remote/server", "cortex-remote/websocket", "dep:tokio"]
+remote = ["cortex-core/remote", "router"]
+capture = ["cortex-core/capture", "router"]
+bench-disable-alloc = []
+router = ["cortex-router", "cortex-core/ir"]
+
+[dependencies]
+cortex-core = { workspace = true, features = ["extension"] }
+cortex-cubecl = { workspace = true, optional = true, default-features = false, features = ["fft"] }
+cortex-fusion = { workspace = true, optional = true, default-features = false }
+cortex-router = { workspace = true, optional = true, default-features = false }
+cortex-std = { workspace = true }
+cortex-autodiff = { workspace = true, optional = true }
+cortex-flex = { workspace = true, optional = true, features = ["fft"] }
+cortex-tch = { workspace = true, optional = true }
+tch = { workspace = true, optional = true }
+
+cortex-remote = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+divan = "0.1"
+ctor = "1.0.13"
+
+[package.metadata.docs.rs]
+features = ["default", "flex", "autodiff"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "fft_ops"
+harness = false

@@ -74,6 +74,24 @@ fn test_reduce_broadcasted_2() {
 }
 
 #[test]
+fn test_reduce_broadcasted_empty_axis() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::zeros([4, 0], &device);
+    let fused_on_read = TestTensor::<2>::zeros([4, 0], &device);
+    let fused_on_write =
+        TestTensor::<2>::from_data(TensorData::from([[1.0], [2.0], [3.0], [4.0]]), &device);
+
+    device.sync().unwrap();
+
+    let x = tensor + fused_on_read.clone();
+    let x = x.sum_dim(1);
+    let end = x + fused_on_write;
+
+    let actual = end.into_data();
+    actual.assert_eq(&TensorData::from([[1.0], [2.0], [3.0], [4.0]]), false);
+}
+
+#[test]
 fn test_reduce_broadcasted_3() {
     let device = Default::default();
     let tensor = TestTensorInt::<1>::arange(0..32, &device)
@@ -261,4 +279,88 @@ fn test_reduce_broadcasted_max_nan() {
             "expected ReduceBroadcasted fusion, got {reports:#?}"
         );
     });
+}
+
+/// Elementwise ops around a reduction, so fusion builds a `Reduce` block.
+fn fused_reduce_graph(rows: usize) -> TestTensor<2> {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::ones([rows, 8], &device);
+
+    // Materialize the inputs so they are not fused into the graph.
+    device.sync().unwrap();
+
+    (tensor * 2.0).sum_dim(1) + 1.0
+}
+
+/// The reduce input is read again after the reduction, so fusion builds a `ReduceBroadcasted`
+/// block.
+fn fused_reduce_broadcasted_graph(rows: usize) -> TestTensor<2> {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::ones([rows, 8], &device);
+    let fused_on_read = TestTensor::<2>::ones([rows, 8], &device);
+    let fused_on_write = TestTensor::<2>::ones([rows, 1], &device);
+
+    device.sync().unwrap();
+
+    let output = tensor + fused_on_read.clone();
+    let output = output.sum_dim(1);
+    let output = output + fused_on_write;
+    let output = output + fused_on_read;
+    output + 1.0
+}
+
+/// Runs `graph` non-empty so fusion caches it, then replays it with a zero-length axis that is
+/// not the reduced one, checking both runs go through the `fuser` block.
+fn assert_fused_graph_handles_empty_output(
+    graph: fn(usize) -> TestTensor<2>,
+    fuser: &str,
+    expected: TensorData,
+    empty_dims: [usize; 2],
+) {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device: cortex_tensor::Device = Default::default();
+
+        for rows in [4, 0] {
+            let inspector = FusionInspector::install(stream);
+            let actual = graph(rows).into_data();
+            device.sync().unwrap();
+
+            if rows == 0 {
+                assert_eq!(actual.shape().as_slice(), empty_dims);
+                assert_eq!(actual.num_elements(), 0);
+            } else {
+                actual.assert_eq(&expected, false);
+            }
+
+            let reports = inspector.drain();
+            assert!(
+                reports
+                    .iter()
+                    .flat_map(|report| report.fused_blocks())
+                    .any(|block| block.fuser_name() == Some(fuser)),
+                "expected {fuser} fusion for {rows} rows, got {reports:#?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn test_fused_reduce_empty_output() {
+    assert_fused_graph_handles_empty_output(
+        fused_reduce_graph,
+        "Reduce",
+        TensorData::from([[17.0], [17.0], [17.0], [17.0]]),
+        [0, 1],
+    );
+}
+
+#[test]
+fn test_reduce_broadcasted_empty_output() {
+    assert_fused_graph_handles_empty_output(
+        fused_reduce_broadcasted_graph,
+        "ReduceBroadcasted",
+        TensorData::from([[19.0; 8]; 4]),
+        [0, 8],
+    );
 }

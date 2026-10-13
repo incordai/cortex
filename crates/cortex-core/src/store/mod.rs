@@ -74,7 +74,7 @@ struct RecordTensor {
 /// A non-generic record holding a module's parameters.
 ///
 /// Obtain one from a module with [`Module::into_record`], then either save it
-/// ([`save`](ModuleRecord::save) / [`into_bytes`](ModuleRecord::into_bytes)) or apply it back with
+/// (`save` with `std` enabled / [`into_bytes`](ModuleRecord::into_bytes)) or apply it back with
 /// [`Module::load_record`]. Load-time behavior is
 /// configured with the builder methods; they are ignored when saving.
 ///
@@ -190,13 +190,8 @@ impl ModuleRecord {
         self.tensors
             .into_iter()
             .map(|t| {
-                cortex_pack::Tensor::new(
-                    t.path,
-                    t.data.dtype,
-                    t.data.shape,
-                    Some(t.id.val()),
-                    t.data.bytes,
-                )
+                let (bytes, shape, dtype) = t.data.into_parts();
+                cortex_pack::Tensor::new(t.path, dtype, shape, Some(t.id.val()), bytes)
             })
             .collect()
     }
@@ -206,15 +201,15 @@ impl ModuleRecord {
             .into_tensors()?
             .into_iter()
             .map(|t| {
-                let id = t.param_id.map(ParamId::from).unwrap_or_else(ParamId::new);
-                let data = TensorData::from_bytes(t.bytes, t.shape, t.dtype);
-                RecordTensor {
-                    path: t.name,
-                    id,
-                    data,
-                }
+                // Infallible for reader-produced tensors, which are always resident.
+                let (path, dtype, shape, param_id, bytes) = t.into_parts()?;
+                Ok(RecordTensor {
+                    path,
+                    id: param_id.map(ParamId::from).unwrap_or_else(ParamId::new),
+                    data: TensorData::from_bytes(bytes, shape, dtype),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, RecordError>>()?;
         Ok(Self::from_tensors(tensors))
     }
 
@@ -379,14 +374,15 @@ impl ModuleRecordMapper {
 
         // Resolve the dtype to load with (CastToModule casts to the module's dtype).
         let dtype = match self.dtype_policy {
-            DTypePolicy::FromRecord => data.dtype,
+            DTypePolicy::FromRecord => data.dtype(),
             DTypePolicy::CastToModule => module_dtype(),
         };
 
-        if data.shape != target_shape {
+        if *data.shape() != target_shape {
             self.errors.push(format!(
                 "{path}: shape mismatch, expected {:?} but record has {:?}",
-                target_shape, data.shape
+                target_shape,
+                data.shape()
             ));
             return None;
         }
@@ -432,7 +428,7 @@ impl ModuleMapper for ModuleRecordMapper {
 mod tests {
     use super::*;
     use crate as cortex;
-    use crate::module::{Module, Param, ParamGroup};
+    use crate::module::{Flag, Module, Param, ParamGroup};
     use crate::tensor::Tensor;
     use cortex_tensor::Device;
 
@@ -447,6 +443,21 @@ mod tests {
             Self {
                 weight: Param::from_data(weight, device),
                 bias: Param::from_data(bias, device),
+            }
+        }
+    }
+
+    #[derive(Module, Debug)]
+    struct Flagged {
+        weight: Param<Tensor<1>>,
+        enabled: Param<Flag>,
+    }
+
+    impl Flagged {
+        fn new(weight: f32, enabled: bool, device: &Device) -> Self {
+            Self {
+                weight: Param::from_data([weight], device),
+                enabled: Param::from_bool(enabled),
             }
         }
     }
@@ -470,8 +481,8 @@ mod tests {
 
     fn weights(model: &Tiny) -> (Vec<f32>, Vec<f32>) {
         (
-            model.weight.val().to_data().to_vec().unwrap(),
-            model.bias.val().to_data().to_vec().unwrap(),
+            model.weight.val().try_into_vec_as().unwrap(),
+            model.bias.val().try_into_vec_as().unwrap(),
         )
     }
 
@@ -488,6 +499,31 @@ mod tests {
         let (w, b) = weights(&loaded);
         assert_eq!(w, vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(b, vec![5.0, 6.0]);
+    }
+
+    #[test]
+    fn records_exclude_flags_and_loading_preserves_the_target_flag() {
+        let device = Default::default();
+        let bytes = Flagged::new(7.0, false, &device)
+            .into_record()
+            .into_bytes()
+            .unwrap();
+        let record = ModuleRecord::from_bytes(bytes).unwrap();
+
+        assert_eq!(record.len(), 1, "only the tensor should be recorded");
+
+        let target = Flagged::new(0.0, true, &device);
+        let target_flag_id = target.enabled.id;
+        let loaded = target.load_record(record.clone());
+        assert_eq!(loaded.weight.val().try_into_vec_as::<f32>().unwrap(), [7.0]);
+        assert!(loaded.enabled.is_enabled());
+        assert_eq!(loaded.enabled.id, target_flag_id);
+
+        let target = Flagged::new(0.0, false, &device);
+        let target_flag_id = target.enabled.id;
+        let loaded = target.load_record(record);
+        assert!(!loaded.enabled.is_enabled());
+        assert_eq!(loaded.enabled.id, target_flag_id);
     }
 
     #[test]
@@ -566,11 +602,11 @@ mod tests {
         let loaded = partial.unwrap();
         // weight/bias were loaded; gamma kept its (zero) initialization.
         assert_eq!(
-            loaded.weight.val().to_data().to_vec::<f32>().unwrap(),
+            loaded.weight.val().try_into_vec_as::<f32>().unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
         );
         assert_eq!(
-            loaded.gamma.val().to_data().to_vec::<f32>().unwrap(),
+            loaded.gamma.val().try_into_vec_as::<f32>().unwrap(),
             vec![0.0, 0.0]
         );
     }
@@ -609,7 +645,7 @@ mod tests {
         assert_eq!(loaded.bias.val().dtype(), DType::F64);
         // Values survive the cast.
         assert_eq!(
-            loaded.weight.val().to_data().to_vec::<f64>().unwrap(),
+            loaded.weight.val().try_into_vec_as::<f64>().unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
         );
     }
@@ -670,11 +706,11 @@ mod tests {
             .try_load_record(record.validate(false))
             .unwrap();
         assert_eq!(
-            loaded.weight.val().to_data().to_vec::<f32>().unwrap(),
+            loaded.weight.val().try_into_vec_as::<f32>().unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
         );
         assert_eq!(
-            loaded.bias.val().to_data().to_vec::<f32>().unwrap(),
+            loaded.bias.val().try_into_vec_as::<f32>().unwrap(),
             vec![0.0, 0.0, 0.0]
         );
     }
@@ -713,7 +749,7 @@ mod tests {
         assert_eq!(saved.weight.val().dims(), [2, 3]);
         let record = saved.into_record();
         assert_eq!(
-            record.tensors[0].data.shape,
+            *record.tensors[0].data.shape(),
             Shape::from([3, 2]),
             "the record must hold the save form, not the live form"
         );
@@ -722,7 +758,7 @@ mod tests {
         let loaded = ColLike::new(0.0, &device).load_record(record);
         assert_eq!(loaded.weight.val().dims(), [2, 3]);
         assert_eq!(
-            loaded.weight.val().to_data().to_vec::<f32>().unwrap(),
+            loaded.weight.val().try_into_vec_as::<f32>().unwrap(),
             vec![1.0; 6],
             "the recorded values must land, mapped back to the live form"
         );

@@ -1,7 +1,8 @@
+use crate::Initializer;
 use cortex_core as cortex;
 
 use cortex::config::Config;
-use cortex::module::{Content, DisplaySettings, Initializer, Module, ModuleDisplay};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
 use cortex::tensor::activation::silu;
 use cortex::tensor::{Device, Tensor};
 

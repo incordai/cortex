@@ -1,3 +1,4 @@
+use crate::Initializer;
 use alloc::format;
 
 use cortex_core as cortex;
@@ -6,7 +7,6 @@ use crate::conv::checks;
 use cortex::config::Config;
 use cortex::module::Content;
 use cortex::module::DisplaySettings;
-use cortex::module::Initializer;
 use cortex::module::Module;
 use cortex::module::ModuleDisplay;
 use cortex::module::Param;

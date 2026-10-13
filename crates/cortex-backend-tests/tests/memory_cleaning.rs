@@ -41,14 +41,10 @@ mod fusion {
     use cortex_fusion::inspect::FusionInspector;
     use cortex_tensor::{Device, StreamId, Transaction};
     use serial_test::serial;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// Returns a unique `StreamId` for test isolation.
+    /// Allocates a test stream without colliding with per-thread default streams.
     pub fn test_stream() -> StreamId {
-        static COUNTER: AtomicU64 = AtomicU64::new(1000);
-        StreamId {
-            value: COUNTER.fetch_add(1, Ordering::Relaxed),
-        }
+        StreamId::allocate()
     }
 
     /// Drain both the main stream and `peer` stream so the post-sync handle snapshot

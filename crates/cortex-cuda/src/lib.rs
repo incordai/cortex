@@ -1,27 +1,30 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+//! The CUDA runtime for [Cortex](https://github.com/tracel-ai/burn)'s CubeCL backend, for NVIDIA
+//! GPUs.
+//!
+//! Applications enable Cortex's `cuda` feature and create a device with `Device::cuda(index)`;
+//! they do not need this crate directly. [`Cuda`] is the backend type under the name of this
+//! runtime: every CubeCL runtime shares the same backend, and a tensor's device says which one it
+//! runs on.
+//!
+//! The CUDA driver is loaded at runtime, so building does not require the CUDA toolkit.
+//!
+//! # Feature flags
+//!
+//! - `std` (default): standard library support.
+//! - `fusion` (default): kernel fusion.
+//! - `autotune` (default): benchmark kernel variants at runtime and keep the fastest.
+//! - `tracing`: instrument operations with the `tracing` crate.
+
 extern crate alloc;
 
-use cortex_cubecl::CubeBackend;
 pub use cubecl::cuda::CudaDevice;
-use cubecl::{
-    cuda::CudaRuntime,
-    throughput::{ThroughputKey, ThroughputValue},
-};
 
-#[cfg(not(feature = "fusion"))]
-pub type Cuda = CubeBackend<CudaRuntime>;
-
-#[cfg(feature = "fusion")]
-pub type Cuda = cortex_fusion::Fusion<CubeBackend<CudaRuntime>>;
-
-/// Measure peak throughput on a CUDA `device` for each of the given `keys`.
-pub fn device_throughput(
-    device: &CudaDevice,
-    keys: &[ThroughputKey],
-) -> alloc::vec::Vec<ThroughputValue> {
-    cubecl::std::throughput::device_throughput::<CudaRuntime>(device, keys)
-}
+/// The cubecl backend, under the name of the runtime this crate compiles in.
+/// Every cubecl backend is the same type — a tensor's device is what says which
+/// runtime it runs on.
+pub type Cuda = cortex_cubecl::Cube;
 
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {
@@ -31,7 +34,7 @@ mod tests {
     #[test]
     fn should_support_dtypes() {
         type B = Cuda;
-        let device = CudaDevice::default();
+        let device = cubecl::Device::Cuda(CudaDevice::default());
         let scheme = device.defaults().quantization.scheme;
 
         assert!(B::supports_dtype(&device, DType::F32));

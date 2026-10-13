@@ -20,25 +20,45 @@ and `cuda` features make `Device::wgpu` and `Device::cuda` available.
 
 ## Selecting a Device
 
-`Device` provides constructors for the backends enabled in your build. Common choices include:
+`Device` provides constructors for the backends enabled in your build. Multiple backend features can
+be enabled together; the device chooses where operations execute.
 
-| Constructor                                | Target                             |
-| ------------------------------------------ | ---------------------------------- |
-| `Device::wgpu(Default::default())`         | Best WGPU adapter available        |
-| `Device::wgpu(DeviceKind::DiscreteGpu(0))` | First discrete GPU through WGPU    |
-| `Device::vulkan(Default::default())`       | Best Vulkan adapter                |
-| `Device::metal(Default::default())`        | Best Metal adapter                 |
-| `Device::webgpu(Default::default())`       | Browser WebGPU device              |
-| `Device::cuda(0)`                          | CUDA GPU at index 0                |
-| `Device::cuda(DeviceIndex::Default)`       | Backend-selected CUDA GPU          |
-| `Device::rocm(0)`                          | ROCm/HIP GPU at index 0            |
-| `Device::cpu()`                            | CubeCL CPU backend                 |
-| `Device::flex()`                           | Flex CPU backend                   |
-| `Device::ndarray()`                        | NdArray CPU backend                |
-| `Device::libtorch()`                       | LibTorch CPU backend               |
-| `Device::libtorch_cuda(0)`                 | LibTorch CUDA GPU at index 0       |
-| `Device::libtorch_mps()`                   | LibTorch Metal Performance Shaders |
-| `Device::libtorch_vulkan()`                | LibTorch Vulkan device             |
+| Device constructor                   | Cargo feature | Execution                                                                               |
+| ------------------------------------ | ------------- | --------------------------------------------------------------------------------------- |
+| `Device::wgpu(Default::default())`   | `wgpu`        | Graphics API selected at runtime; WGSL, or native SPIR-V/MSL when enabled and supported |
+| `Device::vulkan(Default::default())` | `vulkan`      | Vulkan through WGPU; native SPIR-V when supported, with WGSL fallback                   |
+| `Device::metal(Default::default())`  | `metal`       | Metal through WGPU with native MSL; initialization panics if native MSL is unavailable  |
+| `Device::webgpu(Default::default())` | `webgpu`      | Browser WebGPU with WGSL                                                                |
+| `Device::cuda(0)`                    | `cuda`        | NVIDIA GPU through CubeCL's CUDA runtime                                                |
+| `Device::rocm(0)`                    | `rocm`        | AMD GPU through CubeCL's HIP runtime                                                    |
+| `Device::cpu()`                      | `cpu`         | CPU through CubeCL's CPU runtime (LLVM JIT, supports fusion)                            |
+| `Device::flex()`                     | `flex`        | CPU through the pure-Rust Flex backend (eager, supports `no_std` and Wasm)              |
+| `Device::ndarray()`                  | `ndarray`     | CPU through NdArray (deprecated)                                                        |
+| `Device::libtorch()`                 | `tch`         | CPU through LibTorch (deprecated)                                                       |
+| `Device::libtorch_cuda(0)`           | `tch`         | CUDA GPU through LibTorch (deprecated)                                                  |
+| `Device::libtorch_mps()`             | `tch`         | Apple GPU through Metal Performance Shaders (deprecated)                                |
+| `Device::libtorch_vulkan()`          | `tch`         | Vulkan through LibTorch (deprecated)                                                    |
+
+The `vulkan`, `metal`, and `webgpu` features also enable `wgpu`. Enabling a feature makes that
+option available; it does not force `Device::wgpu` to use it. Automatic devices retain WGSL fallback
+even with native compiler features enabled. The explicit constructors pin the graphics API, so
+`Device::vulkan` cannot fall back to a different API even when it uses WGSL instead of SPIR-V.
+
+For example, one build can support both automatic selection and explicit Metal selection:
+
+```toml
+cortex = { version = "0.22", features = ["vulkan", "metal"] }
+```
+
+```rust, ignore
+use cortex::tensor::Device;
+
+let automatic = Device::wgpu(Default::default());
+let metal = Device::metal(Default::default());
+```
+
+The explicit Metal device requires an available Metal adapter with native MSL support. The automatic
+device selects an available graphics API and compiler for the platform.
 
 Indexed devices accept either an integer or `DeviceIndex`. WGPU-family constructors accept a
 `DeviceKind`, which can select a discrete, integrated, or virtual GPU, a CPU adapter, or the best
@@ -54,9 +74,10 @@ let default_cuda = Device::cuda(DeviceIndex::Default);
 let second_cuda = Device::cuda(1);
 ```
 
-Cortex also supports remote devices when the corresponding remote feature is enabled. Constructors
-include `Device::remote_websocket` for WebSocket connections and `Device::remote_iroh` for
-peer-to-peer remote execution.
+Cortex also supports remote devices, hosted by a Cortex server in another process on this machine or
+another, with the `remote` feature.
+`Device::remote_options(&host).init()` connects one, where a `RemoteHost` names the server: see
+[Distributed Computing](../performance/distributed-computing.md).
 
 ## Using a Device
 
@@ -82,34 +103,50 @@ let tensor = tensor.to_device(&gpu);
 let model = model.to_device(&gpu);
 ```
 
+To move a trainable module and optimize its parameters on the destination, use `Module::fork`.
+`Module::to_device` preserves connections to the source parameters instead. See the
+[module transfer semantics](./module.md#methods).
+
 ## Autodiff and Execution
 
-Automatic differentiation is a device capability. Calling `autodiff` returns a device that records
-the operations required for backpropagation:
+Devices provide the autodiff and checkpointing defaults for newly created tensors. Each tensor
+carries its own context and can later change it independently. `Tensor::to_device` preserves the
+source tensor's context, regardless of the destination's defaults. Calling `autodiff` returns a
+device whose newly created tensors have autodiff enabled:
 
 ```rust, ignore
 let device = Device::wgpu(Default::default());
 let training_device = device.autodiff();
 
 assert!(training_device.is_autodiff());
-let inference_device = training_device.inner();
+let inference_device = training_device.without_autodiff();
 assert!(!inference_device.is_autodiff());
 ```
 
-`gradient_checkpointing` adds gradient checkpointing to an autodiff device. The following methods
-are also useful when coordinating execution:
+`autodiff()` and `without_autodiff()` are idempotent. The historical `inner()` method is equivalent
+to `without_autodiff()`. Chain `autodiff().gradient_checkpointing()` to enable autodiff with the
+balanced checkpointing strategy. Repeating `autodiff()` doesn't enable higher-order differentiation;
+Cortex currently supports first-order autodiff only.
+
+Device equality compares compute resources and ignores autodiff and checkpointing settings. Use
+`tensor.is_autodiff()` to inspect a tensor's association; equality with an autodiff device does not
+establish that the tensor has autodiff enabled.
+
+The following methods are also useful when coordinating execution:
 
 - `seed(seed)` seeds random operations on the device.
 - `sync()` waits for queued work and reports an execution error if one occurred.
 - `flush()` submits queued work without waiting for completion.
-- `is_autodiff()` reports whether gradient tracking is enabled.
+- `is_autodiff()` reports whether autodiff is associated with the device.
+- `gradient_checkpointing_strategy()` returns the active strategy, or `None` without autodiff.
 - `supports_dtype(dtype)` reports whether the device supports a dtype.
 - `memory_cleanup()` asks the backend to release unused cached allocations.
 
 ## Device Settings
 
-Each device has their own runtime settings, including its default float, integer, and boolean
-dtypes. Inspect them with `settings()` and set them with `configure()`:
+Each device has runtime settings, including its default float, integer, and boolean dtypes. Set them
+with `configure()` before creating tensors or initializing model parameters, then inspect them with
+`settings()`:
 
 ```rust, ignore
 use cortex::tensor::{Device, DeviceConfig, FloatDType, IntDType};
@@ -124,8 +161,23 @@ device.configure(
 let settings = device.settings();
 ```
 
-Configure defaults before the first tensor operation on that device. Once initialized, the default
-dtypes are locked; a later incompatible configuration returns an error.
+Configure defaults before the first tensor operation on that device. Device settings are initialized
+once; tensor creation locks them to the backend's defaults, even with an explicit dtype, and a later
+`configure()` call returns `DeviceError::AlreadyInitialized`. Querying `settings()` does not lock
+defaults: before initialization, it returns a snapshot of the backend defaults, which subsequent
+configuration may change.
+
+These settings choose defaults, not a single precision for every tensor on the device. You can still
+specify a supported float or integer dtype at creation or cast an existing tensor:
+
+```rust, ignore
+use cortex::tensor::{DType, FloatDType, Tensor};
+
+let tensor = Tensor::<2>::zeros([2, 3], (&device, DType::F32));
+let tensor = tensor.cast(FloatDType::F16);
+```
+
+Neither choice changes the device's defaults.
 
 ## Enumerating Devices
 
@@ -146,6 +198,22 @@ let devices = devices.into_vec();
 The exact `DeviceType` variants available depend on the backend features enabled for the
 application.
 
+A GPU can be reachable through more than one runtime: an NVIDIA card enumerates under
+`DeviceType::Cuda` and again under `DeviceType::Vulkan`. `Device::enumerate_physical` lists each
+card once, with every device that runs on it, and `Device::identity` says which card a device is on:
+
+```rust, ignore
+for gpu in Device::enumerate_physical() {
+    let address = gpu.physical.pci_address.map(|address| address.to_string());
+    println!("{} at {address:?}: {:?}", gpu.name, gpu.devices);
+}
+```
+
+A card is recognized by its PCI address, which CUDA, ROCm and Vulkan report, or by its Windows LUID.
+A card that reports neither, such as an Apple GPU, is listed as a card of its own. The LUID changes
+when the machine restarts, so anything stored to recognize a card later should use the PCI address.
+Both calls open the devices they report on, so enumerate once and keep the answer.
+
 ## Execution Stack
 
 Under the hood, an operation flows through the **Tensor → Bridge → Dispatch → Backend** stack:
@@ -155,7 +223,16 @@ Under the hood, an operation flows through the **Tensor → Bridge → Dispatch 
 - `Dispatch` selects the implementation associated with the tensor's device.
 - The backend executes the primitive operation.
 
+This replaces the backend parameter in the former `Tensor<B, D, K>` API. Cargo features make
+backends available, and devices select them at runtime, so one application can use several backends
+with the same tensor and model types. The opaque bridge keeps their concrete implementation types
+out of the public tensor representation.
+
 The `Backend` and `AutodiffBackend` traits still define the low-level implementation contract, but
 ordinary application code does not need bounds such as `B: Backend`. You will mainly encounter those
 traits when implementing or extending a backend; see
-[Backend Extension](../advanced/backend-extension/README.md).
+[Backend Extension](../advanced/backend-extension/).
+
+For the responsibilities of each layer, the reason for the opaque bridge, and an operation
+walkthrough, see the contributor book's
+[Tensor architecture chapter](https://burn.dev/books/contributor/project-architecture/tensor.html).

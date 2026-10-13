@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 use cortex::optim::{SgdConfig, momentum::MomentumConfig};
 use custom_image_dataset::training::TrainingConfig;
 

@@ -23,10 +23,10 @@ use cortex_backend::{DType, Shape, TensorData};
 
 impl IntTensorOps<Self> for NdArray {
     fn int_from_data(data: TensorData, _device: &NdArrayDevice) -> NdArrayTensor {
-        if data.dtype.is_int() || data.dtype.is_uint() {
+        if data.dtype().is_int() || data.dtype().is_uint() {
             NdArrayTensor::from_data(data)
         } else {
-            unimplemented!("Unsupported dtype for `int_from_data`: {:?}", data.dtype)
+            unimplemented!("Unsupported dtype for `int_from_data`: {:?}", data.dtype())
         }
     }
 
@@ -266,19 +266,6 @@ impl IntTensorOps<Self> for NdArray {
         })
     }
 
-    fn int_scatter_add(
-        dim: usize,
-        tensor: NdArrayTensor,
-        indices: NdArrayTensor,
-        value: NdArrayTensor,
-    ) -> NdArrayTensor {
-        execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
-            execute_with_int_dtype!(indices, |idx_array| NdArrayOps::<I>::scatter(
-                dim, tensor, idx_array, value
-            ))
-        })
-    }
-
     fn int_scatter(
         dim: usize,
         tensor: NdArrayTensor,
@@ -288,7 +275,11 @@ impl IntTensorOps<Self> for NdArray {
     ) -> NdArrayTensor {
         match update {
             cortex_backend::tensor::IndexingUpdateOp::Add => {
-                Self::int_scatter_add(dim, tensor, indices, value)
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| NdArrayOps::<I>::scatter(
+                        dim, tensor, idx_array, value
+                    ))
+                })
             }
             cortex_backend::tensor::IndexingUpdateOp::Assign => {
                 execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
@@ -297,7 +288,27 @@ impl IntTensorOps<Self> for NdArray {
                     ))
                 })
             }
-            other => unimplemented!("int_scatter with {other:?} update is not implemented"),
+            cortex_backend::tensor::IndexingUpdateOp::Mul => {
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| NdArrayOps::<I>::scatter_mul(
+                        dim, tensor, idx_array, value
+                    ))
+                })
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Min => {
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| NdArrayOps::<I>::scatter_min(
+                        dim, tensor, idx_array, value
+                    ))
+                })
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Max => {
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| NdArrayOps::<I>::scatter_max(
+                        dim, tensor, idx_array, value
+                    ))
+                })
+            }
         }
     }
 
@@ -328,19 +339,6 @@ impl IntTensorOps<Self> for NdArray {
         })
     }
 
-    fn int_select_add(
-        tensor: NdArrayTensor,
-        dim: usize,
-        indices: NdArrayTensor,
-        value: NdArrayTensor,
-    ) -> NdArrayTensor {
-        execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
-            execute_with_int_dtype!(indices, |idx_array| NdArrayMathOps::<I>::select_assign(
-                tensor, dim, idx_array, value
-            ))
-        })
-    }
-
     fn int_select_assign(
         tensor: NdArrayTensor,
         dim: usize,
@@ -350,7 +348,11 @@ impl IntTensorOps<Self> for NdArray {
     ) -> NdArrayTensor {
         match update {
             cortex_backend::tensor::IndexingUpdateOp::Add => {
-                Self::int_select_add(tensor, dim, indices, value)
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| {
+                        NdArrayMathOps::<I>::select_assign(tensor, dim, idx_array, value)
+                    })
+                })
             }
             cortex_backend::tensor::IndexingUpdateOp::Assign => {
                 execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
@@ -359,7 +361,27 @@ impl IntTensorOps<Self> for NdArray {
                     })
                 })
             }
-            other => unimplemented!("int_select_assign with {other:?} update is not implemented"),
+            cortex_backend::tensor::IndexingUpdateOp::Mul => {
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| {
+                        NdArrayMathOps::<I>::select_assign_mul(tensor, dim, idx_array, value)
+                    })
+                })
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Min => {
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| {
+                        NdArrayMathOps::<I>::select_assign_min(tensor, dim, idx_array, value)
+                    })
+                })
+            }
+            cortex_backend::tensor::IndexingUpdateOp::Max => {
+                execute_with_int_dtype!((tensor, value), I, |tensor, value| -> NdArrayTensor {
+                    execute_with_int_dtype!(indices, |idx_array| {
+                        NdArrayMathOps::<I>::select_assign_max(tensor, dim, idx_array, value)
+                    })
+                })
+            }
         }
     }
     fn int_argmax(tensor: NdArrayTensor, dim: usize) -> NdArrayTensor {

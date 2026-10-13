@@ -3,7 +3,18 @@
 [Burn](https://github.com/tracel-ai/burn) Torch backend
 
 [![Current Crates.io Version](https://img.shields.io/crates/v/burn-tch.svg)](https://crates.io/crates/burn-tch)
-[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn-tch/blob/master/README.md)
+[![Documentation](https://docs.rs/burn-tch/badge.svg)](https://docs.rs/burn-tch)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+> **Deprecated:** This crate is deprecated as of `0.22.0` and will be removed in a future release.
+> Please migrate to one of the actively maintained backends:
+>
+> - **CubeCL GPU backends** for GPU acceleration: [`cortex-cuda`](https://crates.io/crates/burn-cuda)
+>   (NVIDIA), [`cortex-rocm`](https://crates.io/crates/burn-rocm) (AMD), and
+>   [`cortex-wgpu`](https://crates.io/crates/burn-wgpu) (Metal, Vulkan, WebGPU).
+> - **CPU backends**: [`cortex-cpu`](https://crates.io/crates/burn-cpu) (CubeCL) or
+>   [`cortex-flex`](https://crates.io/crates/burn-flex) for portable pure-Rust CPU execution (std,
+>   no_std, WebAssembly).
 
 This crate provides a Torch backend for [Burn](https://github.com/tracel-ai/burn) utilizing the
 [`tch-rs`](https://github.com/LaurentMazare/tch-rs) crate, which offers a Rust interface to the
@@ -45,7 +56,7 @@ commands:
 
 ```shell
 export TORCH_CUDA_VERSION=cu128
-cargo run --bin cuda --release
+cargo run -p cortex-tch --bin cuda --release
 ```
 
 **Important:** make sure your driver version is compatible with the selected CUDA version. A CUDA
@@ -62,9 +73,9 @@ Once your installation is complete, you should be able to build/run your project
 validate your installation by running the appropriate `cpu`, `cuda` or `mps` sample as below.
 
 ```shell
-cargo run --bin cpu --release
-cargo run --bin cuda --release
-cargo run --bin mps --release
+cargo run -p cortex-tch --bin cpu --release
+cargo run -p cortex-tch --bin cuda --release
+cargo run -p cortex-tch --bin mps --release
 ```
 
 _Note: no MPS distribution is available for automatic download at this time, please check out the
@@ -213,7 +224,7 @@ not work properly.
 
 ## Example Usage
 
-For a simple example, check out any of the test programs in [`src/bin/`](./src/bin/). Each program
+For a simple example, check out any of the test programs in [`src/bin/`](https://github.com/tracel-ai/burn/tree/main/crates/burn-tch/src/bin). Each program
 sets the device to use and performs a simple element-wise addition.
 
 For a more complete example using the `tch` backend, take a loot at the
@@ -244,3 +255,10 @@ EOF
 ```
 
 This will automatically include the old `LD_LIBRARY_PATH` value in the new one.
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://burn.dev/books/burn/) and the [API documentation](https://docs.rs/burn).

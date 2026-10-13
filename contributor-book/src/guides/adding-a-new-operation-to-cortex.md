@@ -1,9 +1,8 @@
-# Adding a New Operation to cortex
+# Adding a New Operation to Cortex
 
-Let's discuss how one might go about adding new operators to Cortex, using the example of the pow
-operator added in [this PR](https://github.com/tracel-ai/burn/pull/1133/files).
+## Choosing where the operation belongs
 
-## Adding the Op to cortex-tensor
+First consider the operation's intended users and scope:
 
 `cortex-tensor` is the crate that defines all tensor operations that need to be implemented by the
 various backends. The core of this lies in
@@ -17,27 +16,18 @@ for the int type and in
 for the float type. More information on the relationship between Tensor modules can be found under
 the section for [Tensor Architecture](../project-architecture/tensor.md#tensor-operations).
 
-Here is where pow was added to `crates/cortex-tensor/src/tensor/api/numeric.rs`:
+Then decide how to implement the operation. A composition of existing tensor operations can be
+exposed as a function or extension trait in any of these locations without changing the backend
+contract. If custom kernels are needed, a
+[backend extension](https://burn.dev/books/burn/advanced/backend-extension/) lets you define the
+operation and its backend implementations in an extension crate, including one maintained outside
+Cortex.
 
-1. for the
-   [`Tensor<Backend, Dimension, Kind>` struct](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/numeric.rs#L573)
-2. for the
-   [numeric trait](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/numeric.rs#L1955)
-3. for the implementation of numeric for
-   [float](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/numeric.rs#L2722)
-   and
-   [int](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/numeric.rs#L2375)
+The sections below describe adding an operation to the core tensor API and, when a new primitive is
+needed, its backend contract and routing. For domain or external extensions, follow the backend
+extension guide and the conventions of the crate that owns the operation.
 
-Tensor is a struct that has a single member: `primitive` (defined
-[here](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/base.rs#L27)),
-that is defined by its
-[`Kind`](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/kind.rs#L16):
-one of `Bool`, `Float`, or `Int` (those linked in 3). These call the ops for that data type defined
-in the
-[`Backend`](https://github.com/tracel-ai/burn/blob/9f31281/crates/burn-backend/src/backend/base.rs#L64)
-supertrait[^supertrait]. This is the trait that is then implemented by the different `cortex-`
-backends (such as `cortex-flex` and `cortex-wgpu`) which must implement the functions if no default
-is provided.
+## Public tensor API and bridge
 
 In this case, we don't need to worry about `Bool` Tensors. `Float` ops are implemented under
 [crates/burn-backend/src/backend/ops/tensor.rs](https://github.com/tracel-ai/burn/blob/9f31281/crates/burn-backend/src/backend/ops/tensor.rs),
@@ -50,22 +40,17 @@ So `powf` and sundry would be defined as `int_powf` for `IntTensorOps` and `floa
 [`sin` under `crates/burn-tensor/src/api/float.rs`](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-tensor/src/tensor/api/float.rs#L82)
 which obviously doesn't make sense for `Int` or `Bool` tensors.
 
-The `Int` Tensor function uses the ones defined for Float with 2 extra casts (LHS to a `Float`
-tensor, Output to an `Int`). Given that the rest of the code will only look at the float
-implementations.
+The public type is `Tensor<D, K>`, with an opaque `BridgeTensor` primitive. Keep generic method
+bodies thin: route through a non-generic `*_impl` helper where needed and the corresponding kind
+operations in `crates/cortex-tensor/src/bridge/ops`. Do not expose backend types in ordinary public
+method signatures. See [Tensor Architecture](../project-architecture/tensor.md).
 
-With the addition of quantized float tensors, the `Float` tensor primitive is represented by the
-[`TensorPrimitive`](https://github.com/tracel-ai/burn/blob/a6a5c22e0db56d947b9165d4dae42783a5a6b689/crates/burn-tensor/src/tensor/api/kind.rs#L69)
-enum. This allows us to handle both float and quantized float operations in the `Tensor`
-implementation, correctly dispatching to the corresponding op (float or quantized) based on the
-variant. Following the same convention, the equivalent
-[quantized tensor ops](https://github.com/tracel-ai/burn/blob/a6a5c22e0db56d947b9165d4dae42783a5a6b689/crates/burn-tensor/src/tensor/ops/qtensor.rs#L45)
-are prefixed with `q_*` (e.g., `q_reshape` instead of `float_reshape`). Most ops have a default
-implementation that simply dequantizes the input into its floating-point representation, performs
-the operation on the float tensor, and quantizes the output. Backends can overwrite specific
-implementations when required/desired.
+## Backend contract and dispatch
 
-### Adding Tests
+Define the primitive operation in the relevant trait under `crates/cortex-backend/src/backend/ops`.
+Shared names are prefixed by kind, such as `float_powf` and `int_powf`. A default implementation may
+compose existing primitive operations where appropriate. Dtypes are runtime values; there are no
+backend-associated float or integer element types.
 
 Additional tests should be added to `cortex-backend-tests` under
 [`crates/burn-backend-tests/tests/tensor/{float_or_int}/ops/{op_name}.rs`](https://github.com/tracel-ai/burn/blob/9f31281/crates/burn-backend-tests/tests/tensor/float/ops/powf.rs),
@@ -85,12 +70,11 @@ that the quantization and dequantization are correct, it makes the tests much mo
 easier to understand w.r.t. what is being tested. Effectively, the tests are there to ensure that a
 tensor operation is invariant to quantization (up to some quantization error, of course).
 
-_Note: the tests try to use tensors with floating point values which can be de/quantized without
-introducing too much quantization error, but the result always depends on the operation (e.g.,
-tensor product of values can grow larger and significantly increase the output tensor range, leading
-to more de/quantization error on the results)._
+## Concrete backends and decorators
 
-## Adding the Op to cortex-autodiff
+Implement the operation on the supported concrete backends. For CubeCL kernels, the implementation
+is on `CubeBackend`; runtime-specific execution is selected by its device. Handle supported dtypes
+and layouts, including non-contiguous inputs where the operation permits them.
 
 Since this is probably the hardest and the least straightforward, we'll cover this backend
 separately. `cortex-autodiff` enables other backends to use autodifferentiation[^autodiff]. Ops for
@@ -98,36 +82,32 @@ float types are implemented in
 [crates/burn-autodiff/src/ops/tensor.rs](https://github.com/tracel-ai/burn/blob/0ee2021567b3725907df5fd1a905ce60b1aca096/crates/burn-autodiff/src/ops/tensor.rs)
 and need to:
 
-1. Define a unit struct [^absolute_units] that implements a backward (pass) function
-2. Within the backward function, as this is an elementwise binary operation it implements the binary
-   function (from `backward.rs` under the same directory), the last 2 arguments are two closures
-   that define the left and right partial derivatives.
-3. Then define what happens when a specific operation is tracked or untracked, where untracked just
-   calls the function in the normal way, and tracked sets the execution the backward function
-   defined above.
-4. When tracked, operations are part of the autodiff graph and must save the needed information to
-   efficiently perform their backward pass later. If the information is light (such as a shape), it
-   should be directly saved in the state. If the operation's inputs are needed to compute the
-   backward pass, it should be checkpointed rather than saved. This will allow the input to be
-   provided lazily at the backward pass depending on the checkpointing strategy.
-5. An operation must also be identified as _compute-bound_ (`.computeBound()`) or _memory-bound_
-   (`.memoryBound()`) for gradient checkpointing. _Compute-bound_ operation are heavy to compute
-   (for instance matmul or convolution), which means that even with checkpointing they will save
-   their output for the backward pass and not recompute it. _Memory-bound_ operations are more
-   trivial (like `powf` which only performs one small operation per tensor entry), so it can be
-   beneficial to recompute them during the backward pass instead of saving their whole forward
-   output to memory. Operations registered as _memory-bound_ need to know their parents
-   (`.parents()` method) and how to recompute their forward pass during the backward pass (with a
-   struct that implements `RetroForward`), using their parents' outputs.
+- **Autodiff:** implement the derivative in `crates/cortex-autodiff/src/ops`. Follow neighboring
+  operations for `Backward`, saved state, checkpointing, broadcasting reductions, and tracked versus
+  untracked inputs. The forward pass must save only the state needed by the backward computation.
+- **IR:** add the representation under `crates/cortex-ir/src/operation.rs` when the operation is
+  recorded or transmitted, including shape and scalar arguments.
+- **Fusion:** record the operation in `crates/cortex-fusion/src/ops`. Kernel fusion support, when
+  appropriate, also involves `cortex-cubecl-fusion`; merely recording an operation does not make it
+  fusible with its neighbors.
+- **Router:** record the operation in `crates/cortex-router/src/ops` and add its execution to
+  `TensorInterpreter` in `crates/cortex-router/src/interpreter.rs`. The recorded IR and interpreter
+  must agree on the operation's inputs, outputs, and metadata.
+- **Remote and capture:** verify the operation through these consumers of the router layer.
+  `cortex-remote` uses `BackendRouter<RemoteChannel>` and executes received operations through
+  `TensorInterpreter`; `cortex-capture` uses `BackendRouter<CaptureChannel>` to record them without
+  execution. Ordinary operation support belongs in the shared router layer; changes in these crates
+  are needed when the operation requires additional transport or capture handling.
 
-The above steps are mostly boilerplate, so you can often just copy the contents of another similar
-op, change the name of the structs, and ensure that either both sides have the data they need (if
-they need to have a copy of the opposite sided tensor, clone its contents).
+Some operations have intentional backend limitations. Make them explicit in documentation and errors
+rather than assuming every runtime has the same capability.
 
-### Computing derivatives
+## Tests and documentation
 
-For those that need it, here is a quick refresher on the necessary calculus. If you are familiar
-with how to calculate partial derivatives, you can skip this section.
+Add forward and backward coverage to `cortex-backend-tests`; see the
+[testing guide](../getting-started/testing.md). Verify shapes, values, broadcasting, and dtypes,
+plus empty inputs or non-contiguous layouts when relevant. Check every differentiable input and any
+saved state used by the backward pass.
 
 Since `pow` is a binary operation, the left and right functions are the partial derivatives with
 respect to the left and right sided tensors.

@@ -10,7 +10,7 @@ edition.workspace = true
 keywords = ["deep-learning", "machine-learning", "gpu"]
 license.workspace = true
 name = "cortex-vision"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-vision"
 version.workspace = true
 
@@ -19,39 +19,54 @@ workspace = true
 
 
 [features]
-default = ["cortex-core/default", "flex", "cubecl-backend", "fusion", "std"]
-std = ["aligned-vec/std", "cortex-core/std", "cortex-store?/std"]
+default = [
+    "cortex-core/default",
+    "cortex-cubecl?/default",
+    "cortex-fusion?/default",
+    "fusion",
+    "std",
+]
+std = [
+    "aligned-vec/std",
+    "cortex-core/std",
+    "cortex-cubecl?/std",
+    "cortex-fusion?/std",
+    "cortex-nn?/std",
+    "cortex-store?/std",
+]
 tracing = [
     "cortex-cubecl?/tracing",
     "cortex-fusion?/tracing",
-    "cortex-ir/tracing",
     "cortex-core/tracing",
-    "cubecl/tracing",
+    "cubecl?/tracing",
 ]
 
+# The cubecl vision ops. Implied by every runtime feature below and not selectable on its own:
+# the backend no longer carries its runtime in its type, so `CubeBackend` — and the ops
+# implemented on it — exist only once a runtime is compiled in.
 cubecl-backend = ["cubecl", "cortex-cubecl"]
 fusion = ["cortex-fusion", "cortex-core/fusion"]
 
-cuda = ["cubecl-backend", "cortex-core/cuda"]
-rocm = ["cubecl-backend", "cortex-core/rocm"]
-wgpu = ["cubecl-backend", "cortex-core/wgpu"]
-vulkan = ["cubecl-backend", "cortex-core/vulkan"]
-webgpu = ["cubecl-backend", "cortex-core/webgpu"]
-metal = ["cubecl-backend", "cortex-core/metal"]
-cpu = ["cubecl-backend", "cortex-core/cpu"]
+cuda = ["cubecl-backend", "cortex-core/cuda", "cortex-cubecl/cuda"]
+rocm = ["cubecl-backend", "cortex-core/rocm", "cortex-cubecl/hip"]
+wgpu = ["cubecl-backend", "cortex-core/wgpu", "cortex-cubecl/wgpu"]
+vulkan = ["cubecl-backend", "cortex-core/vulkan", "cortex-cubecl/vulkan"]
+webgpu = ["cubecl-backend", "cortex-core/webgpu", "cortex-cubecl/webgpu"]
+metal = ["cubecl-backend", "cortex-core/metal", "cortex-cubecl/metal"]
+cpu = ["cubecl-backend", "cortex-core/cpu", "cortex-cubecl/cpu"]
 flex = ["cortex-core/flex"]
 tch = ["cortex-core/tch"]
 
 # TODO: move somewhere else
-loss = ["std", "cortex-store/pytorch", "cortex-core/network", "dirs"]
+loss = ["std", "dep:cortex-nn", "cortex-store/pytorch", "cortex-std/network", "dirs"]
 
 [dependencies]
-cortex-cubecl = { workspace = true, optional = true, features = ["default"]}
-cortex-fusion = { workspace = true, optional = true, features = ["default"]}
-cortex-ir = { workspace = true, features = ["default"]}
+cortex-cubecl = { workspace = true, optional = true }
+cortex-fusion = { workspace = true, optional = true }
 cortex-core = { workspace = true, features = [
     "extension",
 ] }
+cortex-std = { workspace = true }
 
 # TODO: requires cortex-backend. The `extension` feature should expose this from `cortex-core`.
 
@@ -59,17 +74,21 @@ aligned-vec = { version = "0.6", default-features = false }
 bon = { workspace = true }
 
 # For loss functions requiring pretrained models (e.g., Gram Matrix Loss)
+cortex-nn = { workspace = true, optional = true }
 cortex-store = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 
 bytemuck = { workspace = true }
 cubecl = { workspace = true, optional = true }
 derive-new = { workspace = true }
-half = { workspace = true }
 image = { version = "0.25" }
 macerator = { workspace = true }
 ndarray = { workspace = true }
 num-traits = { workspace = true }
-paste = { workspace = true }
 serde = { workspace = true }
 
+[dev-dependencies]
+cortex-core = { workspace = true, features = ["autodiff"] }
+
+[package.metadata.docs.rs]
+features = ["flex"]

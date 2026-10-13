@@ -3,8 +3,13 @@ use crate::{
     FusionUtilities, UnfusedOp,
     stream::{StreamId, execution::Operation},
 };
-use cortex_backend::{Device, DeviceHandle, DeviceId, DeviceService, DeviceServiceStage};
-use cortex_std::CommunicationId;
+use cortex_backend::{
+    Device, DeviceHandle, DeviceId, DeviceService, DeviceServiceStage, ServerUtilitiesHandle,
+};
+use cortex_std::{
+    CommunicationId,
+    device_handle::{CallError, CallResultExt},
+};
 
 use cortex_backend::{TensorData, backend::ExecutionError};
 use cortex_ir::{OperationIr, TensorId, TensorIr};
@@ -14,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Use a mutex to communicate with the fusion server.
 pub struct GlobalFusionClient<R: FusionRuntime> {
-    server: DeviceHandle<FusionServer<R>>,
+    server: ServerHandle<R>,
     device: FusionDevice<R>,
 }
 
@@ -54,7 +59,7 @@ where
     pub fn load(device: &FusionDevice<R>) -> Self {
         Self {
             device: device.clone(),
-            server: DeviceHandle::new(device.to_id()),
+            server: ServerHandle::new(device.to_id()),
         }
     }
 }
@@ -69,7 +74,7 @@ where
     pub fn new(device: FusionDevice<R>) -> Self {
         Self {
             device: device.clone(),
-            server: DeviceHandle::new(device.to_id()),
+            server: ServerHandle::new(device.to_id()),
         }
     }
 
@@ -135,29 +140,53 @@ where
         outputs
     }
 
-    /// Register a `Drop` issued from a thread other than the tensor's home `stream`.
+    /// Free a tensor dropped on a thread other than its home `stream`. Same-stream drops must
+    /// keep using [`Self::register`].
+    pub(crate) fn foreign_drop(&self, stream: StreamId, ir: TensorIr) {
+        self.server
+            .submit(move |server| server.foreign_drop(stream, ir));
+    }
+
+    /// Run `func` on the server, in order with the operations registered so
+    /// far but without executing the ones still queued — [`sync`](Self::sync)
+    /// is the one that drains them first.
     ///
-    /// Routes to [`FusionServer::register_foreign_drop`]. Same-stream drops must keep using
-    /// [`Self::register`].
-    pub(crate) fn register_foreign_drop<O>(&self, stream: StreamId, ir: TensorIr, operation: O)
-    where
-        O: Operation<R> + 'static,
-    {
-        self.server.submit(move |server| {
-            let operation = UnfusedOp::new(operation, stream);
-            server.register_foreign_drop(stream, ir, operation);
-        });
+    /// The server runs a task where the calling stream stands, so this is how
+    /// a caller marks a point in the stream's execution without cutting the
+    /// queue at it.
+    ///
+    /// # Errors
+    ///
+    /// The server could not run the task: it panicked, or is gone.
+    pub fn run<Re: Send>(&self, func: impl FnOnce() -> Re + Send) -> Result<Re, CallError> {
+        self.server.submit_blocking(move |_server| func())
     }
 
     /// Register all lazy computation.
+    ///
+    /// # Panics
+    ///
+    /// When the server could not run the task, re-raising its own panic so the
+    /// original cause is what the caller sees. [`try_sync`](Self::try_sync)
+    /// returns it instead.
     pub fn sync<Re: Send + 'static>(&self, sync_fn: impl FnOnce() -> Re + Send + 'static) -> Re {
+        self.try_sync(sync_fn).unwrap_or_resume()
+    }
+
+    /// Register all lazy computation.
+    ///
+    /// # Errors
+    ///
+    /// The server could not run the task: it panicked, or is gone.
+    pub fn try_sync<Re: Send + 'static>(
+        &self,
+        sync_fn: impl FnOnce() -> Re + Send + 'static,
+    ) -> Result<Re, CallError> {
         let id = StreamId::current();
-        self.server
-            .submit_blocking(move |server| {
-                server.drain_stream(id);
-                sync_fn()
-            })
-            .unwrap()
+        self.server.submit_blocking(move |server| {
+            server.drain_stream(id);
+            sync_fn()
+        })
     }
 
     /// Flush the operations queue.
@@ -195,9 +224,15 @@ where
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.server
-            .submit_blocking(move |server| server.float_data::<B>(tensor, stream))
-            .unwrap()
+        let read = self
+            .server
+            .submit_blocking(move |server| server.float_data::<B>(tensor, stream));
+        async move {
+            match read {
+                Ok(read) => read.await,
+                Err(err) => Err(crate::backend::server_error(err)),
+            }
+        }
     }
 
     /// Read the values contained by an int tensor.
@@ -209,9 +244,15 @@ where
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.server
-            .submit_blocking(move |server| server.int_data::<B>(tensor, stream))
-            .unwrap()
+        let read = self
+            .server
+            .submit_blocking(move |server| server.int_data::<B>(tensor, stream));
+        async move {
+            match read {
+                Ok(read) => read.await,
+                Err(err) => Err(crate::backend::server_error(err)),
+            }
+        }
     }
 
     /// Read the values contained by a bool tensor.
@@ -223,9 +264,15 @@ where
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.server
-            .submit_blocking(move |server| server.bool_data::<B>(tensor, stream))
-            .unwrap()
+        let read = self
+            .server
+            .submit_blocking(move |server| server.bool_data::<B>(tensor, stream));
+        async move {
+            match read {
+                Ok(read) => read.await,
+                Err(err) => Err(crate::backend::server_error(err)),
+            }
+        }
     }
 
     /// Read the values contained by a quantized tensor.
@@ -237,9 +284,15 @@ where
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.server
-            .submit_blocking(move |server| server.quantized_data::<B>(tensor, stream))
-            .unwrap()
+        let read = self
+            .server
+            .submit_blocking(move |server| server.quantized_data::<B>(tensor, stream));
+        async move {
+            match read {
+                Ok(read) => read.await,
+                Err(err) => Err(crate::backend::server_error(err)),
+            }
+        }
     }
 
     /// Change the client of the given float tensor.
@@ -261,12 +314,27 @@ where
             .server
             .submit_blocking(move |server_src| server_src.read_float::<B>(tensor, stream))
             .unwrap();
-        let float_tensor = B::float_to_device(float_tensor, client_dst.device());
-        client_dst.server.submit(move |server_dst| {
-            server_dst
-                .handles
-                .register_float_tensor::<B>(&id, float_tensor.clone());
-        });
+        match float_tensor {
+            Ok(float_tensor) => {
+                let float_tensor = B::float_to_device(float_tensor, client_dst.device());
+                client_dst.server.submit(move |server_dst| {
+                    server_dst
+                        .handles
+                        .register_float_tensor::<B>(&id, float_tensor.clone());
+                });
+            }
+            // A tensor a failure claims has no bytes to copy, so the transfer
+            // cannot happen — and the destination has to carry the same
+            // failure rather than an id that reads as merely missing. The root
+            // is shared, so a read on the destination device still names the
+            // cause, one hop further down.
+            Err(error) => {
+                let error = error.propagated();
+                client_dst.server.submit(move |server_dst| {
+                    server_dst.handles.set_error(id, error);
+                });
+            }
+        }
 
         FusionTensor::new(id, shape, dtype, client_dst_cloned, StreamId::current())
     }
@@ -290,12 +358,27 @@ where
             .server
             .submit_blocking(move |server_src| server_src.read_int::<B>(tensor, stream))
             .unwrap();
-        let int_tensor = B::int_to_device(int_tensor, client_dst.device());
-        client_dst.server.submit(move |server_dst| {
-            server_dst
-                .handles
-                .register_int_tensor::<B>(&id, int_tensor.clone());
-        });
+        match int_tensor {
+            Ok(int_tensor) => {
+                let int_tensor = B::int_to_device(int_tensor, client_dst.device());
+                client_dst.server.submit(move |server_dst| {
+                    server_dst
+                        .handles
+                        .register_int_tensor::<B>(&id, int_tensor.clone());
+                });
+            }
+            // A tensor a failure claims has no bytes to copy, so the transfer
+            // cannot happen — and the destination has to carry the same
+            // failure rather than an id that reads as merely missing. The root
+            // is shared, so a read on the destination device still names the
+            // cause, one hop further down.
+            Err(error) => {
+                let error = error.propagated();
+                client_dst.server.submit(move |server_dst| {
+                    server_dst.handles.set_error(id, error);
+                });
+            }
+        }
 
         FusionTensor::new(id, shape, dtype, client_dst_cloned, StreamId::current())
     }
@@ -319,12 +402,27 @@ where
             .server
             .submit_blocking(move |server_src| server_src.read_bool::<B>(tensor, stream))
             .unwrap();
-        let bool_tensor = B::bool_to_device(bool_tensor, client_dst.device());
-        client_dst.server.submit(move |server_dst| {
-            server_dst
-                .handles
-                .register_bool_tensor::<B>(&id, bool_tensor.clone());
-        });
+        match bool_tensor {
+            Ok(bool_tensor) => {
+                let bool_tensor = B::bool_to_device(bool_tensor, client_dst.device());
+                client_dst.server.submit(move |server_dst| {
+                    server_dst
+                        .handles
+                        .register_bool_tensor::<B>(&id, bool_tensor.clone());
+                });
+            }
+            // A tensor a failure claims has no bytes to copy, so the transfer
+            // cannot happen — and the destination has to carry the same
+            // failure rather than an id that reads as merely missing. The root
+            // is shared, so a read on the destination device still names the
+            // cause, one hop further down.
+            Err(error) => {
+                let error = error.propagated();
+                client_dst.server.submit(move |server_dst| {
+                    server_dst.handles.set_error(id, error);
+                });
+            }
+        }
 
         FusionTensor::new(id, shape, dtype, client_dst_cloned, StreamId::current())
     }
@@ -348,12 +446,27 @@ where
             .server
             .submit_blocking(move |server_src| server_src.read_quantized::<B>(tensor, stream))
             .unwrap();
-        let q_tensor = B::q_to_device(q_tensor, client_dst.device());
-        client_dst.server.submit(move |server_dst| {
-            server_dst
-                .handles
-                .register_quantized_tensor::<B>(&id, q_tensor.clone());
-        });
+        match q_tensor {
+            Ok(q_tensor) => {
+                let q_tensor = B::q_to_device(q_tensor, client_dst.device());
+                client_dst.server.submit(move |server_dst| {
+                    server_dst
+                        .handles
+                        .register_quantized_tensor::<B>(&id, q_tensor.clone());
+                });
+            }
+            // A tensor a failure claims has no bytes to copy, so the transfer
+            // cannot happen — and the destination has to carry the same
+            // failure rather than an id that reads as merely missing. The root
+            // is shared, so a read on the destination device still names the
+            // cause, one hop further down.
+            Err(error) => {
+                let error = error.propagated();
+                client_dst.server.submit(move |server_dst| {
+                    server_dst.handles.set_error(id, error);
+                });
+            }
+        }
 
         FusionTensor::new(id, shape, dtype, client_dst_cloned, StreamId::current())
     }
@@ -444,5 +557,60 @@ where
             let mut initialized_comms = utilities.initialized_comms.write();
             initialized_comms.insert(id);
         }
+    }
+}
+
+/// The client's one door to the server.
+///
+/// Registering a drop re-enters the client, so a tensor dropped while its
+/// thread was unwinding could not register then and was set aside instead (see
+/// [`deferred`](crate::tensor::deferred)). What those drops are waiting for is
+/// a normal call stack, which is what every call into the client arrives on —
+/// so each method here replays them before it carries the caller's work.
+///
+/// The client holds this rather than a [`DeviceHandle`] so that there is no
+/// bare handle to reach past: a call that skipped the replay would leave a
+/// tensor's entry, and any claim on it, outliving every tensor that could
+/// report it.
+struct ServerHandle<R: FusionRuntime> {
+    handle: DeviceHandle<FusionServer<R>>,
+}
+
+impl<R: FusionRuntime> Clone for ServerHandle<R> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+        }
+    }
+}
+
+impl<R: FusionRuntime + 'static> ServerHandle<R> {
+    fn new(device_id: DeviceId) -> Self {
+        Self {
+            handle: DeviceHandle::new(device_id),
+        }
+    }
+
+    fn submit<T: FnOnce(&mut FusionServer<R>) + Send + 'static>(&self, task: T) {
+        crate::tensor::deferred::flush();
+        self.handle.submit(task);
+    }
+
+    fn submit_blocking<'a, Out: Send, T: FnOnce(&mut FusionServer<R>) -> Out + Send + 'a>(
+        &self,
+        task: T,
+    ) -> Result<Out, CallError> {
+        crate::tensor::deferred::flush();
+        self.handle.submit_blocking(task)
+    }
+
+    fn flush_queue(&self) {
+        crate::tensor::deferred::flush();
+        self.handle.flush_queue();
+    }
+
+    fn utilities(&self) -> ServerUtilitiesHandle {
+        crate::tensor::deferred::flush();
+        self.handle.utilities()
     }
 }

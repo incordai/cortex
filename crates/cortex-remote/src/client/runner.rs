@@ -1,16 +1,16 @@
 use super::{RemoteChannel, RemoteClient, service};
 use crate::shared::{LocalTransferId, TaskResponseContent, TensorRemote, TransferCapability};
 use crate::{PeerAddr, PeerId};
-use cortex_backend::{DeviceId, DeviceOps, ExecutionError, StreamId, TensorData};
+use cortex_backend::{
+    DeviceId, DeviceOps, ExecutionError, ProfileDuration, ProfileOptions, ProfileToken,
+    RouterDeviceType, StreamId, TensorData,
+};
 use cortex_ir::TensorIr;
 use cortex_router::{MultiBackendBridge, RouterClient, RouterTensor, get_client};
 use cortex_std::DeviceSettings;
 use cortex_std::{backtrace::BackTrace, future::DynFut};
-#[cfg(feature = "websocket")]
-use std::sync::Arc;
 use std::sync::Mutex;
 
-use super::runtime::Executor;
 use service::RemoteEndpoint;
 
 // It is very important to block on any request made via the service, since ordering is
@@ -54,8 +54,8 @@ impl RouterClient for RemoteClient {
     }
 
     fn register_tensor_data(&self, data: TensorData) -> RouterTensor<Self> {
-        let shape = data.shape.clone();
-        let dtype = data.dtype;
+        let shape = data.shape().clone();
+        let dtype = data.dtype();
         let id = service::new_tensor_id();
 
         // Fire-and-forget: the outgoing batch flushes itself once buffered data bytes (or the task
@@ -76,6 +76,36 @@ impl RouterClient for RemoteClient {
         self.handle
             .submit_blocking(|s| s.sync(stream_id))
             .expect("Service call failed")
+    }
+
+    fn profile_start(&self) -> Result<Option<ProfileToken>, ExecutionError> {
+        let stream_id = StreamId::current();
+        self.handle
+            .submit_blocking(move |s| s.profile_start(stream_id))
+            .expect("Service call failed")
+    }
+
+    fn profile_end(
+        &self,
+        token: ProfileToken,
+        options: ProfileOptions,
+    ) -> Result<ProfileDuration, ExecutionError> {
+        // The stream is the service's to name, not this thread's: it is the
+        // one the window was opened on, which the service kept.
+        //
+        // Blocking only on the issue, so the close keeps its place among the
+        // tasks around it; the measurement is awaited through the duration.
+        Ok(self
+            .handle
+            .submit_blocking(move |s| s.profile_end(token, options))
+            .expect("Service call failed"))
+    }
+
+    /// Told to the server rather than closed: the close is a blocking round
+    /// trip whose measurement nobody is left to read, and an open window
+    /// costs the server's backend something until it hears.
+    fn profile_abandon(&self, token: ProfileToken) {
+        self.handle.submit(move |s| s.profile_abandon(token));
     }
 
     fn seed(&self, seed: u64) {
@@ -109,6 +139,10 @@ impl RouterClient for RemoteClient {
         bindings: cortex_ir::GraphBindings,
     ) {
         let stream_id = StreamId::current();
+        let relative_graph = relative_graph
+            .into_iter()
+            .map(|op| self.resolve_devices(op))
+            .collect();
         self.handle.submit(move |s| {
             s.register_and_execute_graph(stream_id, graph_id, relative_graph, bindings)
         });
@@ -125,12 +159,11 @@ impl RemoteClient {
     /// Rewrite the device ids carried by an op so the server can resolve them.
     ///
     /// This runs for every op, but only ops that carry device ids (currently the collective ops)
-    /// are affected On the client, the participating devices are identified by their *remote*
-    /// device ids (`type_id = 0`, `index_id = ` the local-registry index that encodes
-    /// `address`+device index). The server can't reverse that registry hash, so we translate each
-    /// id to the plain server-local device index (kept in `index_id`, `type_id` left 0). The
-    /// server then maps each index to its own backend device id before executing — see
-    /// `RemoteServer::resolve_devices`.
+    /// are affected. On the client, the participating devices are identified by their *remote*
+    /// device ids, whose `index_id` is this process's registry index for `address` + device index.
+    /// The server cannot resolve that index, so we translate each id to the device's position on
+    /// the server (in `index_id`, with `type_id` 0), which the server resolves to the backend id
+    /// of the device it hosts there.
     ///
     /// Only same-server collectives are supported for now: every participating device must live
     /// on the same address as the tensor's device. A cross-server group panics with a clear
@@ -141,18 +174,18 @@ impl RemoteClient {
         if let OperationIr::Distributed(DistributedOperationIr::AllReduce(desc)) = &mut op {
             let local_peer = self.device.peer_id();
             for id in desc.device_ids.iter_mut() {
-                let (endpoint, device_index) = service::endpoint_for(id.index_id as u32).expect(
+                let registered = service::registered_device(id.index_id as u32).expect(
                     "an all_reduce device must be a registered remote device on this process",
                 );
                 assert_eq!(
-                    endpoint.peer_id(),
+                    registered.endpoint.peer_id(),
                     local_peer,
                     "cross-peer all_reduce is not supported yet: the tensor is on `{local_peer}` \
                      but the collective includes a device on `{}`",
-                    endpoint.peer_id(),
+                    registered.endpoint.peer_id(),
                 );
                 id.type_id = 0;
-                id.index_id = device_index as u16;
+                id.index_id = registered.device_index as u16;
             }
             log::trace!("All-reduce on {:?} ({local_peer}): {desc:?}", self.device);
         }
@@ -176,15 +209,11 @@ pub struct RemoteDevice {
 }
 
 impl RemoteDevice {
-    /// Create a legacy WebSocket device from a URL.
-    #[cfg(feature = "websocket")]
-    pub fn websocket(address: &str, device_index: usize) -> Self {
-        let endpoint = RemoteEndpoint::WebSocket {
-            address: cortex_communication::Address::from(address),
-            authorization: Arc::from([]),
-        };
+    /// The device registered for `endpoint` and `device_index`, the same one each time, which may
+    /// have its session open already.
+    pub(crate) fn register(endpoint: RemoteEndpoint, device_index: usize) -> Self {
         let device_index = device_index as u32;
-        let id = service::register_endpoint(endpoint.clone(), Executor::capture(), device_index);
+        let id = service::register_endpoint(endpoint.clone(), device_index);
         Self {
             endpoint,
             device_index,
@@ -192,113 +221,50 @@ impl RemoteDevice {
         }
     }
 
-    /// Create an Iroh remote device dialing `peer` from `endpoint`.
-    ///
-    /// The application owns the Iroh endpoint; Cortex dials the compute peer from it.
-    #[cfg(feature = "iroh")]
-    pub fn iroh(endpoint: &iroh::Endpoint, peer: iroh::EndpointAddr, device_index: usize) -> Self {
-        Self::iroh_authorized(endpoint, peer, device_index, Vec::new())
+    /// A WebSocket device with no session opened yet, which connects on first use.
+    #[cfg(feature = "websocket")]
+    pub(crate) fn websocket(address: &str, device_index: usize) -> Self {
+        Self::register(
+            RemoteEndpoint::WebSocket {
+                address: cortex_communication::Address::from(address),
+                credential: crate::Credential::default(),
+            },
+            device_index,
+        )
     }
 
-    /// Like [`iroh`](Self::iroh), but carries an authorization credential the server's PeerAuthorizer will check.
-    #[cfg(feature = "iroh")]
-    pub fn iroh_authorized(
+    /// An Iroh device dialed from the application's `endpoint`, which connects on first use.
+    #[cfg(all(test, feature = "iroh", not(feature = "fusion")))]
+    pub(crate) fn iroh(
         endpoint: &iroh::Endpoint,
         peer: iroh::EndpointAddr,
         device_index: usize,
-        authorization: Vec<u8>,
     ) -> Self {
-        let node = crate::transport::iroh::node::RemoteNode::from_endpoint(endpoint.clone());
-        let endpoint = RemoteEndpoint::Iroh {
-            node,
-            peer,
-            authorization: authorization.into(),
-        };
-        let device_index = device_index as u32;
-        let id = service::register_endpoint(endpoint.clone(), Executor::capture(), device_index);
-        Self {
-            endpoint,
+        Self::register(
+            RemoteEndpoint::Iroh {
+                node: crate::transport::iroh::node::RemoteNode::for_endpoint(endpoint)
+                    .expect("one live endpoint per id"),
+                peer,
+                credential: crate::Credential::default(),
+                app_endpoint: Some(endpoint.id()),
+            },
             device_index,
-            id,
-        }
-    }
-
-    /// Forces the client connection to be established immediately using the default protocol.
-    /// This is a no-op if the connection is already up for this device.
-    pub fn connect(&self) {
-        // `get_client` initializes the (lazy) service if needed; `ensure_connected` then opens
-        // the sockets and runs the handshake on the runner thread, so the settings/device-count
-        // cells are populated by the time we return.
-        get_client::<RemoteChannel>(self).ensure_connected();
-    }
-
-    /// Establish the session asynchronously. Browser entry point: wasm cannot block to connect,
-    /// so call and await this once before using the device. No-op if already connected.
-    #[cfg(target_family = "wasm")]
-    pub async fn connect_async(&self) {
-        get_client::<RemoteChannel>(self).connect_async().await;
-    }
-
-    /// Initialize the client for this device using a custom protocol channel.
-    ///
-    /// Only creates the lazy service; the socket and handshake open on first use. Call
-    /// [`connect`](Self::connect) when the connection and device settings are needed immediately.
-    pub fn connect_with_channel<R: cortex_router::RouterChannel<Device = Self>>(&self) {
-        // `get_client` forces service initialization if the client doesn't exist yet;
-        // `RemoteService::init` records the endpoint but defers the connect to first use.
-        get_client::<R>(self);
+        )
     }
 
     /// The stable identity of the compute peer.
-    pub fn peer_id(&self) -> PeerId {
+    pub(crate) fn peer_id(&self) -> PeerId {
         self.endpoint.peer_id()
     }
 
     /// The peer identity plus its current dialing hints.
-    pub fn peer_addr(&self) -> PeerAddr {
+    pub(crate) fn peer_addr(&self) -> PeerAddr {
         self.endpoint.peer_addr()
-    }
-
-    /// The peer address as a string. Prefer `peer_addr` for typed access.
-    pub fn address(&self) -> String {
-        self.peer_addr().to_string()
     }
 
     /// The index of this device on its server.
     pub fn device_index(&self) -> usize {
         self.device_index as usize
-    }
-
-    /// List every device hosted by the WebSocket server at `address`.
-    ///
-    /// Connects to index 0 to read the device count from the init handshake, then returns one
-    /// RemoteDevice per index. Remaining indices connect lazily on first use, matching the
-    /// behavior of [`Device::enumerate`](cortex_backend::tensor::Device) for local backends.
-    #[cfg(feature = "websocket")]
-    pub fn enumerate_websocket(address: &str) -> Vec<Self> {
-        // Device 0 always exists (a server must host at least one device); connecting to it
-        // populates the device-count cell for its registry id.
-        let device = Self::websocket(address, 0);
-        device.connect();
-
-        let count = service::device_count_for(device.id)
-            .expect("Device count populated by the init handshake during connect");
-
-        (0..count as usize)
-            .map(|index| Self::websocket(address, index))
-            .collect()
-    }
-
-    /// List every device hosted by an Iroh peer.
-    #[cfg(feature = "iroh")]
-    pub fn enumerate_iroh(endpoint: &iroh::Endpoint, peer: iroh::EndpointAddr) -> Vec<Self> {
-        let device = Self::iroh(endpoint, peer.clone(), 0);
-        device.connect();
-        let count = service::device_count_for(device.id)
-            .expect("Device count populated by the init handshake during connect");
-        (0..count as usize)
-            .map(|index| Self::iroh(endpoint, peer.clone(), index))
-            .collect()
     }
 }
 
@@ -323,28 +289,31 @@ impl Default for RemoteDevice {
         }
         #[cfg(not(feature = "websocket"))]
         panic!(
-            "RemoteDevice::default requires the `websocket` compatibility feature; construct an Iroh device through RemoteNode::device"
+            "RemoteDevice::default needs the `websocket` feature; connect with \
+             `Device::remote_options` instead"
         )
     }
 }
 
 impl cortex_std::device::Device for RemoteDevice {
     fn from_id(device_id: DeviceId) -> Self {
-        if device_id.type_id != 0 {
-            panic!("Invalid device id: {device_id} (expected type 0)");
-        }
-        let (endpoint, device_index) = service::endpoint_for(device_id.index_id as u32)
+        assert_eq!(
+            device_id.type_id,
+            u16::from(RouterDeviceType::Remote),
+            "invalid remote device type"
+        );
+        let registered = service::registered_device(device_id.index_id as u32)
             .unwrap_or_else(|| panic!("Invalid device id: {device_id}"));
         Self {
-            endpoint,
-            device_index,
+            endpoint: registered.endpoint,
+            device_index: registered.device_index,
             id: device_id.index_id as u32,
         }
     }
 
     fn to_id(&self) -> DeviceId {
         DeviceId {
-            type_id: 0,
+            type_id: RouterDeviceType::Remote.into(),
             index_id: self.id as u16,
         }
     }
@@ -356,8 +325,13 @@ impl DeviceOps for RemoteDevice {
         // `Device::default()`-driven dispatch can hit `defaults` before the user has
         // triggered any op, so we need to establish the session here. `connect` is
         // idempotent — a no-op once the client has been initialized for this device.
-        if !service::has_settings(self.id) {
-            self.connect();
+        if !service::has_settings(self.id)
+            && let Err(err) = get_client::<RemoteChannel>(self).connect()
+        {
+            panic!(
+                "Failed to open a remote session at {}: {err}",
+                self.peer_addr()
+            );
         }
         service::settings_for(self.id)
     }
@@ -410,7 +384,7 @@ impl RemoteTensorHandle {
             assert_eq!(
                 self.client.device.peer_addr().is_iroh(),
                 target_device.peer_addr().is_iroh(),
-                "Moving a tensor between Iroh and legacy WebSocket compute peers is not supported"
+                "Moving a tensor between an Iroh server and a WebSocket server is not supported"
             );
             self.change_backend_remote(target_device)
         }

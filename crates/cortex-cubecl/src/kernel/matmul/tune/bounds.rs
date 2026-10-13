@@ -1,19 +1,17 @@
-use cortex_backend::cubecl::dtype_to_storage_type;
+use cortex_backend::cubecl::{autotune::with_roofline_bounds, dtype_to_storage_type};
 use cubecl::{std::throughput::roofline_bounds, tune::TunableSet};
 use cubek::matmul::{
     definition::{MatmulCost, MatmulGlobalElems},
-    strategy::MatmulAutotuneKey,
+    tune_key::MatmulAutotuneKey,
 };
 
-use crate::{CubeRuntime, kernel::autotune_bounds, kernel::matmul::tune::base::Inputs};
+use crate::kernel::matmul::tune::base::Inputs;
 
-type MatmulTunables<R, Out> = TunableSet<MatmulAutotuneKey, Inputs<R>, Out>;
+type MatmulTunables<Out> = TunableSet<MatmulAutotuneKey, Inputs, Out>;
 
 /// Registers the performance bounds used for matrix multiplication autotuning.
-pub(super) fn with_matmul_bounds<R: CubeRuntime, Out: 'static>(
-    set: MatmulTunables<R, Out>,
-) -> MatmulTunables<R, Out> {
-    autotune_bounds::with_bounds(set, |_key, tensors: &Inputs<R>, thresholds| {
+pub(super) fn with_matmul_bounds<Out: 'static>(set: MatmulTunables<Out>) -> MatmulTunables<Out> {
+    with_roofline_bounds(set, |_key, tensors: &Inputs, thresholds| {
         let client = &tensors.0.client;
         let cost = cost(tensors);
 
@@ -21,7 +19,7 @@ pub(super) fn with_matmul_bounds<R: CubeRuntime, Out: 'static>(
     })
 }
 
-fn cost<R: CubeRuntime>((lhs, rhs, out): &Inputs<R>) -> MatmulCost {
+fn cost((lhs, rhs, out): &Inputs) -> MatmulCost {
     let lhs_shape = lhs.meta.shape();
     let rhs_shape = rhs.meta.shape();
     let ndims = lhs_shape.len();

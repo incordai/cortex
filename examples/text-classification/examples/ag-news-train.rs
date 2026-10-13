@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 // Only the CUDA `launch_multi` path uses these at the top level; the remote module imports
 // them locally. Gating on both features avoids an unused-import warning for `remote,ddp`.
 #[cfg(all(feature = "ddp", feature = "cuda"))]
@@ -13,11 +11,13 @@ use cortex::{
 
 use text_classification::{AgNewsDataset, training::ExperimentConfig};
 
-#[cfg(not(any(feature = "f16", feature = "flex32")))]
+#[cfg(not(any(feature = "f16", feature = "bf16", feature = "flex32")))]
 #[allow(unused)]
 type ElemType = f32;
 #[cfg(feature = "f16")]
 type ElemType = cortex::tensor::f16;
+#[cfg(feature = "bf16")]
+type ElemType = cortex::tensor::bf16;
 #[cfg(feature = "flex32")]
 type ElemType = cortex::tensor::flex32;
 
@@ -65,6 +65,12 @@ pub fn launch(strategy: ExecutionStrategy) {
         AdamConfig::new().with_weight_decay(Some(WeightDecayConfig::new(5e-5))),
     );
 
+    // bf16 only has 8 bits of mantissa, so with the default schedule (peak lr ~3e-5) every Adam
+    // step is smaller than the weights' rounding step and is lost. Without f32 master weights,
+    // the updates have to be large enough to survive the rounding.
+    #[cfg(feature = "bf16")]
+    let config = config.with_lr_factor(0.4);
+
     text_classification::training::train::<AgNewsDataset>(
         strategy,
         AgNewsDataset::train(),
@@ -110,6 +116,7 @@ mod wgpu {
 mod remote {
     #[cfg(feature = "ddp")]
     use crate::ElemType;
+    use cortex::remote::RemoteHost;
     #[cfg(feature = "ddp")]
     use cortex::tensor::distributed::{DistributedConfig, ReduceOperation};
     use cortex::tensor::{Device, DeviceType};
@@ -128,14 +135,14 @@ mod remote {
     /// [`DeviceError::AlreadyInitialized`](cortex::tensor::DeviceError::AlreadyInitialized).
     #[cfg(not(feature = "ddp"))]
     pub fn run() {
-        let devices = Device::enumerate(DeviceType::remote_websocket(ADDRESS));
+        let devices = Device::enumerate(DeviceType::Remote(RemoteHost::websocket(ADDRESS)));
         crate::launch_single(devices.into_vec().pop().unwrap());
     }
 
     /// Same enumeration, but drive the devices with distributed data-parallel training.
     #[cfg(feature = "ddp")]
     pub fn run() {
-        let mut devices = Device::enumerate(DeviceType::remote_websocket(ADDRESS));
+        let mut devices = Device::enumerate(DeviceType::Remote(RemoteHost::websocket(ADDRESS)));
         devices
             .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
             .unwrap();

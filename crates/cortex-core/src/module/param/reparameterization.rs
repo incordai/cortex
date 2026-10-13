@@ -1,7 +1,7 @@
 use alloc::{string::String, string::ToString, vec::Vec};
 use cortex_tensor::Tensor;
 
-use crate::module::{AutodiffModule, ModuleMapper};
+use crate::module::{Module, ModuleMapper};
 
 use super::Param;
 
@@ -10,11 +10,11 @@ use super::Param;
 /// Implementations are regular [`Module`](crate::module::Module)s, so their parameters automatically participate in
 /// optimizer, record, device and autodiff traversal. The implementation only needs to describe
 /// how its state materializes an effective value from the stored base parameter.
-pub trait Reparameterization: AutodiffModule + Sync + 'static {
+pub trait Reparameterization: Module + Sync + 'static {
     /// Stable path component used for the reparameterization's nested parameters.
     const NAME: &'static str;
-    /// Materialize the effective parameter value from its stored base.
-    fn materialize<const D: usize>(&self, base: Tensor<D>) -> Tensor<D>;
+    /// Apply the transformation to the stored base, returning the effective parameter value.
+    fn apply<const D: usize>(&self, base: Tensor<D>) -> Tensor<D>;
 }
 
 /// Defines how floating-point parameters are prepared for reparameterization.
@@ -77,18 +77,23 @@ mod tests {
     use super::*;
     use crate as cortex;
     use crate::module::Reparameterizer;
-    use crate::{module::Module, test_device, test_utils::SimpleLinear};
+    use crate::{
+        module::{Flag, Module, ParamGroup},
+        test_device,
+        test_utils::SimpleLinear,
+    };
     use cortex_tensor::{Shape, Tolerance};
 
     #[derive(Debug, Module)]
     struct CustomScale {
         scale: Param<Tensor<1>>,
+        enabled: Param<Flag>,
     }
 
     impl Reparameterization for CustomScale {
         const NAME: &'static str = "custom_scale";
 
-        fn materialize<const D: usize>(&self, base: Tensor<D>) -> Tensor<D> {
+        fn apply<const D: usize>(&self, base: Tensor<D>) -> Tensor<D> {
             base * self.scale.val().reshape(Shape::from(alloc::vec![1; D]))
         }
     }
@@ -111,6 +116,7 @@ mod tests {
                 param,
                 Some(CustomScale {
                     scale: Param::from_tensor(scale),
+                    enabled: Param::from_bool(true),
                 }),
             )
         }
@@ -132,6 +138,16 @@ mod tests {
             .assert_approx_eq::<f32>(&model.weight.base().into_data(), Tolerance::default());
         assert_eq!(model.num_params(), 24 + 6 + 1);
 
+        let group = ParamGroup::ids_from_module(model.clone());
+        assert!(group.matches(&custom.enabled.id, None));
+
+        let frozen = model.clone().freeze();
+        let frozen_custom = frozen
+            .weight
+            .reparameterization::<CustomScale>()
+            .expect("custom reparameterization should remain attached");
+        assert!(!frozen_custom.enabled.is_enabled());
+
         let grads = model.weight.val().sum().backward();
         assert!(model.weight.base().grad(&grads).is_some());
         assert!(custom.scale.val().grad(&grads).is_some());
@@ -145,6 +161,31 @@ mod tests {
             .assert_approx_eq::<f32>(&model.weight.val().into_data(), Tolerance::default());
 
         let inference = model.valid();
-        assert!(inference.weight.reparameterization_dyn().is_none());
+        let inference_custom = inference
+            .weight
+            .reparameterization::<CustomScale>()
+            .unwrap();
+        assert_eq!(inference.weight.id, model.weight.id);
+        assert_eq!(inference_custom.scale.id, custom.scale.id);
+        assert!(!inference.weight.base().is_autodiff());
+        assert!(!inference_custom.scale.val().is_autodiff());
+        assert!(!inference_custom.enabled.is_enabled());
+        assert_eq!(inference.num_params(), model.num_params());
+
+        let restored = inference.train();
+        let restored_custom = restored.weight.reparameterization::<CustomScale>().unwrap();
+        assert!(restored_custom.enabled.is_enabled());
+        let grads = restored.weight.val().sum().backward();
+        assert!(restored.weight.base().grad(&grads).is_some());
+        assert!(restored_custom.scale.val().grad(&grads).is_some());
+
+        let merged = model.valid().materialize();
+        assert!(merged.weight.reparameterization_dyn().is_none());
+        assert_eq!(merged.num_params(), 24 + 6);
+        merged
+            .weight
+            .val()
+            .into_data()
+            .assert_approx_eq::<f32>(&model.weight.val().into_data(), Tolerance::default());
     }
 }

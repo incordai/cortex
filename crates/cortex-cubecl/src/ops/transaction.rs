@@ -6,9 +6,9 @@ use cortex_backend::{
 use cortex_std::{Shape, Strides};
 use cubecl::server::{CopyDescriptor, Handle};
 
-use crate::{CubeBackend, CubeRuntime};
+use crate::CubeBackend;
 
-impl<R: CubeRuntime> TransactionOps<Self> for CubeBackend<R> {
+impl TransactionOps<Self> for CubeBackend {
     async fn tr_execute(
         transaction: TransactionPrimitive<Self>,
     ) -> Result<TransactionPrimitiveData, ExecutionError> {
@@ -106,9 +106,7 @@ impl<R: CubeRuntime> TransactionOps<Self> for CubeBackend<R> {
         let mut data: Vec<Option<_>> = client
             .read_tensor_async(bindings)
             .await
-            .map_err(|err| ExecutionError::WithContext {
-                reason: format!("{err:?}"),
-            })?
+            .map_err(crate::backend::server_err)?
             .into_iter()
             .map(Some)
             .collect::<Vec<Option<_>>>();
