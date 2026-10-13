@@ -1890,6 +1890,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-llm"
+version = "0.22.0"
+dependencies = [
+ "blake3",
+ "bytes",
+ "cortex-core",
+ "cortex-cubecl",
+ "cortex-fusion",
+ "cortex-router",
+ "cortex-std",
+ "cubecl",
+ "half",
+ "memmap2",
+ "num-traits",
+ "rand 0.10.3",
+ "safetensors 0.8.0",
+ "serde_json",
+]
+
+[[package]]
 name = "cortex-ndarray"
 version = "0.22.0"
 dependencies = [
@@ -2022,6 +2042,23 @@ dependencies = [
  "portable-atomic",
  "serde",
  "spin 0.12.3",
+]
+
+[[package]]
+name = "cortex-serve"
+version = "0.22.0"
+dependencies = [
+ "axum",
+ "cortex-core",
+ "cortex-llm",
+ "futures",
+ "minijinja",
+ "minijinja-contrib",
+ "safetensors 0.8.0",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "tokio",
 ]
 
 [[package]]
@@ -2531,8 +2568,6 @@ dependencies = [
 [[package]]
 name = "cubecl-environment"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b70895e79bd37e08e1430a7e97e2cd2a6e646114e1280b0c600112d5ace19ce"
 dependencies = [
  "async-channel",
  "backtrace",
@@ -6228,6 +6263,24 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minijinja"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13345868cfa94eadafc067112ff29271380a820d5594d9ee6ba81a8d00ea5dc2"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "minijinja-contrib"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd9a0180a822fa9c843c36c442dbc9ca4b0d3eca5e501a6fac6a9cc1ed230a49"
+dependencies = [
+ "minijinja",
+]
 
 [[package]]
 name = "minimal-lexical"

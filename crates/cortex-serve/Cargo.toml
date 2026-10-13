@@ -1,0 +1,42 @@
+[package]
+categories = ["science", "web-programming::http-server"]
+description = "OpenAI-, Anthropic- and Ollama-compatible HTTP serving for cortex-llm models"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "llm", "inference", "server"]
+license.workspace = true
+name = "cortex-serve"
+readme = "README.md"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+flex = ["cortex-llm/flex"]
+wgpu = ["cortex-llm/wgpu"]
+vulkan = ["cortex-llm/vulkan"]
+metal = ["cortex-llm/metal"]
+cuda = ["cortex-llm/cuda"]
+rocm = ["cortex-llm/rocm"]
+
+[dependencies]
+axum = { workspace = true }
+cortex-core = { workspace = true, features = ["std"] }
+cortex-llm = { path = "../cortex-llm", version = "0.22.0" }
+futures = { workspace = true }
+# Chat templates shipped with checkpoints (`hf.rs`): Jinja, plus the Python
+# string methods those templates call.
+minijinja = { version = "3.0.0", features = ["json", "serde", "loop_controls"] }
+minijinja-contrib = { version = "3.0.0", features = ["pycompat"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "net", "macros", "time"] }
+# Checkpoint tokenizers (`tokenizer.json`, `hf.rs`); no network features.
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
+
+[dev-dependencies]
+cortex-llm = { path = "../cortex-llm", version = "0.22.0", features = ["flex"] }
+# Writes the small random Llama checkpoint the serving tests load.
+safetensors = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["io-util"] }
