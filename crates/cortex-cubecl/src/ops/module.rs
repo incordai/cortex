@@ -7,7 +7,8 @@ use cortex_backend::{
     TensorMetadata,
     ops::{
         AttentionModuleOptions, ConvOptions, ConvTransposeOptions, DeformConv2dBackward,
-        DeformConvOptions, InterpolateOptions, MaxPool2dBackward, MaxPool2dWithIndices, ModuleOps,
+        DeformConvOptions, FloatTensorOps, InterpolateOptions, MaxPool2dBackward,
+        MaxPool2dWithIndices, ModuleOps,
     },
 };
 use cortex_std::IntDType;
@@ -329,11 +330,25 @@ impl ModuleOps<Self> for CubeBackend {
         options: AttentionModuleOptions,
     ) -> FloatTensor<Self> {
         // Fall back to naive attention for features the flash kernel doesn't support.
-        if attn_bias.is_some() || options.softcap.is_some() || options.scale.is_some() {
+        if attn_bias.is_some() || options.softcap.is_some() {
             return cortex_backend::ops::attention::attention_fallback::<Self>(
                 query, key, value, mask, attn_bias, options,
             );
         }
+
+        // The flash kernels scale scores by `1/sqrt(head_dim)` with no override
+        // (cubek-attention `stage/partition_attention.rs`). A custom scale is
+        // folded into the query instead: `(q * scale * sqrt(d)) · k / sqrt(d)`
+        // is exactly `scale * q · k`, so the call stays on the flash path.
+        let (query, options) = match options.scale {
+            Some(scale) => {
+                let head_dim = *query.shape().last().expect("query has a head dimension");
+                let factor = scale * (head_dim as f64).sqrt();
+                let query = <Self as FloatTensorOps<Self>>::float_mul_scalar(query, factor.into());
+                (query, AttentionModuleOptions { scale: None, ..options })
+            }
+            None => (query, options),
+        };
 
         kernel::attention::attention(
             query,
