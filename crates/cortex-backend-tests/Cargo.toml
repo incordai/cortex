@@ -4,7 +4,7 @@ categories = ["science", "no-std", "embedded", "wasm"]
 description = "Tensor tests for Cortex backends"
 documentation = "https://docs.rs/burn-backend-tests"
 edition.workspace = true
-keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch"]
 license.workspace = true
 name = "cortex-backend-tests"
 readme = "README.md"
@@ -14,14 +14,9 @@ version.workspace = true
 [lints]
 workspace = true
 
-[lib]
-proc-macro = true
-
 [features]
 default = [
     "cortex-tensor/default",
-    # Default
-    # "ndarray",
     "std",
 ]
 std = ["cortex-tensor/std"]
@@ -32,17 +27,17 @@ rocm = ["cortex-tensor/rocm", "quantization", "cube"]
 flex = ["cortex-tensor/flex", "quantization"]
 flex-simd = ["flex", "cortex-flex/simd"]
 flex-rayon = ["flex", "cortex-flex/rayon"]
-ndarray = ["cortex-tensor/ndarray", "quantization"]
-tch = ["cortex-tensor/tch"]
 vulkan = ["wgpu", "cortex-tensor/vulkan"]
 webgpu = ["wgpu", "cortex-tensor/webgpu"]
-metal = ["wgpu", "cortex-tensor/metal"]
+wgpu-msl = ["wgpu", "cortex-tensor/wgpu-msl"]
+metal = ["cortex-tensor/metal", "cube"]
 wgpu = ["cortex-tensor/wgpu", "quantization", "cube"]
 cpu = ["cortex-tensor/cpu", "cube"]
 # Runs the test suite against a remote `cortex-remote` server.
 # At runtime, set `CORTEX_DEVICE=remote` (and optionally `CORTEX_REMOTE_ADDRESS=ws://host:port`).
 remote = ["cortex-tensor/remote-websocket"]
 
+persistence = ["cortex-tensor/persistence"]
 autotune = ["cortex-tensor/autotune"]
 autotune-checks = ["cortex-tensor/autotune-checks"]
 memory-checks = ["cortex-fusion?/memory-checks"]
@@ -56,32 +51,31 @@ fusion = [
 cube = [
     "cubek",
     "autotune",
-    "cortex-tensor/ndarray",
-    "cortex-ndarray",
+    "cortex-tensor/flex",
     # Direct dependency so fusion tests can assert launch-level decisions (in-place aliasing).
     "cortex-cubecl-fusion",
 ]
 
 # Test configs
 quantization = []
+capture = ["cortex-tensor/capture"]
 # Enables the collective (all-reduce) tests, which require a CUDA backend built with NCCL.
 # Kept separate from `cuda` so the rest of the suite can run on CUDA without NCCL.
 distributed = ["cuda"]
 
 [dependencies]
-cortex-tensor = { workspace = true, features = ["autodiff"] }
+cortex-tensor = { workspace = true, features = ["autodiff", "capture", "extension"] }
 cortex-backend = { workspace = true }
+cortex-dispatch = { workspace = true }
 
 # For random tests
 cubek = { workspace = true, features = ["random"], optional = true }
 
 # Explicitly enable test-only checks
 cortex-autodiff = { workspace = true, features = ["export_tests"] }
-cortex-ndarray = { workspace = true, optional = true, features = [
-    "export_tests",
-] }
 
 cortex-cubecl-fusion = { workspace = true, optional = true }
+cortex-cubecl = { workspace = true, optional = true }
 
 # Enabled alongside the `fusion` feature so spy-based tests can import the spy API.
 cortex-fusion = { workspace = true, optional = true }
@@ -93,12 +87,6 @@ num-traits = { workspace = true }
 serial_test = { workspace = true }
 rand.workspace = true
 
-# might-panic macro
-proc-macro2 = { workspace = true }
-quote = { workspace = true }
-syn = { workspace = true }
-
-
 [dev-dependencies]
 # Used to initialize device settings (test dtypes)
 ctor = "1.0.13"
@@ -106,7 +94,11 @@ divan = "0.1"
 
 [[test]]
 name = "autodiff_transfer"
-required-features = ["flex", "ndarray"]
+required-features = ["flex", "cpu"]
+
+[[test]]
+name = "bool_transfer"
+required-features = ["cpu", "wgpu"]
 
 [[bench]]
 name = "attention"

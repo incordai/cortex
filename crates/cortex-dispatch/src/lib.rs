@@ -16,15 +16,6 @@
         unreachable_code
     )
 )]
-// Wiring up the deprecated `NdArray` and `LibTorch` backends is this crate's job, and the backend
-// registry macros expand them into every dispatch impl, so the warnings land on `macros.rs` rather
-// than on any site we could annotate individually. `allow(deprecated)` is a lint level scoped to
-// this crate, and lint levels never propagate to dependents, so downstream code naming `NdArray` or
-// `LibTorch` (directly or via our re-export) still gets the warning. The `cfg_attr` keeps this
-// confined to the builds that enable them: neither `ndarray` nor `tch` is a default feature, so the
-// default build that CI lints with `--deny warnings` retains full deprecation signal for every
-// other dependency.
-#![cfg_attr(any(feature = "ndarray", feature = "tch"), allow(deprecated))]
 
 //! Cortex multi-backend dispatch.
 //!
@@ -36,10 +27,9 @@
 //! |------------|------------|-------------|
 //! | `Cube`     | `cpu`, `cuda`, `metal`, `rocm`, `vulkan`, `webgpu`, `wgpu` | Every cubecl runtime. One backend: the features decide which runtimes are compiled in, and a tensor's device says which one it runs on |
 //! | `Flex`     | `flex`     | Pure Rust CPU backend using `cortex-flex` |
-//! | `NdArray`  | `ndarray`  | Pure Rust CPU backend using `ndarray` (deprecated - use `flex`) |
-//! | `LibTorch` | `tch`      | Libtorch backend via `tch` (deprecated - use a CubeCL backend) |
 //! | `Remote`   | `remote`   | Devices hosted by another process or machine, through `cortex-remote` |
 //! | `Capture`  | `capture`  | Records operation graphs instead of executing them, through `cortex-capture` |
+//! | `ShardedCompute` | `shard` | Experimental: tensors split over several Cube or Flex devices, through `cortex-shard` |
 //! | `Autodiff` | `autodiff` | Autodiff-enabled backend (used in combination with any of the backends above) |
 //!
 //! **Note:** The features can be combined freely. The cubecl-backed ones all
@@ -55,6 +45,8 @@ pub mod backend;
 /// Dispatch device module.
 pub mod device;
 mod ops;
+#[cfg(feature = "shard")]
+mod shard;
 /// Dispatch tensor module.
 pub mod tensor;
 
@@ -103,28 +95,35 @@ pub mod backends {
     pub use cortex_flex as flex;
     #[cfg(feature = "flex")]
     pub use cortex_flex::Flex;
-    #[cfg(feature = "ndarray")]
-    pub use cortex_ndarray as ndarray;
-    #[cfg(feature = "ndarray")]
-    pub use cortex_ndarray::NdArray;
-    #[cfg(feature = "tch")]
-    pub use cortex_tch as libtorch;
-    #[cfg(feature = "tch")]
-    pub use cortex_tch::LibTorch;
 
     #[cfg(feature = "remote")]
     pub use cortex_remote::RemoteBackend as Remote;
+    /// What `#[backend_extension]` builds the client of the remote backend and of sharded compute
+    /// devices on.
+    #[cfg(any(feature = "remote", feature = "shard"))]
+    #[doc(hidden)]
+    pub mod router_extension {
+        pub use cortex_router::{
+            BackendRouter, CustomOpRegistry, HandlerSource, RouterChannel, RouterClient,
+            RouterTensor,
+        };
+    }
 
     /// Public graph-capture API types.
     #[cfg(feature = "capture")]
     pub mod capture {
         pub use cortex_capture::{
-            CaptureBackend, CaptureError, CaptureScope, CapturedGraph, CompletedCaptureScope,
-            TensorId,
+            CaptureBackend, CaptureError, CaptureScope, CaptureTensor, CapturedGraph,
+            CompletedCaptureScope, IntoCaptureOutputs, TensorId,
         };
     }
     #[cfg(feature = "capture")]
     pub use cortex_capture::CaptureBackend as Capture;
+
+    #[cfg(feature = "shard")]
+    pub use cortex_shard::ShardBackend as ShardedCompute;
+    #[cfg(feature = "shard")]
+    pub use cortex_shard::{ShardError, Sharding, ShardingError, Shards, ShardsError};
 }
 
 // Re-export devices
@@ -148,6 +147,8 @@ pub mod devices {
     pub use cortex_cubecl::cubecl::cuda::CudaDevice;
     #[cfg(feature = "rocm")]
     pub use cortex_cubecl::cubecl::hip::AmdDevice as RocmDevice;
+    #[cfg(feature = "metal")]
+    pub use cortex_cubecl::cubecl::metal::MetalDevice;
     #[cfg(feature = "wgpu")]
     pub use cortex_cubecl::cubecl::wgpu::{
         AutoCompiler, AutoGraphicsApi, WgpuBackend, WgpuDevice, WgpuDeviceKind, init_setup_async,
@@ -162,14 +163,18 @@ pub mod devices {
     pub use cortex_cubecl::cubecl::RuntimeId;
     #[cfg(feature = "flex")]
     pub use cortex_flex::FlexDevice;
-    #[cfg(feature = "ndarray")]
-    pub use cortex_ndarray::NdArrayDevice;
-    #[cfg(feature = "tch")]
-    pub use cortex_tch::LibTorchDevice;
 
     #[cfg(feature = "remote")]
     pub use cortex_remote::RemoteDevice;
+
+    #[cfg(feature = "shard")]
+    pub use cortex_shard::ShardedComputeDevice;
 }
+
+/// The sharded compute device's crate, for `cortex::tensor::shard` to build on. Not a user path.
+#[doc(hidden)]
+#[cfg(feature = "shard")]
+pub use cortex_shard as __shard;
 
 /// The remote backend's crate, for `cortex::remote` and `cortex::server` to build on. Not a user path.
 #[doc(hidden)]

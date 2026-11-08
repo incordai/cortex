@@ -6,23 +6,25 @@ fn main() {
     let cuda = cfg!(feature = "cuda");
     let flex = cfg!(feature = "flex");
     let rocm = cfg!(feature = "rocm");
-    let ndarray = cfg!(feature = "ndarray");
-    let tch = cfg!(feature = "tch");
     let cpu = cfg!(feature = "cpu");
     let metal = cfg!(feature = "metal");
+    let wgpu_msl = cfg!(feature = "wgpu-msl");
     let vulkan = cfg!(feature = "vulkan");
     let webgpu = cfg!(feature = "webgpu");
     let wgpu = cfg!(feature = "wgpu");
 
     let remote = cfg!(feature = "remote");
     let capture = cfg!(feature = "capture");
+    // A sharded compute device's members run Cube or Flex, so it executes nothing of its own, but it still puts a
+    // variant in the dispatch enums.
+    let shard = cfg!(feature = "shard");
 
-    let cube = cuda || rocm || cpu || metal || vulkan || webgpu || wgpu;
-    let local = cube || flex || ndarray || tch;
+    let cube = cuda || rocm || cpu || metal || wgpu_msl || vulkan || webgpu || wgpu;
+    let local = cube || flex;
     let executing = local || remote;
 
     // Backend-free builds expose tensor/model APIs without installing an execution backend.
-    if executing || capture {
+    if executing || capture || shard {
         println!("cargo::rustc-cfg=backend_enabled");
     }
 

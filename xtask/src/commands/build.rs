@@ -61,7 +61,7 @@ pub(crate) fn handle_command(
                     // Dispatch and the explicit Flex integration tests enable `critical-section`
                     // on targets without pointer atomics,
                     // which is mutually exclusive with `portable_atomic_unsafe_assume_single_core` cfg.
-                    crates = vec!["cortex-std", "cortex-backend", "cortex-ndarray"];
+                    crates = vec!["cortex-std", "cortex-backend"];
                     env_vars.insert(
                         "RUSTFLAGS",
                         "--cfg portable_atomic_unsafe_assume_single_core",
@@ -88,7 +88,6 @@ pub(crate) fn handle_command(
                     crates.retain(|&v| {
                         v != "cortex-autodiff"
                             && v != "cortex-std"
-                            && v != "cortex-ndarray"
                             && v != "cortex-backend"
                             && v != "cortex-capture"
                     });
@@ -109,11 +108,8 @@ pub(crate) fn handle_command(
         Context::Std => {
             if args.ci {
                 // Exclude crates that are not supported on CI
-                args.exclude.extend(vec![
-                    "cortex-cuda".to_string(),
-                    "cortex-rocm".to_string(),
-                    "cortex-tch".to_string(),
-                ]);
+                args.exclude
+                    .extend(vec!["cortex-cuda".to_string(), "cortex-rocm".to_string()]);
                 if std::env::var("DISABLE_WGPU").is_ok() {
                     args.exclude.extend(vec!["cortex-wgpu".to_string()]);
                 };

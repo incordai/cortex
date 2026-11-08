@@ -4,7 +4,7 @@ categories = ["science", "no-std", "embedded", "wasm"]
 description = "Tensor library with user-friendly APIs and automatic differentiation support"
 documentation = "https://docs.rs/burn-tensor"
 edition.workspace = true
-keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch"]
 license.workspace = true
 name = "cortex-tensor"
 readme = "README.md"
@@ -16,7 +16,18 @@ workspace = true
 
 [features]
 default = ["std", "cortex-dispatch/default"]
-doc = ["default", "flex"]
+doc = [
+    "default",
+    "flex",
+    "wgpu",
+    "wgpu-msl",
+    "vulkan",
+    "webgpu",
+    "cuda",
+    "rocm",
+    "cpu",
+    "dep:branches",
+]
 std = [
     "num-traits/std",
     "cortex-std/std",
@@ -30,6 +41,7 @@ cubecl = ["cortex-backend/cubecl", "cortex-dispatch/cubecl"]
 cubecl-cuda = ["cortex-backend/cubecl-cuda"]
 cubecl-hip = ["cortex-backend/cubecl-hip"]
 cubecl-wgpu = ["cortex-backend/cubecl-wgpu"]
+cubecl-wgpu-msl = ["cortex-backend/cubecl-wgpu-msl"]
 cubecl-metal = ["cortex-backend/cubecl-metal"]
 cubecl-vulkan = ["cortex-backend/cubecl-vulkan"]
 cubecl-webgpu = ["cortex-backend/cubecl-webgpu"]
@@ -39,12 +51,11 @@ cubecl-cpu = ["cortex-backend/cubecl-cpu"]
 cuda = ["cortex-dispatch/cuda", "cubecl-cuda", "cubecl"]
 rocm = ["cortex-dispatch/rocm", "cubecl-hip", "cubecl"]
 flex = ["cortex-dispatch/flex"]
-ndarray = ["cortex-dispatch/ndarray"]
-tch = ["cortex-dispatch/tch"]
 wgpu = ["cortex-dispatch/wgpu", "cubecl-wgpu", "cubecl"]
 vulkan = ["wgpu", "cortex-dispatch/vulkan", "cubecl-vulkan"]
 webgpu = ["wgpu", "cortex-dispatch/webgpu", "cubecl-webgpu"]
-metal = ["wgpu", "cortex-dispatch/metal", "cubecl-metal"]
+wgpu-msl = ["wgpu", "cortex-dispatch/wgpu-msl", "cubecl-wgpu-msl"]
+metal = ["cortex-dispatch/metal", "cubecl-metal", "cubecl"]
 cpu = ["cortex-dispatch/cpu", "cubecl-cpu", "cubecl"]
 autodiff = ["cortex-dispatch/autodiff"]
 # Remote compute client over Iroh.
@@ -53,12 +64,15 @@ remote = ["std", "cortex-dispatch/remote"]
 remote-server = ["remote", "cortex-dispatch/remote-server"]
 # Add the WebSocket transport, for clients and servers.
 remote-websocket = ["remote", "cortex-dispatch/remote-websocket"]
-capture = ["cortex-dispatch/capture"]
+capture = ["cortex-dispatch/capture", "dep:cortex-capture"]
+# Experimental: tensors split over a group of devices.
+shard = ["cortex-dispatch/shard"]
 
 # For backend extensions
 extension = []
 
 # Backend features
+persistence = ["cortex-dispatch/persistence"]
 autotune = ["cortex-dispatch/autotune"]
 autotune-checks = ["cortex-dispatch/autotune-checks"]
 fusion = ["cortex-dispatch/fusion"]
@@ -66,18 +80,16 @@ simd = ["cortex-dispatch/simd"]
 rayon = ["cortex-dispatch/rayon"]
 x86-v4 = ["cortex-dispatch/x86-v4"]
 apple-amx = ["cortex-dispatch/apple-amx"]
-accelerate = ["cortex-dispatch/accelerate"]
-blas-netlib = ["cortex-dispatch/blas-netlib"]
-openblas = ["cortex-dispatch/openblas"]
-openblas-system = ["cortex-dispatch/openblas-system"]
 template = ["cortex-dispatch/template"]
 
 [dependencies]
+branches = { workspace = true, optional = true }
 cortex-std = { workspace = true }
 cortex-backend = { workspace = true }
 cortex-dispatch = { workspace = true }
 cortex-derive = { workspace = true }
 cortex-einsum = { workspace = true }
+cortex-capture = { workspace = true, optional = true }
 
 colored = { workspace = true, optional = true }
 derive-new = { workspace = true }

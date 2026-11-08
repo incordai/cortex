@@ -4,7 +4,7 @@ categories = ["science", "no-std", "embedded", "wasm"]
 description = "Neural network building blocks for the Cortex deep learning framework"
 documentation = "https://docs.rs/burn-nn"
 edition.workspace = true
-keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch"]
 license.workspace = true
 name = "cortex-nn"
 readme = "README.md"
@@ -20,21 +20,27 @@ doc = [
     "std",
     # Doc features
     "cortex-core/doc",
+    "linalg",
 ]
-std = ["cortex-core/std", "cortex-linalg/std", "num-traits/std"]
+std = ["cortex-core/std", "cortex-linalg?/std", "num-traits/std"]
 
-tracing = ["cortex-core/tracing", "cortex-linalg/tracing"]
+tracing = ["cortex-core/tracing", "cortex-linalg?/tracing"]
+
+# Orthogonal initialization, cosine similarity and pairwise distance modules, and cosine embedding
+# and triplet margin losses.
+linalg = ["dep:cortex-linalg"]
 
 [dependencies]
 
 # ** Please make sure all dependencies support no_std when std is disabled **
 cortex-core = { workspace = true }
-cortex-linalg = { workspace = true }
+cortex-linalg = { workspace = true, optional = true }
 
 num-traits = { workspace = true }
 
 [dev-dependencies]
-cortex-core = { workspace = true, features = ["autodiff"] }
+# `instrument`, for the tests that read what a layer declares.
+cortex-core = { workspace = true, features = ["autodiff", "instrument"] }
 rstest = { workspace = true }
 
 [package.metadata.docs.rs]

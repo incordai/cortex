@@ -1,5 +1,4 @@
 use super::qtensor::*;
-use super::*;
 use cortex_tensor::TensorData;
 
 #[test]

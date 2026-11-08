@@ -12,8 +12,6 @@ workspace = true
 [features]
 default = ["cortex/dataset", "cortex/sqlite"]
 flex = ["cortex/flex"]
-tch-cpu = ["cortex/tch"]
-tch-gpu = ["cortex/tch"]
 wgpu = ["cortex/wgpu"]
 remote = ["cortex/remote-websocket"]
 

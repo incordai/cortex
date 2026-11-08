@@ -29,6 +29,7 @@ fake = ["dep:fake"]
 network = ["dep:cortex-std"]
 sqlite = [
     "dep:turso",
+    "dep:branches",
     "dep:futures-lite",
     "dep:r2d2",
     "dep:image",
@@ -43,6 +44,7 @@ nlp = ["dep:globwalk", "dep:encoding_rs"]
 dataframe = ["dep:polars-core", "dep:planus"]
 
 [dependencies]
+branches = { workspace = true, optional = true }
 cortex-std = { workspace = true, optional = true, features = [
     "default",
     "network",

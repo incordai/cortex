@@ -29,7 +29,10 @@ impl std::convert::TryInto<CompileCmdArgs> for CortexTestCmdArgs {
 pub enum CiTestType {
     // Github runner shards
     Backends,
+    /// Workspace defaults and graph capture.
     Crates,
+    /// Dataset, remote, vision, and training feature configurations.
+    CratesFeatures,
     Examples,
     // Other runners
     GithubRunner,
@@ -54,8 +57,6 @@ pub(crate) enum TestBackend {
     Rocm,
     #[strum(to_string = "flex")]
     Flex,
-    #[strum(to_string = "ndarray")]
-    Ndarray,
 }
 
 fn set_cortex_device(device: &str) {
@@ -80,18 +81,14 @@ pub(crate) fn handle_backend_tests(
 
     let linalg_backend = format!("cortex-linalg/{backend_name}");
     let signal_backend = format!("cortex-signal/{backend_name}");
-    let mut extension_packages = vec!["cortex-linalg"];
+    let extension_packages = vec!["cortex-linalg", "cortex-signal"];
     let mut extension_features = vec![linalg_backend.as_str()];
     if !matches!(context, Context::NoStd) {
         extension_features.extend(["cortex-linalg/std", "cortex-linalg/autotune"]);
     }
-    // Signal has no NdArray implementation; keep its suite on supported backends.
-    if !matches!(backend, TestBackend::Ndarray) {
-        extension_packages.push("cortex-signal");
-        extension_features.extend([signal_backend.as_str(), "cortex-signal/autodiff"]);
-        if !matches!(context, Context::NoStd) {
-            extension_features.extend(["cortex-signal/std", "cortex-signal/autotune"]);
-        }
+    extension_features.extend([signal_backend.as_str(), "cortex-signal/autodiff"]);
+    if !matches!(context, Context::NoStd) {
+        extension_features.extend(["cortex-signal/std", "cortex-signal/autotune"]);
     }
 
     // TODO: Re-enable collective (all-reduce) tests once NCCL is installed and loadable on
@@ -102,7 +99,7 @@ pub(crate) fn handle_backend_tests(
     //     test_args.extend(["--features", "distributed"]);
     // }
 
-    if !matches!(backend, TestBackend::Ndarray | TestBackend::Flex) {
+    if !matches!(backend, TestBackend::Flex) {
         // Fusion enabled tests first
         let mut fusion_args = test_args.clone();
         fusion_args.extend(["--features", "fusion"]);
@@ -125,8 +122,48 @@ pub(crate) fn handle_backend_tests(
         )?;
     }
 
-    let group_cpu_tests = matches!(backend, TestBackend::Ndarray | TestBackend::Flex)
-        && matches!(context, Context::Std);
+    if matches!(backend, TestBackend::Wgpu) && matches!(context, Context::Std) {
+        for (features, remote_features) in [
+            ("std,cpu,wgpu,fusion", "client,server,websocket,fusion"),
+            ("std,cpu,wgpu", "client,server,websocket"),
+        ] {
+            build_helpers::custom_crates_tests(
+                vec!["cortex-backend-tests"],
+                handle_test_args(
+                    &[
+                        "--no-default-features",
+                        "--features",
+                        features,
+                        "--test",
+                        "bool_transfer",
+                    ],
+                    args.release,
+                ),
+                None,
+                None,
+                "CPU/WGSL bool transfer tests",
+            )?;
+            build_helpers::custom_crates_tests(
+                vec!["cortex-remote"],
+                handle_test_args(
+                    &[
+                        "--no-default-features",
+                        "--features",
+                        remote_features,
+                        "--test",
+                        "websocket",
+                        "bool_transfer::",
+                    ],
+                    args.release,
+                ),
+                None,
+                None,
+                "remote bool transfer tests",
+            )?;
+        }
+    }
+
+    let group_cpu_tests = matches!(backend, TestBackend::Flex) && matches!(context, Context::Std);
     if group_cpu_tests {
         // Keep each backend separate, and leave SIMD/threading defaults to the
         // standalone backend crate tests. The extension suites request autotuning.
@@ -151,28 +188,59 @@ pub(crate) fn handle_backend_tests(
         )?;
     }
 
-    if matches!(backend, TestBackend::Flex) {
-        // These targets each need a second backend. Keep them out of the main suite, where
-        // ndarray disables some Flex-specific tests.
-        let mut transfer_args = test_args.clone();
-        transfer_args.extend(["--features", "ndarray", "--test", "autodiff_transfer"]);
-        build_helpers::custom_crates_tests(
-            vec!["cortex-backend-tests"],
-            handle_test_args(&transfer_args, args.release),
+    if matches!(backend, TestBackend::Flex) && matches!(context, Context::Std) {
+        // These targets need two concrete backends. Keep CPU runtime dependencies out of
+        // the portable/no-std suites and run the shared suites with only Flex selected.
+        let features = [
+            "cortex-backend-tests/flex,cortex-backend-tests/cpu,cortex-backend-tests/std",
+            "cortex-core/flex,cortex-core/cpu,cortex-core/std",
+            "cortex-dispatch/flex,cortex-dispatch/cpu,cortex-dispatch/std,cortex-dispatch/autodiff",
+            "cortex/flex,cortex/cpu,cortex/std,cortex/autodiff,cortex/extension,cortex/optim",
+        ]
+        .join(",");
+        // Dispatch unit tests and transfer integration targets share the same CPU stack.
+        // Keep defaults disabled so the transfer tests do not enable fusion.
+        group!("Tests: Flex/CPU transfer integration tests");
+        let result = run_process(
+            "cargo",
+            &handle_test_args(
+                &[
+                    "test",
+                    "--color",
+                    "always",
+                    "--no-default-features",
+                    "-p",
+                    "cortex-backend-tests",
+                    "-p",
+                    "cortex-dispatch",
+                    "-p",
+                    "cortex-core",
+                    "-p",
+                    "cortex",
+                    "--features",
+                    &features,
+                    "--lib",
+                    "--test",
+                    "autodiff_transfer",
+                    "--test",
+                    "lazy_param_device",
+                    "--test",
+                    "layer_placement",
+                    "--test",
+                    "backend_extension_runtime",
+                    "--test",
+                    "autodiff_signal",
+                    "--test",
+                    "training_pipeline",
+                ],
+                args.release,
+            ),
             None,
             None,
-            "autodiff backend transfer tests",
-        )?;
-
-        let mut placement_args = test_args.clone();
-        placement_args.extend(["--features", "ndarray", "--test", "lazy_param_device"]);
-        build_helpers::custom_crates_tests(
-            vec!["cortex-core"],
-            handle_test_args(&placement_args, args.release),
-            None,
-            None,
-            "lazy parameter placement tests",
-        )?;
+            "Flex/CPU transfer tests",
+        );
+        endgroup!();
+        result?;
     }
 
     if !group_cpu_tests {
@@ -203,17 +271,20 @@ fn run_crate_unit_tests(packages: &[&str], args: &TestCmdArgs) -> anyhow::Result
 /// Compile compatible Metal suites together instead of rebuilding their shared GPU stack
 /// for every package. Keep defaults out of the non-fusion group: the WGPU, core, and
 /// vision defaults enable fusion transitively.
+///
+/// The suites run on wgpu's Metal path: cubecl's own Metal runtime needs Metal 3, which the
+/// GitHub macOS runners' paravirtual device lacks.
 fn handle_macos_tests(release: bool) -> anyhow::Result<()> {
-    set_cortex_device("metal");
+    set_cortex_device("wgpu-msl");
 
     let packages = ["cortex-backend-tests", "cortex-linalg", "cortex-signal"];
     let features = [
-        "cortex-backend-tests/metal",
+        "cortex-backend-tests/wgpu-msl",
         "cortex-backend-tests/std",
-        "cortex-linalg/metal",
+        "cortex-linalg/wgpu-msl",
         "cortex-linalg/std",
         "cortex-linalg/autotune",
-        "cortex-signal/metal",
+        "cortex-signal/wgpu-msl",
         "cortex-signal/std",
         "cortex-signal/autodiff",
         "cortex-signal/autotune",
@@ -226,16 +297,16 @@ fn handle_macos_tests(release: bool) -> anyhow::Result<()> {
         "cortex-backend-tests/fusion",
         "cortex-linalg/fusion",
         "cortex-signal/fusion",
-        // Extension tests share this Metal/Fusion build and use CORTEX_DEVICE=metal.
+        // Extension tests share this Metal/Fusion build and use CORTEX_DEVICE=wgpu-msl.
         "cortex-core/extension-tests",
         // Preserve the default-feature coverage of the former standalone crate tests.
         // Qualify every feature so adding a package cannot enable its namesake feature.
         "cortex-wgpu/default",
-        "cortex-wgpu/metal",
+        "cortex-wgpu/wgpu-msl",
         "cortex-core/default",
-        "cortex-core/metal",
+        "cortex-core/wgpu-msl",
         "cortex-vision/default",
-        "cortex-vision/metal",
+        "cortex-vision/wgpu-msl",
     ]);
     run_test_group(
         &fusion_packages,
@@ -243,17 +314,7 @@ fn handle_macos_tests(release: bool) -> anyhow::Result<()> {
         release,
         "Metal with fusion",
     )?;
-    run_test_group(&packages, &features, release, "Metal without fusion")?;
-
-    // Keep Accelerate separate so it cannot change the ndarray reference backend used
-    // by the Metal tests. It also doesn't need to compile the GPU dependencies.
-    build_helpers::custom_crates_tests(
-        vec!["cortex-ndarray"],
-        handle_test_args(&["--features", "blas-accelerate"], release),
-        None,
-        None,
-        "std blas-accelerate",
-    )
+    run_test_group(&packages, &features, release, "Metal without fusion")
 }
 
 fn run_test_group(
@@ -290,13 +351,11 @@ const EXCLUDE_CRATES: &[&str] = &[
     "cortex-rocm",
     // "cortex-router" uses "cortex-wgpu" for the tests.
     "cortex-router",
-    "cortex-tch",
     "cortex-wgpu",
     // Requires wgpu runtime
     "cortex-cubecl-fusion",
     // Backends are tested individually
     "cortex-backend-tests",
-    "cortex-ndarray",
     "cortex-flex",
 ];
 
@@ -358,6 +417,109 @@ fn feature_test_group(
     )
 }
 
+/// Run the requested workspace configurations without widening their feature sets.
+fn handle_crate_tests(
+    mut args: CortexTestCmdArgs,
+    env: Environment,
+    context: Context,
+) -> anyhow::Result<()> {
+    // Default `Target::Workspace`
+    // Exclude crates that are not supported on CI
+    args.exclude
+        .extend(EXCLUDE_CRATES.iter().map(|&s| s.to_string()));
+    // Exclude examples
+    // workspace feature unification will cause binary bloat with examples default features
+    args.exclude.extend(enumerate_examples()?);
+
+    // Cortex remote tests don't work on windows for now
+    #[cfg(target_os = "windows")]
+    {
+        args.exclude.extend(vec!["cortex-remote".to_string()]);
+    };
+
+    if matches!(args.ci, CiTestType::Crates) {
+        // Select the execution backend explicitly now that defaults are backend-free.
+        let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+        let (_, features) = feature_test_group(&metadata, "flex", &args.exclude);
+        args.features.get_or_insert_with(Vec::new).extend(features);
+        // The linalg-backed layers are opt-in; keep their tests covered.
+        if !args.exclude.iter().any(|name| name == "cortex-nn") {
+            args.features
+                .get_or_insert_with(Vec::new)
+                .push("cortex-nn/linalg".to_string());
+        }
+        set_cortex_device("flex"); // default device for base tests
+        base_commands::test::handle_command(
+            args.clone().try_into().unwrap(),
+            env.clone(),
+            context.clone(),
+        )?;
+        // Capture is intentionally opt-in, so workspace-default tests don't compile
+        // the dispatch, tensor, core, or facade integration tests that exercise it.
+        if !args.exclude.iter().any(|name| name == "cortex") {
+            super::validate::check_backend_features()?;
+        }
+        let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+        let (packages, features) = feature_test_group(&metadata, "capture", &args.exclude);
+        run_test_group(
+            &packages.iter().map(String::as_str).collect::<Vec<_>>(),
+            &features.iter().map(String::as_str).collect::<Vec<_>>(),
+            args.release,
+            "std with graph capture",
+        )?;
+    } else {
+        // The relocated websocket FFT test requires explicit server features.
+        #[cfg(target_os = "linux")]
+        if !args.exclude.iter().any(|name| name == "cortex-signal") {
+            for features in ["flex,std,remote-tests", "flex,std,remote-tests,fusion"] {
+                build_helpers::custom_crates_tests(
+                    vec!["cortex-signal"],
+                    handle_test_args(
+                        &[
+                            "--no-default-features",
+                            "--features",
+                            features,
+                            "--test",
+                            "remote",
+                        ],
+                        args.release,
+                    ),
+                    None,
+                    None,
+                    "signal FFT over websocket",
+                )?;
+            }
+        }
+
+        // Keep all-features coverage in this shard to avoid consuming
+        // another runner from the organization's concurrency limit.
+        build_helpers::custom_crates_tests(
+            vec!["cortex-dataset"],
+            handle_test_args(&["--all-features"], args.release),
+            None,
+            None,
+            "std dataset all features",
+        )?;
+
+        // Both suites use Flex; share their training and model dependencies.
+        set_cortex_device("flex");
+        run_test_group(
+            &["cortex-vision", "cortex-train"],
+            &[
+                "cortex-vision/default",
+                "cortex-vision/flex",
+                "cortex-vision/loss",
+                "cortex-train/default",
+                "cortex-train/rl",
+                "cortex-train/vision",
+            ],
+            args.release,
+            "std vision and training (flex)",
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn handle_command(
     mut args: CortexTestCmdArgs,
     env: Environment,
@@ -405,11 +567,7 @@ pub(crate) fn handle_command(
                     "no-std",
                 )
             })?;
-            handle_backend_tests(
-                args.clone().try_into().unwrap(),
-                TestBackend::Ndarray,
-                context,
-            )?;
+            handle_backend_tests(args.clone().try_into().unwrap(), TestBackend::Flex, context)?;
 
             Ok(())
         }
@@ -421,23 +579,8 @@ pub(crate) fn handle_command(
                     // Backend ops
                     handle_backend_tests(
                         args.clone().try_into().unwrap(),
-                        TestBackend::Ndarray,
-                        context.clone(),
-                    )?;
-
-                    handle_backend_tests(
-                        args.clone().try_into().unwrap(),
                         TestBackend::Flex,
                         context.clone(),
-                    )?;
-
-                    // Backend crates
-                    args.target = Target::AllPackages;
-                    args.only.push("cortex-ndarray".to_string());
-                    base_commands::test::handle_command(
-                        args.clone().try_into().unwrap(),
-                        env.clone(),
-                        context,
                     )?;
 
                     // Native FFT kernels are opt-in, but keep their backend unit tests covered.
@@ -449,31 +592,8 @@ pub(crate) fn handle_command(
                         "Flex backend with FFT kernels",
                     )?;
                 }
-                CiTestType::Crates => {
-                    // Default `Target::Workspace`
-                    // Exclude crates that are not supported on CI
-                    args.exclude
-                        .extend(EXCLUDE_CRATES.iter().map(|&s| s.to_string()));
-                    // Exclude examples
-                    // workspace feature unification will cause binary bloat with examples default features
-                    args.exclude.extend(enumerate_examples()?);
-
-                    // Cortex remote tests don't work on windows for now
-                    #[cfg(target_os = "windows")]
-                    {
-                        args.exclude.extend(vec!["cortex-remote".to_string()]);
-                    };
-
-                    // Select the execution backend explicitly now that defaults are backend-free.
-                    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
-                    let (_, features) = feature_test_group(&metadata, "flex", &args.exclude);
-                    args.features.get_or_insert_with(Vec::new).extend(features);
-                    set_cortex_device("flex"); // default device for base tests
-                    base_commands::test::handle_command(
-                        args.clone().try_into().unwrap(),
-                        env.clone(),
-                        context.clone(),
-                    )?;
+                CiTestType::Crates | CiTestType::CratesFeatures => {
+                    handle_crate_tests(args.clone(), env.clone(), context.clone())?;
                 }
                 CiTestType::Examples => {
                     // NOTE: for the examples we simply run `cargo checks` (no tests, faster validation)
@@ -548,89 +668,6 @@ pub(crate) fn handle_command(
                 }
             }
 
-            // 2) Specific additional commands to test specific features
-            // ---------------------------------------------------------
-            match args.ci {
-                CiTestType::Backends | CiTestType::GithubRunner => (),
-                CiTestType::Examples => (),
-                CiTestType::Crates => {
-                    // Capture is intentionally opt-in, so workspace-default tests don't compile
-                    // the dispatch, tensor, core, or facade integration tests that exercise it.
-                    if !args.exclude.iter().any(|name| name == "cortex") {
-                        super::validate::check_backend_features()?;
-                    }
-                    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
-                    let (packages, features) =
-                        feature_test_group(&metadata, "capture", &args.exclude);
-                    run_test_group(
-                        &packages.iter().map(String::as_str).collect::<Vec<_>>(),
-                        &features.iter().map(String::as_str).collect::<Vec<_>>(),
-                        args.release,
-                        "std with graph capture",
-                    )?;
-
-                    // The relocated websocket FFT test requires explicit server features.
-                    #[cfg(target_os = "linux")]
-                    if !args.exclude.iter().any(|name| name == "cortex-signal") {
-                        for features in ["flex,std,remote-tests", "flex,std,remote-tests,fusion"] {
-                            build_helpers::custom_crates_tests(
-                                vec!["cortex-signal"],
-                                handle_test_args(
-                                    &[
-                                        "--no-default-features",
-                                        "--features",
-                                        features,
-                                        "--test",
-                                        "remote",
-                                    ],
-                                    args.release,
-                                ),
-                                None,
-                                None,
-                                "signal FFT over websocket",
-                            )?;
-                        }
-                    }
-
-                    // Keep all-features coverage in this shard to avoid consuming
-                    // another runner from the organization's concurrency limit.
-                    build_helpers::custom_crates_tests(
-                        vec!["cortex-dataset"],
-                        handle_test_args(&["--all-features"], args.release),
-                        None,
-                        None,
-                        "std dataset all features",
-                    )?;
-
-                    // cortex-core
-                    set_cortex_device("tch"); // test-tch
-                    build_helpers::custom_crates_tests(
-                        vec!["cortex-core"],
-                        handle_test_args(&["--features", "tch"], args.release),
-                        None,
-                        None,
-                        "std with features: tch",
-                    )?;
-
-                    // Both suites use Flex; share their training and model dependencies.
-                    set_cortex_device("flex");
-                    run_test_group(
-                        &["cortex-vision", "cortex-train"],
-                        &[
-                            "cortex-vision/default",
-                            "cortex-vision/flex",
-                            "cortex-vision/loss",
-                            "cortex-train/default",
-                            "cortex-train/rl",
-                            "cortex-train/vision",
-                        ],
-                        args.release,
-                        "std vision and training (flex)",
-                    )?;
-                }
-                CiTestType::GcpCudaRunner | CiTestType::GithubMacRunner => (),
-                CiTestType::GcpVulkanRunner | CiTestType::GcpWgpuRunner => (), // handled in tests above
-            }
             Ok(())
         }
         Context::All => Context::value_variants()

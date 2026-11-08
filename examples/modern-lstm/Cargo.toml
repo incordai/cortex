@@ -9,8 +9,6 @@ workspace = true
 [features]
 cuda = ["cortex/cuda"]
 flex = ["cortex/flex"]
-tch-cpu = ["cortex/tch"]
-tch-gpu = ["cortex/tch"]
 wgpu = ["cortex/wgpu"]
 
 [dependencies]

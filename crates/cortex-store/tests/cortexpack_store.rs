@@ -13,9 +13,8 @@ use cortex_core as cortex;
 use cortex_core::module::Module;
 use cortex_core::tensor::{DType, Device, TensorData};
 use cortex_nn::{Linear, LinearConfig};
-use cortex_pack::Tensor as PackTensor;
 use cortex_store::{
-    CortexpackStore, HalfPrecisionAdapter, ModuleAdapter, ModuleContext, ModuleSnapshot,
+    CortexpackStore, HalfPrecisionAdapter, ModuleAdapter, ModuleContext, ModuleSnapshot, StoreTensor,
 };
 
 #[derive(Module, Debug)]
@@ -56,19 +55,20 @@ struct PlantingAdapter {
 }
 
 impl ModuleAdapter for PlantingAdapter {
-    fn adapt(&self, tensor: PackTensor, _ctx: ModuleContext<'_>) -> PackTensor {
+    fn adapt(&self, tensor: StoreTensor, _ctx: ModuleContext<'_>) -> StoreTensor {
         let dest = self.dest.clone();
-        let shape = tensor.shape.clone();
+        let shape = tensor.shape().to_vec();
         cortex_store::bridge::deferred(
-            tensor.name.clone(),
+            tensor.name().to_string(),
             DType::F32,
-            tensor.shape.clone(),
+            tensor.shape().into(),
             None,
             move || {
                 std::fs::write(&dest, b"theirs").unwrap();
                 Ok(TensorData::zeros::<f32, _>(shape.clone()))
             },
         )
+        .into()
     }
 
     fn clone_box(&self) -> Box<dyn ModuleAdapter> {

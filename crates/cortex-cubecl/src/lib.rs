@@ -21,7 +21,7 @@
 //! - `fusion`: kernel fusion through `cortex-fusion`.
 //! - `autotune`: benchmark kernel variants at runtime and keep the fastest.
 //! - `fft`: FFT kernels.
-//! - `template`: launch hand-written, non-JIT kernels (see [`template`]).
+//! - `template`: launch hand-written, non-JIT kernels.
 //! - `tracing`: instrument operations with the `tracing` crate.
 
 #[macro_use]
@@ -42,6 +42,7 @@ pub mod element;
 pub use element::{BoolElement, CubeElement, FloatElement, IntElement};
 
 mod backend;
+mod execution;
 
 pub use backend::*;
 
@@ -79,3 +80,6 @@ pub type Cube = CubeBackend;
 /// streams. See [`CubeBackend`] for the unfused type.
 #[cfg(feature = "fusion")]
 pub type Cube = cortex_fusion::Fusion<CubeBackend>;
+
+/// Whether [`Cube`] runs its operations through a fusion server.
+pub const FUSED: bool = cfg!(feature = "fusion");

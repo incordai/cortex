@@ -8,7 +8,9 @@ use cortex::module::Module;
 use cortex::tensor::Device;
 use cortex::tensor::Tensor;
 use cortex::tensor::activation::relu;
-use cortex::tensor::ops::{AvgPoolOptions, InterpolateMode, InterpolateOptions, MaxPoolOptions};
+use cortex::tensor::ops::{
+    AvgPoolOptions, CoordinateTransformMode, InterpolateMode, InterpolateOptions, MaxPoolOptions,
+};
 use cortex_nn::conv::{Conv2d, Conv2dConfig};
 use cortex_nn::{BatchNorm, BatchNormConfig, PaddingConfig2d};
 
@@ -428,7 +430,10 @@ impl InceptionV3FeatureExtractor {
         let x = if h != 299 || w != 299 {
             cortex_core::tensor::module::interpolate(
                 x,
-                InterpolateOptions::new(InterpolateMode::Bilinear).with_output_size([299, 299]),
+                InterpolateOptions::new(InterpolateMode::Bilinear {
+                    coordinate_transform: CoordinateTransformMode::AlignCorners,
+                })
+                .with_output_size([299, 299]),
             )
         } else {
             x

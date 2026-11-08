@@ -16,7 +16,7 @@ jobs:
   publish-cortex-rl:
     needs:
       - publish-cortex-core
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-rl
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -29,7 +29,7 @@ jobs:
       - publish-cortex-cubecl
       - publish-cortex-core
       - publish-cortex-store
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-vision
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -42,7 +42,7 @@ jobs:
       - publish-cortex-cubecl
       - publish-cortex-fusion
       - publish-cortex-router
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-linalg
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -57,9 +57,8 @@ jobs:
       - publish-cortex-router
       - publish-cortex-autodiff
       - publish-cortex-flex
-      - publish-cortex-tch
       - publish-cortex-remote
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-signal
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -72,7 +71,7 @@ jobs:
       - publish-cortex-std
       - publish-cortex-backend
       - publish-cortex-fusion
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-router
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -85,9 +84,23 @@ jobs:
       - publish-cortex-ir
       - publish-cortex-router
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-capture
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-cortex-shard:
+    needs:
+      - publish-cortex-flex
+      - publish-cortex-backend
+      - publish-cortex-ir
+      - publish-cortex-router
+      - publish-cortex-std
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
+    with:
+      crate: cortex-shard
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -100,7 +113,7 @@ jobs:
       - publish-cortex-fusion
       - publish-cortex-router
       - publish-cortex-communication
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-remote
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -110,7 +123,7 @@ jobs:
   publish-cortex-derive:
     needs:
       - publish-cortex-einsum
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-derive
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -118,7 +131,7 @@ jobs:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-cortex-einsum:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-einsum
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -128,7 +141,7 @@ jobs:
   publish-cortex-dataset:
     needs:
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-dataset
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -136,7 +149,7 @@ jobs:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-cortex-std:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-std
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -144,7 +157,7 @@ jobs:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-cortex-backend-extension:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-backend-extension
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -159,7 +172,7 @@ jobs:
       - publish-cortex-backend
       - publish-cortex-dispatch
       - publish-cortex-backend-extension
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-tensor
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -169,7 +182,7 @@ jobs:
   publish-cortex-backend:
     needs:
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-backend
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -179,7 +192,7 @@ jobs:
   publish-cortex-ir:
     needs:
       - publish-cortex-backend
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-ir
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -191,7 +204,7 @@ jobs:
       - publish-cortex-ir
       - publish-cortex-backend
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-fusion
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -261,31 +274,9 @@ jobs:
     needs:
       - publish-cortex-backend
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-autodiff
-      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
-    secrets:
-      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-
-  publish-cortex-tch:
-    needs:
-      - publish-cortex-backend
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
-    with:
-      crate: cortex-tch
-      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
-    secrets:
-      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-
-  publish-cortex-ndarray:
-    needs:
-      - publish-cortex-ir
-      - publish-cortex-backend
-      - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
-    with:
-      crate: cortex-ndarray
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -295,7 +286,7 @@ jobs:
       - publish-cortex-backend
       - publish-cortex-ir
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-flex
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -307,7 +298,7 @@ jobs:
       - publish-cortex-backend
       - publish-cortex-fusion
       - publish-cortex-cubecl
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-wgpu
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -319,7 +310,7 @@ jobs:
       - publish-cortex-backend
       - publish-cortex-fusion
       - publish-cortex-cubecl
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-cpu
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -331,7 +322,7 @@ jobs:
       - publish-cortex-backend
       - publish-cortex-fusion
       - publish-cortex-cubecl
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-cuda
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -343,7 +334,7 @@ jobs:
       - publish-cortex-backend
       - publish-cortex-fusion
       - publish-cortex-cubecl
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-rocm
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -353,7 +344,7 @@ jobs:
   publish-cortex-pack:
     needs:
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-pack
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -364,15 +355,48 @@ jobs:
     needs:
       - publish-cortex-std
       - publish-cortex-backend
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-communication
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
+  publish-cortex-instrument-macros:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
+    with:
+      crate: cortex-instrument-macros
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-cortex-instrument:
+    needs:
+      - publish-cortex-instrument-macros
+      - publish-cortex-tensor
+      - publish-cortex-fusion
+      - publish-cortex-ir
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
+    with:
+      crate: cortex-instrument
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-cortex-instrument-report:
+    needs:
+      - publish-cortex-instrument
+      - publish-cortex-tensor
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
+    with:
+      crate: cortex-instrument-report
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
   publish-cortex-core:
     needs:
+      - publish-cortex-instrument
       - publish-cortex-dataset
       - publish-cortex-std
       - publish-cortex-derive
@@ -381,7 +405,7 @@ jobs:
       - publish-cortex-ir
       - publish-cortex-dispatch
       - publish-cortex-backend-extension
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-core
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -392,7 +416,7 @@ jobs:
     needs:
       - publish-cortex-core
       - publish-cortex-linalg
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-nn
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -404,7 +428,7 @@ jobs:
       - publish-cortex-core
       - publish-cortex-derive
       - publish-cortex-pack
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-optim
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -419,7 +443,7 @@ jobs:
       - publish-cortex-nn
       - publish-cortex-store
       - publish-cortex-std
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-train
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -437,11 +461,10 @@ jobs:
       - publish-cortex-rocm
       - publish-cortex-wgpu
       - publish-cortex-flex
-      - publish-cortex-ndarray
-      - publish-cortex-tch
       - publish-cortex-remote
       - publish-cortex-capture
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+      - publish-cortex-shard
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-dispatch
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -462,7 +485,7 @@ jobs:
       - publish-cortex-linalg
       - publish-cortex-signal
       - publish-cortex-rl
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -470,7 +493,7 @@ jobs:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-pytorch-reader:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: pytorch-reader
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
@@ -484,7 +507,7 @@ jobs:
       - publish-cortex-tensor
       - publish-cortex-nn
       - publish-pytorch-reader
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v12
     with:
       crate: cortex-store
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}

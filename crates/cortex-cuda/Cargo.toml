@@ -26,6 +26,7 @@ tracing = [
 ]
 
 fusion = ["cortex-fusion", "cortex-cubecl/fusion"]
+persistence = ["cortex-cubecl/persistence"]
 autotune = ["cortex-cubecl/autotune"]
 autotune-checks = ["cortex-cubecl/autotune-checks"]
 

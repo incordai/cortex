@@ -1,9 +1,7 @@
 /// Tests for loading `cortex.toml` from disk.
 ///
-/// The `cubecl` feature toggles whether `CortexConfig` has a `cubecl` sub-config. We still
-/// want `cortex.toml` files that contain `[cubecl.*]` sections to load cleanly either way —
-/// serde's default behaviour is to ignore unknown top-level fields, and these tests lock
-/// that in.
+/// CubeCL and CubeK load their sections independently. Cortex's own configuration must
+/// accept files containing those sections without depending on either kernel backend.
 #[cfg(feature = "std")]
 mod config_loading {
     use cortex_std::config::autodiff::AutodiffLogLevel;
@@ -29,6 +27,9 @@ stdout = true
 
 [autodiff.logger]
 level = "basic"
+
+[cubek.matmul]
+allow_tf32 = false
 
 [cubecl.autotune]
 level = "full"
@@ -65,10 +66,9 @@ stdout = true
         assert_eq!(config.autodiff().logger.level, AutodiffLogLevel::Disabled);
     }
 
-    /// The important case: a single `cortex.toml` with both Cortex and CubeCL sections must
-    /// load whether or not the `cubecl` feature is enabled on `cortex-std`.
+    /// A shared file must load without adding backend dependencies to cortex-std.
     #[test]
-    fn load_full_toml_ignores_cubecl_when_feature_off() {
+    fn load_full_toml_ignores_backend_sections() {
         let file = write_toml(FULL_TOML);
         let config = CortexConfig::from_file_path(file.path()).expect("parse full toml");
 

@@ -34,7 +34,10 @@ interoperability, and advanced tensor management.
 ## Quick Start
 
 ```rust
-use cortex_store::{ModuleSnapshot, PytorchStore, SafetensorsStore, CortexpackStore, HalfPrecisionAdapter};
+use cortex_store::{
+    CortexpackStore, HalfPrecisionAdapter, ModuleSnapshot, PyTorchToCortexAdapter, PytorchStore,
+    SafetensorsStore,
+};
 
 // Load from PyTorch
 let mut store = PytorchStore::from_file("model.pt");

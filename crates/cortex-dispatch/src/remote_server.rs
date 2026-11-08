@@ -35,16 +35,6 @@ macro_rules! with_backend {
                 let $hosted = hosted!(devices, Flex)?;
                 $body
             }
-            #[cfg(feature = "ndarray")]
-            Some(DispatchDevice::NdArray(_)) => {
-                type $b = NdArray;
-                let $hosted = hosted!(devices, NdArray)?;
-                $body
-            }
-            #[cfg(feature = "tch")]
-            Some(DispatchDevice::LibTorch(_)) => Err(ServeError::UnsupportedDevice {
-                reason: "LibTorch cannot run remote sessions".into(),
-            }),
             #[cfg(feature = "remote")]
             Some(DispatchDevice::Remote(_)) => Err(ServeError::UnsupportedDevice {
                 reason: "a remote device cannot host a remote server".into(),
@@ -52,6 +42,10 @@ macro_rules! with_backend {
             #[cfg(feature = "capture")]
             Some(DispatchDevice::Capture(_)) => Err(ServeError::UnsupportedDevice {
                 reason: "a capture device cannot host a remote server".into(),
+            }),
+            #[cfg(feature = "shard")]
+            Some(DispatchDevice::ShardedCompute(_)) => Err(ServeError::UnsupportedDevice {
+                reason: "a sharded compute device cannot host a remote server".into(),
             }),
             #[cfg(feature = "autodiff")]
             Some(DispatchDevice::Autodiff(_)) => {
@@ -82,6 +76,7 @@ pub fn serve(
     settings: ServerSettings,
     transport: Transport,
 ) -> Result<(), ServeError> {
+    let settings = answer_capabilities(settings);
     with_backend!(devices, |B, hosted| BackendServer::<B>::new(hosted)
         .with_settings(settings)
         .serve(transport))
@@ -94,6 +89,7 @@ pub async fn serve_async(
     settings: ServerSettings,
     transport: Transport,
 ) -> Result<(), ServeError> {
+    let settings = answer_capabilities(settings);
     with_backend!(devices, |B, hosted| BackendServer::<B>::new(hosted)
         .with_settings(settings)
         .serve_async(transport)
@@ -106,7 +102,23 @@ pub fn into_protocol(
     settings: ServerSettings,
     endpoint: &Endpoint,
 ) -> Result<RemoteProtocol, ServeError> {
+    let settings = answer_capabilities(settings);
     with_backend!(devices, |B, hosted| BackendServer::<B>::new(hosted)
         .with_settings(settings)
         .into_protocol(endpoint))
+}
+
+/// `settings`, answering [`CAPABILITIES_QUERY`](crate::CAPABILITIES_QUERY) for a cubecl device, so
+/// a client reads its remote device's capabilities as its own. Registered after the
+/// application's handlers: the query's name is Cortex's.
+fn answer_capabilities(settings: ServerSettings) -> ServerSettings {
+    #[cfg(cube_backend)]
+    let settings = settings.with_device_query::<Cube, _>(
+        crate::CAPABILITIES_QUERY.into(),
+        |device: &cortex_backend::cubecl::Device| {
+            let capabilities = DispatchDevice::Cube(device.clone()).capabilities();
+            rmp_serde::to_vec(&capabilities).expect("the capabilities encode")
+        },
+    );
+    settings
 }

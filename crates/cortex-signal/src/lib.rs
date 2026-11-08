@@ -1,7 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(feature = "tch", allow(deprecated))]
 
 //! Signal processing operations for Cortex tensors.
 //!
@@ -18,7 +17,7 @@
 //! FFTs are backend extensions; windows and STFT/ISTFT compose
 //! tensor operations. Enable `autodiff` to differentiate through FFTs.
 //!
-//! FFT kernels are available for Flex, CubeCL backends, and LibTorch.
+//! FFT kernels are available for Flex and CubeCL backends.
 //! The backend features enable native FFT kernels through `cortex-flex/fft` or
 //! `cortex-cubecl/fft`; these kernels are excluded from the backends' default builds.
 //!

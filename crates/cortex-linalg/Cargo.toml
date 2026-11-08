@@ -16,7 +16,8 @@ workspace = true
 
 [features]
 default = ["cortex-core/default", "fusion", "std"]
-std = ["cortex-core/std", "cortex-std/std", "cortex-fusion?/std"]
+std = ["cortex-core/std", "cortex-std/std", "cortex-fusion?/std", "gemm?/std"]
+autodiff = ["cortex-core/autodiff", "dep:cortex-autodiff"]
 tracing = ["cortex-core/tracing", "cortex-fusion?/tracing"]
 autotune = ["cortex-core/autotune", "cortex-cubecl?/autotune"]
 
@@ -28,21 +29,22 @@ rocm = ["cubecl-backend", "cortex-core/rocm"]
 wgpu = ["cubecl-backend", "cortex-core/wgpu"]
 vulkan = ["cubecl-backend", "cortex-core/vulkan"]
 webgpu = ["cubecl-backend", "cortex-core/webgpu"]
+wgpu-msl = ["cubecl-backend", "cortex-core/wgpu-msl"]
 metal = ["cubecl-backend", "cortex-core/metal"]
 cpu = ["cubecl-backend", "cortex-core/cpu"]
-flex = ["cortex-core/flex"]
-ndarray = ["cortex-core/ndarray"]
-tch = ["cortex-core/tch"]
+flex = ["cortex-core/flex", "dep:gemm"]
 remote = ["cortex-core/remote", "router"]
 capture = ["cortex-core/capture", "router"]
 router = ["cortex-router"]
 
 [dependencies]
+cortex-autodiff = { workspace = true, optional = true }
 cortex-core = { workspace = true, features = ["extension"] }
 cortex-cubecl = { workspace = true, optional = true, default-features = false }
 cortex-fusion = { workspace = true, optional = true, default-features = false }
 cortex-router = { workspace = true, optional = true, default-features = false }
 cortex-std = { workspace = true }
+gemm = { workspace = true, optional = true }
 num-traits = { workspace = true }
 
 [package.metadata.docs.rs]

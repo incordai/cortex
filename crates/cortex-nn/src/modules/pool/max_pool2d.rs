@@ -1,3 +1,6 @@
+use crate::modules::bounds::{self, Windows};
+use cortex::instrument::{Bounds, compute};
+use cortex::tensor::module::max_pool_output_size;
 use cortex_core as cortex;
 
 use crate::PaddingConfig2d;
@@ -19,8 +22,8 @@ pub struct MaxPool2dConfig {
     pub strides: [usize; 2],
     /// The padding configuration.
     ///
-    /// Supports symmetric and asymmetric padding. `Same` padding with even kernel sizes
-    /// will automatically use asymmetric padding to preserve input dimensions.
+    /// `Same` padding produces `ceil(input_size / stride)` outputs per spatial dimension.
+    /// Padding may be asymmetric, with the extra element added at the end.
     #[config(default = "PaddingConfig2d::Valid")]
     pub padding: PaddingConfig2d,
     /// The dilation.
@@ -82,6 +85,36 @@ impl MaxPool2dConfig {
 }
 
 impl MaxPool2d {
+    /// The options the pool runs with, its padding resolved against `input`'s size.
+    fn options(&self, input: &Tensor<4>) -> MaxPoolOptions<2> {
+        let [_batch_size, _channels_in, height_in, width_in] = input.dims();
+        let effective_kernel =
+            core::array::from_fn(|i| (self.kernel_size[i] - 1) * self.dilation[i] + 1);
+        let (padding_height, padding_width) = self.padding.calculate_padding_2d_pairs(
+            height_in,
+            width_in,
+            &effective_kernel,
+            &self.stride,
+        );
+
+        MaxPoolOptions::new(self.kernel_size)
+            .with_stride(self.stride)
+            .with_dilation(self.dilation)
+            .with_ceil_mode(self.ceil_mode)
+            .with_padding_pairs([padding_height, padding_width])
+    }
+
+    /// None where the pool cannot size its output, which it rejects.
+    fn bounds(&self, input: &Tensor<4>) -> Option<Bounds> {
+        let options = self.options(input);
+        let output_size = max_pool_output_size(bounds::spatial(input), &options)?;
+        Some(
+            Windows::max_pool(&options)
+                .over(input, output_size)
+                .resampling(input),
+        )
+    }
+
     /// Applies the forward pass on the input tensor.
     ///
     /// See [max_pool2d](cortex::tensor::module::max_pool2d) for more information.
@@ -90,23 +123,10 @@ impl MaxPool2d {
     ///
     /// - input: `[batch_size, channels, height_in, width_in]`
     /// - output: `[batch_size, channels, height_out, width_out]`
+    #[compute(bounds = Self::bounds)]
     pub fn forward(&self, input: Tensor<4>) -> Tensor<4> {
-        let [_batch_size, _channels_in, height_in, width_in] = input.dims();
-        let (padding_height, padding_width) = self.padding.calculate_padding_2d_pairs(
-            height_in,
-            width_in,
-            &self.kernel_size,
-            &self.stride,
-        );
-
-        max_pool2d(
-            input,
-            MaxPoolOptions::new(self.kernel_size)
-                .with_stride(self.stride)
-                .with_padding_pairs([padding_height, padding_width])
-                .with_dilation(self.dilation)
-                .with_ceil_mode(self.ceil_mode),
-        )
+        let options = self.options(&input);
+        max_pool2d(input, options)
     }
 }
 
@@ -114,6 +134,69 @@ impl MaxPool2d {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    /// A pool writes the output its windows size, ceil mode included.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_pool_declares_the_output_it_writes() {
+        let device = Default::default();
+        let pool = MaxPool2dConfig::new([3, 3])
+            .with_strides([2, 2])
+            .with_ceil_mode(true)
+            .init();
+        let input = Tensor::<4>::zeros([1, 2, 6, 6], &device);
+        let read = cortex::instrument::tensor_bytes(&input);
+        let mut output = None;
+
+        let recorded = crate::recording::recorded(|| {
+            output = Some(pool.forward(input));
+        });
+
+        assert_eq!(recorded.lines(), ["max pool2d"]);
+        assert_eq!(
+            recorded.declared("max pool2d"),
+            Some(Bounds {
+                read,
+                write: cortex::instrument::tensor_bytes(&output.unwrap()),
+                flops: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn same_padding_with_dilation() {
+        let device = Default::default();
+        let input = Tensor::<4>::from_data(
+            [[[
+                [-9., -1., -8., -2., -7., -3.],
+                [-6., -4., -5., -3., -9., -2.],
+                [-4., -8., -2., -7., -6., -1.],
+                [-8., -2., -7., -1., -3., -4.],
+                [-5., -7., -9., -6., -1., -8.],
+            ]]],
+            &device,
+        );
+        let pool = MaxPool2dConfig::new([3, 2])
+            .with_strides([1, 2])
+            .with_dilation([2, 2])
+            .with_padding(PaddingConfig2d::Same)
+            .init();
+
+        // Effective kernel [5, 3] requires padding (top, bottom) = (2, 2), (left, right) = (0, 1).
+        let expected = Tensor::<4>::from_data(
+            [[[
+                [-2., -2., -6.],
+                [-5., -3., -3.],
+                [-2., -1., -1.],
+                [-5., -3., -3.],
+                [-2., -1., -1.],
+            ]]],
+            &device,
+        );
+        pool.forward(input)
+            .to_data()
+            .assert_eq(&expected.to_data(), true);
+    }
 
     #[test]
     fn same_with_even_kernel_uses_asymmetric_padding() {

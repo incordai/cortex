@@ -33,8 +33,7 @@ std = [
 ]
 
 cuda = ["cortex-core/cuda"]
-metal = ["wgpu", "cortex-core/metal"]
-tch = ["cortex-core/tch"]
+wgpu-msl = ["wgpu", "cortex-core/wgpu-msl"]
 wgpu = ["cortex-core/wgpu"]
 
 safetensors = ["dep:safetensors"]
@@ -61,7 +60,7 @@ textdistance = { workspace = true }
 safetensors = { workspace = true, optional = true }
 
 [dev-dependencies]
-# cortex-import = { path = "../cortex-import", version = "0.22.0" } # disabled (circular dep in publish, only for bench)
+# cortex-import = { path = "../cortex-import", version = "0.23.0-pre.1" } # disabled (circular dep in publish, only for bench)
 cortex-core = { workspace = true, features = ["flex"] }
 cortex-nn = { workspace = true }
 

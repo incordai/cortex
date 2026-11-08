@@ -19,7 +19,7 @@ default = ["autotune", "std", "cubecl/default", "cortex-fusion/default"]
 
 autotune = []
 autotune-checks = ["cubecl/autotune-checks", "half"]
-doc = ["default"]
+doc = ["default", "dep:branches"]
 test-util = []
 std = ["cubecl/std", "cortex-backend/std", "cortex-fusion/std"]
 tracing = [
@@ -30,13 +30,15 @@ tracing = [
 ]
 
 [dependencies]
+branches = { workspace = true, optional = true }
 cortex-fusion = { workspace = true }
 cortex-ir = { workspace = true }
 cortex-std = { workspace = true, features = ["default"] }
 cubecl = { workspace = true }
 cubek = { workspace = true, features = [
     "matmul",
-    "matmul-multi-level",
+    "matmul-tiled",
+    "microkernel",
     "reduce",
     "quantization",
     "stdlib",

@@ -12,8 +12,7 @@ use cortex_core as cortex;
 
 use cortex_core::module::{Module, Param, ParamId};
 use cortex_core::tensor::{Device, Tensor, TensorData};
-use cortex_pack::Tensor as PackTensor;
-use cortex_store::{ModuleAdapter, ModuleContext, ModuleSnapshot};
+use cortex_store::{ModuleAdapter, ModuleContext, ModuleSnapshot, StoreTensor};
 
 /// Set only in the child, which is the process that actually runs the panicking apply.
 const CHILD: &str = "CORTEX_STORE_APPLY_UNWIND_CHILD";
@@ -33,7 +32,7 @@ struct Model {
 struct PanickingAdapter;
 
 impl ModuleAdapter for PanickingAdapter {
-    fn adapt(&self, _tensor: PackTensor, _ctx: ModuleContext<'_>) -> PackTensor {
+    fn adapt(&self, _tensor: StoreTensor, _ctx: ModuleContext<'_>) -> StoreTensor {
         panic!("adapter panicked mid-map");
     }
 

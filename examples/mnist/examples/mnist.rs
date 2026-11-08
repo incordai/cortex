@@ -6,15 +6,6 @@ fn select_device() -> Device {
     #[cfg(feature = "flex")]
     return Device::flex();
 
-    #[cfg(all(feature = "tch-gpu", not(target_os = "macos")))]
-    return Device::libtorch_cuda(cortex::tensor::DeviceIndex::Default);
-
-    #[cfg(all(feature = "tch-gpu", target_os = "macos"))]
-    return Device::libtorch_mps();
-
-    #[cfg(feature = "tch-cpu")]
-    return Device::libtorch();
-
     #[cfg(feature = "vulkan")]
     return Device::vulkan(cortex::tensor::DeviceKind::DefaultDevice);
     #[cfg(feature = "metal")]

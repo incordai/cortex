@@ -1,4 +1,5 @@
 [package]
+workspace = "../.."
 authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
 categories = ["science", "no-std", "embedded", "wasm"]
 description = "Flexible and Comprehensive Deep Learning Framework in Rust"
@@ -59,6 +60,8 @@ std = [
     "cortex-signal?/std",
     "cortex-optim?/std",
 ]
+# Arms the components' `#[compute]` annotations, for `cortex::instrument::Instrument` to measure.
+instrument = ["std", "cortex-core/instrument"]
 tracing = [
     "cubecl?/tracing",
     "cortex-core/tracing",
@@ -100,7 +103,7 @@ cubecl = ["dep:cubecl"]
 
 audio = ["cortex-core/audio"]
 vision = ["cortex-core/vision", "cortex-vision"]
-linalg = ["dep:cortex-linalg"]
+linalg = ["dep:cortex-linalg", "cortex-nn/linalg"]
 signal = ["dep:cortex-signal"]
 rl = ["dep:cortex-rl", "cortex-train?/rl"]
 
@@ -109,16 +112,13 @@ optim = ["cortex-optim", "autodiff"]
 
 # Backend
 ir = ["cortex-core/ir"]
-autodiff = ["cortex-core/autodiff", "cortex-signal?/autodiff"]
+autodiff = ["cortex-core/autodiff", "cortex-linalg?/autodiff", "cortex-signal?/autodiff"]
 fusion = ["ir", "cortex-core/fusion", "cortex-linalg?/fusion", "cortex-signal?/fusion", "cortex-vision?/fusion"]
 
 ## Backend features
-accelerate = ["cortex-core/accelerate"]
+persistence = ["cortex-core/persistence", "cubecl?/persistence"]
 autotune = ["cortex-core/autotune", "cortex-signal?/autotune"]
 autotune-checks = ["cortex-core/autotune-checks"]
-blas-netlib = ["cortex-core/blas-netlib"]
-openblas = ["cortex-core/openblas"]
-openblas-system = ["cortex-core/openblas-system"]
 simd = ["cortex-core/simd"]
 rayon = ["cortex-core/rayon"]
 
@@ -134,17 +134,18 @@ remote-websocket = ["remote", "cortex-core/remote-websocket", "cortex-signal?/re
 cuda = ["cortex-core/cuda", "cortex-linalg?/cuda", "cortex-signal?/cuda", "cortex-vision?/cuda"]
 rocm = ["cortex-core/rocm", "cortex-linalg?/rocm", "cortex-signal?/rocm", "cortex-vision?/rocm"]
 flex = ["cortex-core/flex", "cortex-linalg?/flex", "cortex-signal?/flex", "cortex-vision?/flex"]
-ndarray = ["cortex-core/ndarray", "cortex-linalg?/ndarray"]
-tch = ["cortex-core/tch", "cortex-linalg?/tch", "cortex-signal?/tch", "cortex-vision?/tch"]
 vulkan = ["wgpu", "cortex-core/vulkan", "cortex-linalg?/vulkan", "cortex-signal?/vulkan", "cortex-vision?/vulkan"]
 webgpu = ["wgpu", "cortex-core/webgpu", "cortex-linalg?/webgpu", "cortex-signal?/webgpu", "cortex-vision?/webgpu"]
-metal = ["wgpu", "cortex-core/metal", "cortex-linalg?/metal", "cortex-signal?/metal", "cortex-vision?/metal"]
+wgpu-msl = ["wgpu", "cortex-core/wgpu-msl", "cortex-linalg?/wgpu-msl", "cortex-signal?/wgpu-msl", "cortex-vision?/wgpu-msl"]
+metal = ["cortex-core/metal", "cortex-linalg?/metal", "cortex-signal?/metal", "cortex-vision?/metal"]
 wgpu = ["cortex-core/wgpu", "cortex-linalg?/wgpu", "cortex-signal?/wgpu", "cortex-vision?/wgpu"]
 cpu = ["cortex-core/cpu", "cortex-linalg?/cpu", "cortex-signal?/cpu", "cortex-vision?/cpu"]
 
 # Backend extensions
 extension = ["cortex-core/extension"]
 capture = ["cortex-core/capture", "cortex-linalg?/capture", "cortex-signal?/capture"]
+# Experimental: tensors split over several devices, for tensor parallelism.
+shard = ["cortex-core/shard"]
 
 [dependencies]
 

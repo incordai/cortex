@@ -25,8 +25,8 @@ let first_row = y.slice(s![0..1, ..]);
 - `TensorData`, `DType` and `Shape`: tensor contents and metadata, independent of any backend.
 - `activation`, `loss` and `module`: functional forms of activations, losses and neural network
   operations such as convolution and pooling.
-- `quantization`, `grid` and `distributed`: quantized tensors, grid sampling and collective
-  operations across devices.
+- `quantization`, `grid` and `distributed`: quantized tensors, grid sampling and the
+  configuration of gradient synchronization across devices.
 - `einsum!`, `assert_shape!` and `s!`: macros for Einstein summation, shape checks and slicing.
 
 With the `autodiff` feature, create tensors on `device.autodiff()` and call `require_grad()` on
@@ -37,8 +37,7 @@ See the [tensor chapter](https://burn.dev/books/burn/building-blocks/tensor.html
 ## Feature Flags
 
 - `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
-- Backends: `cuda`, `rocm`, `wgpu`, `metal`, `vulkan`, `webgpu`, `cpu`, `flex`, and the deprecated
-  `ndarray` and `tch`.
+- Backends: `cuda`, `rocm`, `wgpu`, `metal`, `vulkan`, `webgpu`, `cpu`, and `flex`.
 - `autodiff`, `fusion`: backend decorators.
 - `remote`, `remote-server`, `remote-websocket`: devices hosted by another machine.
 - `capture`: record operation graphs instead of executing them.

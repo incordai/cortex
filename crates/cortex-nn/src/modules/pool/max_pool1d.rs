@@ -1,3 +1,6 @@
+use crate::modules::bounds::{self, Windows};
+use cortex::instrument::{Bounds, compute};
+use cortex::tensor::module::max_pool_output_size;
 use cortex_core as cortex;
 
 use crate::PaddingConfig1d;
@@ -19,8 +22,8 @@ pub struct MaxPool1dConfig {
     pub stride: usize,
     /// The padding configuration.
     ///
-    /// Supports symmetric and asymmetric padding. `Same` padding with even kernel sizes
-    /// will automatically use asymmetric padding to preserve input dimensions.
+    /// `Same` padding produces an output length of `ceil(input_length / stride)`.
+    /// Padding may be asymmetric, with the extra element added on the right.
     #[config(default = "PaddingConfig1d::Valid")]
     pub padding: PaddingConfig1d,
     /// The dilation.
@@ -82,6 +85,32 @@ impl MaxPool1dConfig {
 }
 
 impl MaxPool1d {
+    /// The options the pool runs with, its padding resolved against `input`'s size.
+    fn options(&self, input: &Tensor<3>) -> MaxPoolOptions<1> {
+        let [_batch_size, _channels, length] = input.dims();
+        let effective_kernel = (self.kernel_size - 1) * self.dilation + 1;
+        let padding = self
+            .padding
+            .calculate_padding_1d_pair(length, effective_kernel, self.stride);
+
+        MaxPoolOptions::new([self.kernel_size])
+            .with_stride([self.stride])
+            .with_dilation([self.dilation])
+            .with_ceil_mode(self.ceil_mode)
+            .with_padding_pairs([padding])
+    }
+
+    /// None where the pool cannot size its output, which it rejects.
+    fn bounds(&self, input: &Tensor<3>) -> Option<Bounds> {
+        let options = self.options(input);
+        let output_size = max_pool_output_size(bounds::spatial(input), &options)?;
+        Some(
+            Windows::max_pool(&options)
+                .over(input, output_size)
+                .resampling(input),
+        )
+    }
+
     /// Applies the forward pass on the input tensor.
     ///
     /// See [max_pool1d](cortex::tensor::module::max_pool1d) for more information.
@@ -90,20 +119,10 @@ impl MaxPool1d {
     ///
     /// - input: `[batch_size, channels, length_in]`
     /// - output: `[batch_size, channels, length_out]`
+    #[compute(bounds = Self::bounds)]
     pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
-        let [_batch_size, _channels, length] = input.dims();
-        let padding = self
-            .padding
-            .calculate_padding_1d_pair(length, self.kernel_size, self.stride);
-
-        max_pool1d(
-            input,
-            MaxPoolOptions::new([self.kernel_size])
-                .with_stride([self.stride])
-                .with_padding_pairs([padding])
-                .with_dilation([self.dilation])
-                .with_ceil_mode(self.ceil_mode),
-        )
+        let options = self.options(&input);
+        max_pool1d(input, options)
     }
 }
 
@@ -111,6 +130,22 @@ impl MaxPool1d {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[test]
+    fn same_padding_with_dilation() {
+        let device = Default::default();
+        let input = Tensor::<3>::from_data([[[-5., -1., -4., -2., -3.]]], &device);
+        let pool = MaxPool1dConfig::new(3)
+            .with_stride(1)
+            .with_dilation(2)
+            .with_padding(PaddingConfig1d::Same)
+            .init();
+
+        let expected = Tensor::<3>::from_data([[[-4., -1., -3., -1., -3.]]], &device);
+        pool.forward(input)
+            .to_data()
+            .assert_eq(&expected.to_data(), true);
+    }
 
     #[test]
     fn same_with_even_kernel_uses_asymmetric_padding() {

@@ -4,7 +4,7 @@ categories = ["science", "no-std", "embedded", "wasm"]
 description = "Flexible and Comprehensive Deep Learning Framework in Rust"
 documentation = "https://docs.rs/burn-core"
 edition.workspace = true
-keywords = ["deep-learning", "machine-learning", "tensor", "pytorch", "ndarray"]
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch"]
 license.workspace = true
 name = "cortex-core"
 readme = "README.md"
@@ -34,8 +34,12 @@ doc = [
     "cortex-std/doc",
     "cortex-dataset/doc",
     "cortex-tensor/doc",
+    "cortex-instrument/doc",
     "dep:regex"
 ]
+# Arms the `#[compute]` annotations, so `instrument::Instrument` can measure a model built from
+# them. Off, they compile away.
+instrument = ["std", "cortex-instrument/instrument"]
 tracing = [
     "cortex-std/tracing",
     "cortex-tensor/tracing",
@@ -54,6 +58,7 @@ sqlite-bundled = ["cortex-dataset?/sqlite-bundled"]
 std = [
     "cortex-std/std",
     "cortex-pack/std",
+    "cortex-instrument/std",
     "cortex-tensor/std",
     "half/std",
     "log",
@@ -73,21 +78,29 @@ audio = ["cortex-dataset?/audio"]
 remote = ["cortex-tensor/remote"]
 remote-server = ["cortex-tensor/remote-server"]
 remote-websocket = ["cortex-tensor/remote-websocket"]
-cuda = ["cortex-tensor/cuda", "dep:cortex-cuda"]
-rocm = ["cortex-tensor/rocm", "dep:cortex-rocm"]
+cuda = ["cortex-tensor/cuda", "dep:cortex-cuda", "cortex-instrument/cubecl"]
+rocm = ["cortex-tensor/rocm", "dep:cortex-rocm", "cortex-instrument/cubecl"]
 flex = ["cortex-tensor/flex"]
-ndarray = ["cortex-tensor/ndarray"]
-tch = ["cortex-tensor/tch"]
 vulkan = ["wgpu", "cortex-tensor/vulkan", "cortex-wgpu/vulkan"]
 webgpu = ["wgpu", "cortex-tensor/webgpu", "cortex-wgpu/webgpu"]
-wgpu = ["cortex-tensor/wgpu", "dep:cortex-wgpu"]
-metal = ["wgpu", "cortex-tensor/metal", "cortex-wgpu/metal"]
-cpu = ["cortex-tensor/cpu", "dep:cortex-cpu"]
+wgpu = ["cortex-tensor/wgpu", "dep:cortex-wgpu", "cortex-instrument/cubecl"]
+wgpu-msl = ["wgpu", "cortex-tensor/wgpu-msl", "cortex-wgpu/wgpu-msl"]
+metal = ["cortex-tensor/metal", "cortex-instrument/cubecl"]
+cpu = ["cortex-tensor/cpu", "dep:cortex-cpu", "cortex-instrument/cubecl"]
 autodiff = ["cortex-tensor/autodiff"]
 capture = ["cortex-tensor/capture"]
+shard = ["cortex-tensor/shard"]
 ir = ["cortex-ir"]
 
 # Backend features
+persistence = [
+    "cortex-tensor/persistence",
+    "cortex-cpu?/persistence",
+    "cortex-cuda?/persistence",
+    "cortex-rocm?/persistence",
+    "cortex-wgpu?/persistence",
+    "cortex-cubecl?/persistence",
+]
 autotune = [
     "cortex-tensor/autotune",
     "cortex-cpu?/autotune",
@@ -105,6 +118,7 @@ autotune-checks = [
 fusion = [
     "dep:cortex-fusion",
     "cortex-tensor/fusion",
+    "cortex-instrument/fusion",
     "cortex-cpu?/fusion",
     "cortex-cuda?/fusion",
     "cortex-rocm?/fusion",
@@ -114,10 +128,6 @@ simd = ["cortex-tensor/simd"]
 rayon = ["cortex-tensor/rayon"]
 x86-v4 = ["cortex-tensor/x86-v4"]
 apple-amx = ["cortex-tensor/apple-amx"]
-accelerate = ["cortex-tensor/accelerate"]
-blas-netlib = ["cortex-tensor/blas-netlib"]
-openblas = ["cortex-tensor/openblas"]
-openblas-system = ["cortex-tensor/openblas-system"]
 template = ["cortex-tensor/template", "cortex-wgpu?/template"]
 
 # Backend extensions
@@ -136,6 +146,7 @@ extension-tests = ["extension", "fusion", "dep:cortex-cubecl", "cortex-fusion/te
 # ** Please make sure all dependencies support no_std when std is disabled **
 
 cortex-std = { workspace = true }
+cortex-instrument = { workspace = true }
 cortex-dataset = { workspace = true, optional = true }
 cortex-derive = { workspace = true }
 cortex-pack = { workspace = true, default-features = false }

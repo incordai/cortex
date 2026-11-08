@@ -12,15 +12,14 @@ members = [
 
 exclude = [
     "examples/notebook",
-    "examples/dqn-agent",         # gym-rs
-    "patches/cubecl-environment", # vendored release, see [patch.crates-io]
+    "examples/dqn-agent", # gym-rs
 ]
 
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-version = "0.22.0"
+version = "0.23.0-pre.1"
 
 [workspace.lints.clippy]
 # Temporary workaround for linting generated code:
@@ -32,7 +31,6 @@ broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
 [workspace.dependencies]
-atomic_float = "1"
 axum = "0.8.9"
 blake3 = "1.8"
 bytemuck = "1.25.2"
@@ -41,7 +39,6 @@ ciborium = { version = "0.2", default-features = false }
 clap = { version = "4.6.7", features = ["derive"] }
 colored = "3.1.1"
 console_error_panic_hook = "0.1.7"
-const-random = "0.1"
 crc32fast = "1.5.2"
 csv = "1.4.0"
 dashmap = "6.2.1"
@@ -119,9 +116,14 @@ tracing-core = { version = "0.1.36", default-features = false }
 tracing-opentelemetry = "0.34.0"
 tracing-subscriber = "0.3.23"
 turso = { version = "0.8.2", default-features = false }
+# Turso's branches 0.4 dependency uses a removed intrinsic on nightly without std.
+# Enable std for dataset SQLite builds and affected documentation builds.
+branches = { version = "0.4.6", default-features = false, features = ["std"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0.4", default-features = false, features = [
+    "deflate-flate2-zlib-rs",
+] }
 
 # Persist related
 memmap2 = { version = "0.9" }
@@ -144,20 +146,17 @@ text_placeholder = "0.5.1"
 cfg-if = "1.0.5"
 derive-new = { version = "0.7.0", default-features = false }
 
-blas-src = { version = "0.14.0", default-features = false }
 bon = "3.10.1"
 half = { version = "2.7.1", features = [
     "alloc",
     "num-traits",
     "serde",
 ], default-features = false }
-macerator = { version = "0.5.1" }
-matrixmultiply = { version = "0.3.11", default-features = false }
+macerator = { version = "0.5.2" }
 ndarray = { version = "0.17.2", default-features = false }
 num-traits = { version = "0.2.19", default-features = false, features = [
     "libm",
 ] } # libm is for no_std
-openblas-src = "0.10.16"
 rand = { version = "0.10.3", default-features = false, features = ["std_rng"] }
 rand_distr = { version = "0.6.0", default-features = false }
 serde = { version = "1.0.229", default-features = false, features = [
@@ -174,8 +173,6 @@ libc = "0.2.189"
 nvml-wrapper = "0.13.0"
 sysinfo = "0.39.6"
 systemstat = "0.2.7"
-tch = "0.22.0"
-torch-sys = "0.22.0"                                        # matches what tch is using, required for lib detection
 
 ahash = { version = "0.8.12", default-features = false }
 aligned-vec = { version = "0.6", default-features = false }
@@ -187,50 +184,52 @@ realfft = "3"
 ### Internal cortex crates ###
 # Declared here so each consumer Cargo.toml can use `workspace = true` instead of
 # repeating the path and version.
-cortex = { path = "crates/cortex", version = "0.22.0", default-features = false }
-cortex-autodiff = { path = "crates/cortex-autodiff", version = "0.22.0", default-features = false }
-cortex-backend = { path = "crates/cortex-backend", version = "0.22.0", default-features = false }
-cortex-backend-extension = { path = "crates/cortex-backend-extension", version = "0.22.0", default-features = false }
-cortex-capture = { path = "crates/cortex-capture", version = "0.22.0", default-features = false }
-cortex-communication = { path = "crates/cortex-communication", version = "0.22.0", default-features = false }
-cortex-core = { path = "crates/cortex-core", version = "0.22.0", default-features = false }
-cortex-cpu = { path = "crates/cortex-cpu", version = "0.22.0", default-features = false }
-cortex-cubecl = { path = "crates/cortex-cubecl", version = "0.22.0", default-features = false }
-cortex-cubecl-fusion = { path = "crates/cortex-cubecl-fusion", version = "0.22.0", default-features = false }
-cortex-cuda = { path = "crates/cortex-cuda", version = "0.22.0", default-features = false }
-cortex-dataset = { path = "crates/cortex-dataset", version = "0.22.0", default-features = false }
-cortex-derive = { path = "crates/cortex-derive", version = "0.22.0", default-features = false }
-cortex-dispatch = { path = "crates/cortex-dispatch", version = "0.22.0", default-features = false }
-cortex-einsum = { path = "crates/cortex-einsum", version = "0.22.0", default-features = false }
-cortex-flex = { path = "crates/cortex-flex", version = "0.22.0", default-features = false }
-cortex-fusion = { path = "crates/cortex-fusion", version = "0.22.0", default-features = false }
-cortex-ir = { path = "crates/cortex-ir", version = "0.22.0", default-features = false }
-cortex-linalg = { path = "crates/cortex-linalg", version = "0.22.0", default-features = false }
-cortex-ndarray = { path = "crates/cortex-ndarray", version = "0.22.0", default-features = false }
-cortex-nn = { path = "crates/cortex-nn", version = "0.22.0", default-features = false }
-cortex-optim = { path = "crates/cortex-optim", version = "0.22.0", default-features = false }
-cortex-pack = { path = "crates/cortex-pack", version = "0.22.0", default-features = false }
-cortex-remote = { path = "crates/cortex-remote", version = "0.22.0", default-features = false }
-cortex-rl = { path = "crates/cortex-rl", version = "0.22.0", default-features = false }
-cortex-rocm = { path = "crates/cortex-rocm", version = "0.22.0", default-features = false }
-cortex-router = { path = "crates/cortex-router", version = "0.22.0", default-features = false }
-cortex-signal = { path = "crates/cortex-signal", version = "0.22.0", default-features = false }
-cortex-std = { path = "crates/cortex-std", version = "0.22.0", default-features = false }
-cortex-store = { path = "crates/cortex-store", version = "0.22.0", default-features = false }
-cortex-tch = { path = "crates/cortex-tch", version = "0.22.0", default-features = false }
-cortex-tensor = { path = "crates/cortex-tensor", version = "0.22.0", default-features = false }
-cortex-tensor-testgen = { path = "crates/cortex-tensor-testgen", version = "0.22.0", default-features = false }
-cortex-train = { path = "crates/cortex-train", version = "0.22.0", default-features = false }
-cortex-vision = { path = "crates/cortex-vision", version = "0.22.0", default-features = false }
-cortex-wgpu = { path = "crates/cortex-wgpu", version = "0.22.0", default-features = false }
-pytorch-reader = { path = "crates/pytorch-reader", version = "0.22.0" }
+cortex = { path = "crates/cortex", version = "0.23.0-pre.1", default-features = false }
+cortex-autodiff = { path = "crates/cortex-autodiff", version = "0.23.0-pre.1", default-features = false }
+cortex-backend = { path = "crates/cortex-backend", version = "0.23.0-pre.1", default-features = false }
+cortex-backend-extension = { path = "crates/cortex-backend-extension", version = "0.23.0-pre.1", default-features = false }
+cortex-capture = { path = "crates/cortex-capture", version = "0.23.0-pre.1", default-features = false }
+cortex-communication = { path = "crates/cortex-communication", version = "0.23.0-pre.1", default-features = false }
+cortex-core = { path = "crates/cortex-core", version = "0.23.0-pre.1", default-features = false }
+cortex-cpu = { path = "crates/cortex-cpu", version = "0.23.0-pre.1", default-features = false }
+cortex-cubecl = { path = "crates/cortex-cubecl", version = "0.23.0-pre.1", default-features = false }
+cortex-cubecl-fusion = { path = "crates/cortex-cubecl-fusion", version = "0.23.0-pre.1", default-features = false }
+cortex-cuda = { path = "crates/cortex-cuda", version = "0.23.0-pre.1", default-features = false }
+cortex-dataset = { path = "crates/cortex-dataset", version = "0.23.0-pre.1", default-features = false }
+cortex-derive = { path = "crates/cortex-derive", version = "0.23.0-pre.1", default-features = false }
+cortex-dispatch = { path = "crates/cortex-dispatch", version = "0.23.0-pre.1", default-features = false }
+cortex-einsum = { path = "crates/cortex-einsum", version = "0.23.0-pre.1", default-features = false }
+cortex-flex = { path = "crates/cortex-flex", version = "0.23.0-pre.1", default-features = false }
+cortex-fusion = { path = "crates/cortex-fusion", version = "0.23.0-pre.1", default-features = false }
+cortex-shard = { path = "crates/cortex-shard", version = "0.23.0-pre.1", default-features = false }
+cortex-instrument = { path = "crates/cortex-instrument", version = "0.23.0-pre.1", default-features = false }
+cortex-instrument-report = { path = "crates/cortex-instrument-report", version = "0.23.0-pre.1", default-features = false }
+cortex-instrument-macros = { path = "crates/cortex-instrument-macros", version = "0.23.0-pre.1", default-features = false }
+cortex-ir = { path = "crates/cortex-ir", version = "0.23.0-pre.1", default-features = false }
+cortex-linalg = { path = "crates/cortex-linalg", version = "0.23.0-pre.1", default-features = false }
+cortex-nn = { path = "crates/cortex-nn", version = "0.23.0-pre.1", default-features = false }
+cortex-optim = { path = "crates/cortex-optim", version = "0.23.0-pre.1", default-features = false }
+cortex-pack = { path = "crates/cortex-pack", version = "0.23.0-pre.1", default-features = false }
+cortex-remote = { path = "crates/cortex-remote", version = "0.23.0-pre.1", default-features = false }
+cortex-rl = { path = "crates/cortex-rl", version = "0.23.0-pre.1", default-features = false }
+cortex-rocm = { path = "crates/cortex-rocm", version = "0.23.0-pre.1", default-features = false }
+cortex-router = { path = "crates/cortex-router", version = "0.23.0-pre.1", default-features = false }
+cortex-signal = { path = "crates/cortex-signal", version = "0.23.0-pre.1", default-features = false }
+cortex-std = { path = "crates/cortex-std", version = "0.23.0-pre.1", default-features = false }
+cortex-store = { path = "crates/cortex-store", version = "0.23.0-pre.1", default-features = false }
+cortex-tensor = { path = "crates/cortex-tensor", version = "0.23.0-pre.1", default-features = false }
+cortex-tensor-testgen = { path = "crates/cortex-tensor-testgen", version = "0.23.0-pre.1", default-features = false }
+cortex-train = { path = "crates/cortex-train", version = "0.23.0-pre.1", default-features = false }
+cortex-vision = { path = "crates/cortex-vision", version = "0.23.0-pre.1", default-features = false }
+cortex-wgpu = { path = "crates/cortex-wgpu", version = "0.23.0-pre.1", default-features = false }
+pytorch-reader = { path = "crates/pytorch-reader", version = "0.23.0-pre.1" }
 
 ### For the main cortex branch. ###
-# cubecl = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "eb98a977d3c509a228dfefc46c3e40bbba44ef50" }
-# cubecl-common = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "eb98a977d3c509a228dfefc46c3e40bbba44ef50" }
-# cubecl-environment = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "eb98a977d3c509a228dfefc46c3e40bbba44ef50" }
-# cubecl-zspace = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "eb98a977d3c509a228dfefc46c3e40bbba44ef50" }
-# cubek = { git = "https://github.com/tracel-ai/cubek", default-features = false, rev = "51c43a1af7eb07a904b8a13568e953d377d20bb4" }
+cubecl = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
+cubecl-common = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
+cubecl-environment = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
+cubecl-zspace = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
+cubek = { git = "https://github.com/tracel-ai/cubek", default-features = false, rev = "24ea8e9f2c3baff39fcb1db5efef1872c00e7b86" }
 ### For local development. ###
 # cubecl = { path = "../cubecl/crates/cubecl", default-features = false }
 # cubecl-common = { path = "../cubecl/crates/cubecl-common", default-features = false }
@@ -238,19 +237,14 @@ pytorch-reader = { path = "crates/pytorch-reader", version = "0.22.0" }
 # cubecl-zspace = { path = "../cubecl/crates/cubecl-zspace", default-features = false }
 # cubek = { path = "../cubek/crates/cubek", default-features = false }
 ### For the release. ###
-cubecl = { version = "0.11.0", default-features = false }
-cubecl-common = { version = "0.11.0", default-features = false }
-cubecl-environment = { version = "0.11.0", default-features = false }
-cubecl-zspace = { version = "0.11.0", default-features = false }
-cubek = { version = "0.3.0", default-features = false }
+# cubecl = { version = "0.12.0-pre.1", default-features = false }
+# cubecl-common = { version = "0.12.0-pre.1", default-features = false }
+# cubecl-environment = { version = "0.12.0-pre.1", default-features = false }
+# cubecl-zspace = { version = "0.12.0-pre.1", default-features = false }
+# cubek = { version = "0.4.0-pre.1", default-features = false }
 
-[patch.crates-io]
-# The 0.11.0 release with one change: its kernel cache opens with
-# multiprocess WAL, which turso's Windows IO backend refuses, so on Windows
-# the cache never reached disk and every process re-tuned its kernels. The
-# vendored copy opens the file single-process when refused (turso then holds
-# a cross-process lock). Drop this once an upstream release carries the fix.
-cubecl-environment = { path = "patches/cubecl-environment" }
+# cubecl at cubecl dev (the flip pin plus cubecl#2025's tiled metadata), until cubek pins a
+# cubecl holding #2025. The host differs from the pin's so cargo takes it as a patch.
 
 [profile.dev]
 debug = 1 # Speed up compilation time and not necessary.

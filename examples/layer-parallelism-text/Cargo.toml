@@ -1,0 +1,25 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "layer-parallelism-text"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["flex", "cpu"]
+flex = ["cortex/flex"]
+cpu = ["cortex/cpu"]
+cuda = ["cortex/cuda"]
+rocm = ["cortex/rocm"]
+# As in cortex, the portable runtimes imply wgpu, which is what gates device enumeration.
+wgpu = ["cortex/wgpu"]
+vulkan = ["wgpu", "cortex/vulkan"]
+metal = ["wgpu", "cortex/metal"]
+webgpu = ["wgpu", "cortex/webgpu"]
+
+[dependencies]
+cortex = { workspace = true, features = ["std", "optim", "store", "dataset"] }
+text-classification = { path = "../text-classification" }

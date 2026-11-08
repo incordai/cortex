@@ -1,55 +1,23 @@
-use std::sync::Arc;
-
 use crate::{
     FusionBackend, FusionRuntime, UnfusedOp,
     stream::{MultiStream, ReadPlan, StreamId},
 };
 use cortex_backend::{TensorData, backend::ExecutionError};
 use cortex_ir::{HandleContainer, OperationIr, TensorError, TensorId, TensorIr, TensorStatus};
-use cortex_std::{CommunicationId, sync::RwLock};
-use hashbrown::HashSet;
-
-/// The failure a read found, as the error a read reports.
-///
-/// [`TensorError`] is how the failure is carried while it claims a tensor;
-/// [`ExecutionError`] is how a caller receives it.
-///
-/// At depth zero this tensor is an output of the work that actually failed,
-/// so the caller gets that error itself — its variant and its backtrace
-/// intact, rather than a rendering of it. Below a skip there is a second
-/// fact to report, how far down the chain this tensor sits, and no error of
-/// its own to lose: `Display` names both.
-fn execution_error(error: TensorError) -> ExecutionError {
-    match error.depth() {
-        0 => error.cause().clone(),
-        _ if error.cause().is_device_poisoned() => {
-            ExecutionError::device_poisoned(format!("{error}"))
-        }
-        _ => ExecutionError::with_context(format!("{error}")),
-    }
-}
-
-pub(crate) struct FusionUtilities {
-    // Used in client using a downcast.
-    #[allow(dead_code)]
-    pub(crate) initialized_comms: RwLock<HashSet<CommunicationId>>,
-}
 
 pub struct FusionServer<R: FusionRuntime> {
     streams: MultiStream<R>,
     pub(crate) handles: HandleContainer<R::FusionHandle>,
-    pub(crate) utilities: Arc<FusionUtilities>,
 }
 
 impl<R> FusionServer<R>
 where
     R: FusionRuntime,
 {
-    pub fn new(device: R::FusionDevice, utilities: FusionUtilities) -> Self {
+    pub fn new(device: R::FusionDevice) -> Self {
         Self {
             streams: MultiStream::new(device.clone()),
             handles: HandleContainer::new(),
-            utilities: Arc::new(utilities),
         }
     }
 
@@ -202,7 +170,7 @@ where
         async move {
             match read {
                 Ok(data) => data.await,
-                Err(error) => Err(execution_error(error)),
+                Err(error) => Err(error.into()),
             }
         }
     }
@@ -223,7 +191,7 @@ where
         async move {
             match read {
                 Ok(data) => data.await,
-                Err(error) => Err(execution_error(error)),
+                Err(error) => Err(error.into()),
             }
         }
     }
@@ -244,7 +212,7 @@ where
         async move {
             match read {
                 Ok(data) => data.await,
-                Err(error) => Err(execution_error(error)),
+                Err(error) => Err(error.into()),
             }
         }
     }
@@ -265,29 +233,43 @@ where
         async move {
             match read {
                 Ok(data) => data.await,
-                Err(error) => Err(execution_error(error)),
+                Err(error) => Err(error.into()),
             }
         }
     }
 
-    pub fn resolve_server_float<B>(&mut self, tensor: &TensorIr) -> B::FloatTensorPrimitive
+    pub fn resolve_server_float<B>(
+        &mut self,
+        tensor: TensorIr,
+        id: StreamId,
+    ) -> Result<B::FloatTensorPrimitive, ExecutionError>
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.handles.get_float_tensor::<B>(tensor)
+        self.read_float::<B>(tensor, id)
+            .map_err(ExecutionError::from)
     }
 
-    pub fn resolve_server_int<B>(&mut self, tensor: &TensorIr) -> B::IntTensorPrimitive
+    pub fn resolve_server_int<B>(
+        &mut self,
+        tensor: TensorIr,
+        id: StreamId,
+    ) -> Result<B::IntTensorPrimitive, ExecutionError>
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.handles.get_int_tensor::<B>(tensor)
+        self.read_int::<B>(tensor, id).map_err(ExecutionError::from)
     }
 
-    pub fn resolve_server_bool<B>(&mut self, tensor: &TensorIr) -> B::BoolTensorPrimitive
+    pub fn resolve_server_bool<B>(
+        &mut self,
+        tensor: TensorIr,
+        id: StreamId,
+    ) -> Result<B::BoolTensorPrimitive, ExecutionError>
     where
         B: FusionBackend<FusionRuntime = R>,
     {
-        self.handles.get_bool_tensor::<B>(tensor)
+        self.read_bool::<B>(tensor, id)
+            .map_err(ExecutionError::from)
     }
 }

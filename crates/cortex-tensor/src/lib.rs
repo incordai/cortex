@@ -24,8 +24,8 @@
 //!   backend.
 //! - [`activation`], [`loss`] and [`module`]: functional forms of activations, losses and neural
 //!   network operations such as convolution and pooling.
-//! - [`quantization`], [`grid`] and [`distributed`]: quantized tensors, grid sampling and
-//!   collective operations across devices.
+//! - [`quantization`], [`grid`] and [`distributed`]: quantized tensors, grid sampling and the
+//!   configuration of gradient synchronization across devices.
 //! - `einsum!`, `assert_shape!` and [`s!`]: macros for Einstein summation, shape checks and
 //!   slicing.
 //!
@@ -35,8 +35,7 @@
 //! # Feature flags
 //!
 //! - `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
-//! - Backends: `cuda`, `rocm`, `wgpu`, `metal`, `vulkan`, `webgpu`, `cpu`, `flex`, and the
-//!   deprecated `ndarray` and `tch`.
+//! - Backends: `cuda`, `rocm`, `wgpu`, `metal`, `vulkan`, `webgpu`, `cpu`, and `flex`.
 //! - `autodiff`, `fusion`: backend decorators.
 //! - `remote`, `remote-server`, `remote-websocket`: devices hosted by another machine.
 //! - `capture`: record operation graphs instead of executing them.
@@ -89,7 +88,9 @@ pub use cortex_derive::{__assert_shape, __debug_assert_shape, __einsum};
 #[cfg(feature = "autodiff")]
 pub use cortex_dispatch::GradientCheckpointingStrategy;
 pub use cortex_std::{
-    AllocationProperty, Bytes, bf16, f16, flex32,
+    AllocationProperty, Bytes, bf16,
+    distributed::{Sharding, ShardingError, Shards, ShardsError},
+    f16, flex32,
     reader::{read_sync, try_read_sync},
     stream::StreamId,
 };
@@ -97,9 +98,18 @@ pub use cortex_std::{
 mod device;
 pub use device::*;
 
+mod execution;
+pub use execution::*;
+
+mod environment;
+pub use environment::*;
+
 /// Configure a wgpu runtime or share an application's existing wgpu setup.
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
+
+#[cfg(feature = "shard")]
+pub mod shard;
 
 #[cfg(feature = "remote")]
 pub mod remote;

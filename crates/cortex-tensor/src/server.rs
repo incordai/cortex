@@ -32,13 +32,13 @@ pub use cortex_dispatch::__remote::{
 };
 use cortex_dispatch::__remote::{ir::BackendIr, server::ServerSettings};
 
-use crate::Device;
+use crate::{Device, remote::DeviceQueryId};
 use telemetry::TelemetryProbe;
 
 /// A server running tensor operations on its devices for remote clients.
 ///
 /// The devices pick the backend, and must all belong to one: every CubeCL runtime is one backend,
-/// so CUDA and wgpu devices can be served together, but not with Flex or NdArray ones. Autodiff is
+/// so CUDA and wgpu devices can be served together, but not with Flex ones. Autodiff is
 /// stripped, since the autodiff graph is the client's.
 #[derive(Clone)]
 pub struct RemoteServer {
@@ -75,6 +75,25 @@ impl RemoteServer {
         F: Fn(&mut HandleContainer<B::Handle>, &CustomOpIr, &B::Device) + Send + Sync + 'static,
     {
         self.settings = self.settings.with_custom_op::<B, F>(id, handler);
+        self
+    }
+
+    /// Answer the device query `id` with `handler`, run on the device of the session that asks,
+    /// on backend `B`, which must be the devices' backend. A client asks it with
+    /// `RemoteDevice::query`. Registering an id again replaces its handler.
+    ///
+    /// The handler holds up the asking session's work while it runs. A panic is that query's
+    /// error and the session goes on serving, but every session shares the handler: a panic while
+    /// it holds a `Mutex` of its own poisons that `Mutex` for all of them.
+    pub fn with_device_query<B: BackendIr, F>(
+        mut self,
+        id: impl Into<DeviceQueryId>,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(&B::Device) -> Vec<u8> + Send + Sync + 'static,
+    {
+        self.settings = self.settings.with_device_query::<B, F>(id.into(), handler);
         self
     }
 

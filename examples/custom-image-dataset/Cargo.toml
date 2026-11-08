@@ -12,7 +12,6 @@ workspace = true
 
 [features]
 default = ["cortex/std", "cortex/tui"]
-tch-gpu = ["cortex/tch"]
 wgpu = ["cortex/wgpu"]
 metal = ["cortex/metal"]
 vulkan = ["cortex/vulkan"]

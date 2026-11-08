@@ -12,8 +12,6 @@ workspace = true
 [features]
 default = ["cortex/default", "cortex/tui"]
 flex = ["cortex/flex"]
-tch-cpu = ["cortex/tch"]
-tch-gpu = ["cortex/tch"]
 wgpu = ["cortex/wgpu"]
 metal = ["cortex/metal"]
 cuda = ["cortex/cuda"]

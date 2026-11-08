@@ -29,10 +29,10 @@ rocm = ["cubecl-backend", "cortex-core/rocm"]
 wgpu = ["cubecl-backend", "cortex-core/wgpu"]
 vulkan = ["cubecl-backend", "cortex-core/vulkan"]
 webgpu = ["cubecl-backend", "cortex-core/webgpu"]
+wgpu-msl = ["cubecl-backend", "cortex-core/wgpu-msl"]
 metal = ["cubecl-backend", "cortex-core/metal"]
 cpu = ["cubecl-backend", "cortex-core/cpu"]
 flex = ["cortex-core/flex", "cortex-flex"]
-tch = ["cortex-core/tch", "cortex-tch", "dep:tch"]
 remote-websocket = ["remote", "cortex-core/remote-websocket"]
 # Enable the remote transport integration test and its server dependencies.
 remote-tests = ["autodiff", "remote-websocket", "cortex-remote/server", "cortex-remote/websocket", "dep:tokio"]
@@ -49,11 +49,12 @@ cortex-router = { workspace = true, optional = true, default-features = false }
 cortex-std = { workspace = true }
 cortex-autodiff = { workspace = true, optional = true }
 cortex-flex = { workspace = true, optional = true, features = ["fft"] }
-cortex-tch = { workspace = true, optional = true }
-tch = { workspace = true, optional = true }
 
 cortex-remote = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt-multi-thread"] }
+
+# `sin`/`cos` for the Bluestein chirp sequence in no_std builds.
+libm = { workspace = true }
 
 [dev-dependencies]
 divan = "0.1"

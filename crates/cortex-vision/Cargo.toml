@@ -52,10 +52,10 @@ rocm = ["cubecl-backend", "cortex-core/rocm", "cortex-cubecl/hip"]
 wgpu = ["cubecl-backend", "cortex-core/wgpu", "cortex-cubecl/wgpu"]
 vulkan = ["cubecl-backend", "cortex-core/vulkan", "cortex-cubecl/vulkan"]
 webgpu = ["cubecl-backend", "cortex-core/webgpu", "cortex-cubecl/webgpu"]
+wgpu-msl = ["cubecl-backend", "cortex-core/wgpu-msl", "cortex-cubecl/wgpu-msl"]
 metal = ["cubecl-backend", "cortex-core/metal", "cortex-cubecl/metal"]
 cpu = ["cubecl-backend", "cortex-core/cpu", "cortex-cubecl/cpu"]
 flex = ["cortex-core/flex"]
-tch = ["cortex-core/tch"]
 
 # TODO: move somewhere else
 loss = ["std", "dep:cortex-nn", "cortex-store/pytorch", "cortex-std/network", "dirs"]

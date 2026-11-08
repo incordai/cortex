@@ -1,6 +1,3 @@
-// The LibTorch bench group exists to compare against the deprecated backend.
-#![cfg_attr(feature = "tch", allow(deprecated))]
-
 //! Unified benchmark comparing all saving methods:
 //! - CortexpackStore (streaming cortexpack writer)
 //! - ModuleRecord (the record API, writing the same cortexpack format)
@@ -79,9 +76,7 @@ fn main() {
             println!("  - WGPU (GPU)");
             #[cfg(feature = "cuda")]
             println!("  - CUDA (NVIDIA GPU)");
-            #[cfg(feature = "tch")]
-            println!("  - LibTorch");
-            #[cfg(feature = "metal")]
+            #[cfg(feature = "wgpu-msl")]
             println!("  - Metal (Apple GPU)");
             println!();
 
@@ -165,10 +160,7 @@ bench_backend!(
     "CUDA Backend (NVIDIA GPU)"
 );
 
-#[cfg(feature = "tch")]
-bench_backend!(Device::libtorch(), tch_backend, "LibTorch Backend");
-
-#[cfg(feature = "metal")]
+#[cfg(feature = "wgpu-msl")]
 bench_backend!(
     Device::wgpu(Default::default()),
     metal_backend,

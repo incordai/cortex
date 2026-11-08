@@ -27,6 +27,7 @@ tracing = [
 ]
 
 fusion = ["cortex-fusion", "cortex-cubecl/fusion"]
+persistence = ["cortex-cubecl/persistence"]
 autotune = ["cortex-cubecl/autotune"]
 autotune-checks = ["cortex-cubecl/autotune-checks"]
 
@@ -34,7 +35,7 @@ exclusive-memory-only = ["cubecl/exclusive-memory-only"]
 template = ["cortex-cubecl/template", "cubecl/template"]
 
 # Backends
-metal = ["cubecl/metal", "cortex-backend/cubecl-metal"]
+wgpu-msl = ["cubecl/wgpu-msl", "cortex-backend/cubecl-wgpu-msl"]
 vulkan = ["cubecl/vulkan", "cortex-backend/cubecl-vulkan"]
 webgpu = ["cubecl/webgpu", "cortex-backend/cubecl-webgpu"]
 

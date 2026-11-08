@@ -40,29 +40,6 @@ mod flex {
     }
 }
 
-#[cfg(feature = "tch-gpu")]
-mod tch_gpu {
-    use cortex::tensor::{Device, DeviceIndex};
-
-    pub fn run() {
-        #[cfg(not(target_os = "macos"))]
-        let device = Device::libtorch_cuda(DeviceIndex::Default);
-        #[cfg(target_os = "macos")]
-        let device = Device::libtorch_mps();
-
-        crate::launch(device);
-    }
-}
-
-#[cfg(feature = "tch-cpu")]
-mod tch_cpu {
-    use cortex::tensor::Device;
-
-    pub fn run() {
-        crate::launch(Device::libtorch());
-    }
-}
-
 #[cfg(feature = "wgpu")]
 mod wgpu {
     use cortex::tensor::{Device, DeviceKind};
@@ -93,10 +70,6 @@ mod cuda {
 fn main() {
     #[cfg(feature = "flex")]
     flex::run();
-    #[cfg(feature = "tch-gpu")]
-    tch_gpu::run();
-    #[cfg(feature = "tch-cpu")]
-    tch_cpu::run();
     #[cfg(feature = "wgpu")]
     wgpu::run();
     #[cfg(feature = "metal")]

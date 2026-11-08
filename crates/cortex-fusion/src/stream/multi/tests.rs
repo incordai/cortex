@@ -7,16 +7,23 @@
 
 use super::*;
 use crate::{
-    FuserProperties, FuserStatus, NumOperations, OperationFuser, OperationRan, Optimization,
-    UnfusedOp,
+    Client, FuserProperties, FuserStatus, FusionTensor, NumOperations, OperationFuser,
+    OperationRan, Optimization, UnfusedOp,
     server::FusionServer,
     stream::{Context, Operation, OrderedExecution},
 };
 use cortex_backend::{
     DType, DeviceId, DeviceOps, DeviceService, DeviceSettings, ExecutionError, Shape,
 };
-use cortex_ir::{FloatOperationIr, TensorError, TensorIr, TensorStatus, UnaryOpIr};
+use cortex_ir::{
+    BinaryOpIr, FloatOperationIr, NumericOperationIr, TensorError, TensorIr, TensorStatus,
+    UnaryOpIr,
+};
 use cortex_std::{BoolDType, FloatDType, IntDType, device::Device};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 
 #[derive(Debug)]
 struct TestRuntime;
@@ -867,6 +874,121 @@ fn foreign_drop_of_unreferenced_tensor_frees_immediately() {
     assert!(!stale, "the stale variables entry is cleaned up");
 }
 
+/// Records whether its input was there when it ran.
+#[derive(Debug)]
+struct SeeInputOp {
+    input: TensorId,
+    seen: Arc<AtomicBool>,
+}
+
+impl Operation<TestRuntime> for SeeInputOp {
+    fn execute(&self, handles: &mut HandleContainer<TestHandle>) -> Result<(), ExecutionError> {
+        self.seen
+            .store(handles.has_handle(&self.input), Ordering::Relaxed);
+
+        Ok(())
+    }
+}
+
+/// An operation reading a tensor through one clone still finds it when it runs, the other clone
+/// dropped by `drop_elsewhere` between the operation taking its input and its submission, and the
+/// tensor is freed once the operation has read it.
+fn assert_a_read_outlives_a_clone_dropped_elsewhere(
+    drop_elsewhere: impl FnOnce(FusionTensor<TestRuntime>) + Send + 'static,
+) {
+    let client = Client::<TestRuntime>::new(TestDevice::default());
+    let stream = StreamId::current();
+    let id = client.register_tensor_handle(TestHandle);
+    let tensor = FusionTensor::new(id, Shape::new([32, 32]), DType::F32, client.clone(), stream);
+    let elsewhere = tensor.clone();
+
+    let input = tensor.into_ir();
+    std::thread::spawn(move || drop_elsewhere(elsewhere))
+        .join()
+        .expect("the clone was dropped");
+
+    let seen = Arc::new(AtomicBool::new(false));
+    let out = client.create_empty_handle();
+    let outputs = client.register(
+        stream,
+        OperationIr::Float(
+            DType::F32,
+            FloatOperationIr::Exp(UnaryOpIr {
+                input,
+                out: tensor_ir(out, TensorStatus::NotInit),
+            }),
+        ),
+        SeeInputOp {
+            input: id,
+            seen: seen.clone(),
+        },
+    );
+    client.sync(|| ());
+    drop(outputs);
+    assert!(seen.load(Ordering::Relaxed), "the read found its input");
+
+    let found_after = Arc::new(AtomicBool::new(true));
+    let out = client.create_empty_handle();
+    let outputs = client.register(
+        stream,
+        exp_op(id, out),
+        SeeInputOp {
+            input: id,
+            seen: found_after.clone(),
+        },
+    );
+    client.sync(|| ());
+    drop(outputs);
+    assert!(
+        !found_after.load(Ordering::Relaxed),
+        "the last clone's release freed the tensor"
+    );
+}
+
+#[test]
+fn a_clone_dropped_on_another_thread_leaves_the_tensor_to_its_pending_read() {
+    assert_a_read_outlives_a_clone_dropped_elsewhere(drop);
+}
+
+/// Dropped under the tensor's own stream, the clone queues a drop rather than freeing outright.
+#[test]
+fn a_clone_dropped_on_its_stream_from_another_thread_leaves_the_tensor_to_its_pending_read() {
+    let stream = StreamId::current();
+    assert_a_read_outlives_a_clone_dropped_elsewhere(move |clone| stream.executes(|| drop(clone)));
+}
+
+/// Holding an operation's first read of a tensor changes nothing it decides: read through two
+/// clones, the tensor is still consumed at the second.
+#[test]
+fn an_operation_reading_a_tensor_twice_consumes_it_at_its_last_clone() {
+    let client = Client::<TestRuntime>::new(TestDevice::default());
+    let stream = StreamId::current();
+    let id = client.register_tensor_handle(TestHandle);
+    let tensor = FusionTensor::new(id, Shape::new([32, 32]), DType::F32, client.clone(), stream);
+
+    let lhs = tensor.clone().into_ir();
+    let rhs = tensor.into_ir();
+    assert_eq!(
+        [lhs.status, rhs.status],
+        [TensorStatus::ReadOnly, TensorStatus::ReadWrite]
+    );
+
+    let out = client.create_empty_handle();
+    client.register(
+        stream,
+        OperationIr::NumericFloat(
+            DType::F32,
+            NumericOperationIr::Add(BinaryOpIr {
+                lhs,
+                rhs,
+                out: tensor_ir(out, TensorStatus::NotInit),
+            }),
+        ),
+        ProduceOp { out },
+    );
+    client.sync(|| ());
+}
+
 /// The error a failure leaves is what a read of the tensor reports. The
 /// stream itself is not poisoned: the queue is intact, the drain returns
 /// normally, and only the data the failure was going to write is gone.
@@ -918,6 +1040,57 @@ fn a_failing_operation_errors_the_tensor_it_was_going_to_write() {
         !setup.handles.has_errors(),
         "the failure is released with the tensor the read consumed"
     );
+}
+
+/// An operation whose input a failure claims does not run, but its
+/// `skipped` does, once: an operation other devices wait on joins them there.
+#[test]
+fn an_operation_skipped_over_a_failed_input_hears_that_it_was() {
+    let mut setup = TestSetup::new();
+    let (t0, t1, t2) = (TensorId::new(0), TensorId::new(1), TensorId::new(2));
+    let skipped = Arc::new(AtomicUsize::new(0));
+
+    setup.handles.register_handle(t0, TestHandle);
+    setup.streams.register(
+        setup.id,
+        exp_op(t0, t1),
+        UnfusedOp::new(PanicOp, setup.id),
+        &mut setup.handles,
+    );
+    setup.streams.register(
+        setup.id,
+        exp_op(t1, t2),
+        UnfusedOp::new(
+            SkipCountingOp {
+                skipped: skipped.clone(),
+            },
+            setup.id,
+        ),
+        &mut setup.handles,
+    );
+    setup.streams.drain(&mut setup.handles, setup.id);
+
+    assert_eq!(skipped.load(Ordering::Relaxed), 1);
+    assert!(
+        setup.handles.error(&t2).is_some(),
+        "its output still carries the failure"
+    );
+}
+
+/// Counts its [`skipped`](Operation::skipped) calls, and fails if it runs.
+#[derive(Debug)]
+struct SkipCountingOp {
+    skipped: Arc<AtomicUsize>,
+}
+
+impl Operation<TestRuntime> for SkipCountingOp {
+    fn execute(&self, _handles: &mut HandleContainer<TestHandle>) -> Result<(), ExecutionError> {
+        panic!("an operation over a failed input must not run");
+    }
+
+    fn skipped(&self) {
+        self.skipped.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// A read that does not consume the tensor leaves the failure in place:

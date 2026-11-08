@@ -23,8 +23,6 @@ default = [
     "cortex-autodiff?/default",
     "cortex-cubecl?/default",
     "cortex-flex?/default",
-    "cortex-ndarray?/default",
-    "cortex-tch?/default",
 ]
 doc = ["default", "flex"]
 std = [
@@ -32,61 +30,56 @@ std = [
     "cortex-autodiff?/std",
     "cortex-cubecl?/std",
     "cortex-flex?/std",
-    "cortex-ndarray?/std",
-    "cortex-tch?/std",
 ]
 tracing = [
     "cortex-autodiff?/tracing",
     "cortex-cubecl?/tracing",
     "cortex-flex?/tracing",
-    "cortex-ndarray?/tracing",
-    "cortex-tch?/tracing",
 ]
 
 # Enables cubecl-facing APIs (e.g. throughput measurement) on cubecl-backed devices.
-cubecl = ["dep:cortex-cubecl", "cortex-backend/cubecl"]
+cubecl = ["cortex-backend/cubecl"]
 
 # Backends
 cuda = ["cubecl", "cortex-cubecl/cuda"]
 flex = ["dep:cortex-flex"]
 rocm = ["cubecl", "cortex-cubecl/hip"]
-ndarray = ["cortex-ndarray"]
-tch = ["cortex-tch"]
 vulkan = ["wgpu", "cortex-cubecl/vulkan"]
 webgpu = ["wgpu", "cortex-cubecl/webgpu"]
-metal = ["wgpu", "cortex-cubecl/metal"]
+wgpu-msl = ["wgpu", "cortex-cubecl/wgpu-msl"]
+metal = ["cubecl", "cortex-cubecl/metal"]
 wgpu = ["cubecl", "cortex-cubecl/wgpu"]
 cpu = ["cubecl", "cortex-cubecl/cpu"]
 autodiff = ["cortex-autodiff"]
 # Remote compute client over Iroh.
-remote = ["std", "cortex-remote", "cortex-remote/iroh"]
+remote = ["std", "cortex-remote", "cortex-remote/iroh", "cortex-router", "dep:rmp-serde"]
 # Host a remote compute server over Iroh.
 remote-server = ["remote", "cortex-remote/server"]
 # Add the legacy WebSocket transport.
 remote-websocket = ["remote", "cortex-remote/websocket"]
 capture = ["cortex-capture"]
+# Experimental: tensors split over several devices.
+shard = ["std", "cortex-shard", "cortex-router", "cortex-ir"]
 
 # Backend features
+persistence = ["cortex-cubecl?/persistence"]
 autotune = ["cortex-cubecl?/autotune"]
 autotune-checks = ["cortex-cubecl?/autotune-checks"]
 fusion = [
     "cortex-cubecl?/fusion",
     "cortex-remote?/fusion",
+    # The router client `#[backend_extension]` generates for a sharded compute device needs it.
+    "cortex-router?/fusion",
 ]
 
 # CPU backend codegen and threading; these do not select a backend.
-simd = ["cortex-flex?/simd", "cortex-ndarray?/simd"]
-rayon = ["cortex-flex?/rayon", "cortex-ndarray?/multi-threads"]
+simd = ["cortex-flex?/simd"]
+rayon = ["cortex-flex?/rayon"]
 
 # Opt-in gemm codegen paths (cortex-flex).
 x86-v4 = ["cortex-flex?/x86-v4"]
 apple-amx = ["cortex-flex?/apple-amx"]
 
-# BLAS providers (cortex-ndarray).
-accelerate = ["cortex-ndarray?/blas-accelerate"]
-blas-netlib = ["cortex-ndarray?/blas-netlib"]
-openblas = ["cortex-ndarray?/blas-openblas"]
-openblas-system = ["cortex-ndarray?/blas-openblas-system"]
 
 template = ["cortex-cubecl?/template"]
 
@@ -99,11 +92,16 @@ cortex-autodiff = { workspace = true, optional = true }
 # The one backend shared by every CubeCL runtime.
 cortex-cubecl = { workspace = true, optional = true }
 cortex-flex = { workspace = true, optional = true }
-cortex-ndarray = { workspace = true, optional = true }
-cortex-tch = { workspace = true, optional = true }
 
 cortex-remote = { workspace = true, optional = true, features = ["client"] }
+# Encodes a device's cubecl capabilities for the device query a server answers them with.
+rmp-serde = { workspace = true, optional = true }
 cortex-capture = { workspace = true, optional = true }
+cortex-shard = { workspace = true, optional = true }
+# The member handles a sharded compute device takes its shards as.
+cortex-ir = { workspace = true, optional = true }
+# The router types the client `#[backend_extension]` generates for remote and shard builds on.
+cortex-router = { workspace = true, optional = true, features = ["std"] }
 
 # Op macros with `.as_$inner_kind()`
 paste = { workspace = true }

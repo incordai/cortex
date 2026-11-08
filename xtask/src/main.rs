@@ -22,7 +22,6 @@ const NO_STD_CRATES: &[&str] = &[
     "cortex-backend",
     "cortex-capture",
     "cortex-tensor",
-    "cortex-ndarray",
     "cortex-no-std-tests",
 ];
 

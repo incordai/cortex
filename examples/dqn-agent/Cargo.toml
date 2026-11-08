@@ -11,13 +11,11 @@
 [package]
 name = "dqn-agent"
 edition = "2024"
-version = "0.22.0"
+version = "0.23.0-pre.1"
 publish = false
 
 [features]
 default = ["cortex/default", "cortex/tui"]
-tch-cpu = ["cortex/tch"]
-tch-gpu = ["cortex/tch"]
 wgpu = ["cortex/wgpu"]
 metal = ["cortex/metal"]
 cuda = ["cortex/cuda"]
@@ -26,7 +24,7 @@ rocm = ["cortex/rocm"]
 
 [dependencies]
 # Disable autotune default for now.
-cortex = { path = "../../crates/cortex", version = "0.22.0", default-features = false, features = [
+cortex = { path = "../../crates/cortex", version = "0.23.0-pre.1", default-features = false, features = [
     "train",
     "metrics",
     "std",

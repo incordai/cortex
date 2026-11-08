@@ -3,6 +3,8 @@ use super::args::{
 };
 #[cfg(feature = "autotune")]
 use super::tune::fused_reduce_autotune;
+#[cfg(feature = "autotune")]
+use crate::tune::TunedTrace;
 use crate::{
     CubeFusionHandle, FallbackOperation,
     engine::{
@@ -107,6 +109,13 @@ impl Clone for ReduceOptimizationTuneArg {
             info: self.info.clone(),
             fallback: self.fallback.clone(),
         }
+    }
+}
+
+#[cfg(feature = "autotune")]
+impl TunedTrace for ReduceOptimizationTuneArg {
+    fn trace(&self) -> &FuseTrace {
+        &self.info.trace
     }
 }
 

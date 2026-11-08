@@ -1,8 +1,10 @@
 use crate::Initializer;
+use crate::modules::bounds;
 use cortex_core as cortex;
 
 use crate::norm::group_norm;
 use cortex::config::Config;
+use cortex::instrument::{self, Bounds, compute};
 use cortex::module::{Content, DisplaySettings, ModuleDisplay};
 use cortex::module::{Module, Param};
 use cortex::tensor::{Device, Tensor, assert_shape};
@@ -79,6 +81,18 @@ impl InstanceNormConfig {
 }
 
 impl InstanceNorm {
+    /// The floor for a normalization alone: read the input and the parameters once, write the
+    /// output once. The statistics are a pass over the same bytes, so no arithmetic is declared.
+    fn bounds<const D: usize>(&self, input: &Tensor<D>) -> Bounds {
+        Bounds {
+            read: instrument::tensor_bytes(input)
+                + bounds::optional_parameter(&self.gamma)
+                + bounds::optional_parameter(&self.beta),
+            write: instrument::tensor_bytes(input),
+            flops: 0,
+        }
+    }
+
     /// Applies the forward pass on the input tensor.
     ///
     /// See also [InstanceNormConfig](InstanceNormConfig) for more information.
@@ -91,6 +105,7 @@ impl InstanceNorm {
     /// # Panics
     ///
     /// Panics if the input has rank < 2 or its second axis is not `num_channels`.
+    #[compute(bounds = Self::bounds)]
     pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
         assert_shape!(input, [_, self.num_channels, ..]);
 

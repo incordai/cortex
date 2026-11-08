@@ -104,10 +104,9 @@ pub(crate) fn check_backend_features() -> anyhow::Result<()> {
             &[
                 "cortex-flex",
                 "cortex-cubecl",
-                "cortex-ndarray",
-                "cortex-tch",
                 "cortex-remote",
                 "cortex-capture",
+                "cortex-shard",
             ][..],
         ),
         ("wgpu,signal,linalg,vision", &["cortex-flex"][..]),

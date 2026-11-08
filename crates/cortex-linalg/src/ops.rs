@@ -9,13 +9,12 @@ use cortex_std::reader::try_read_sync;
         feature = "wgpu",
         feature = "webgpu",
         feature = "vulkan",
+        feature = "wgpu-msl",
         feature = "metal",
         feature = "cuda",
         feature = "rocm",
         feature = "cpu"
     )),
-    NdArray: cfg(feature = "ndarray"),
-    LibTorch: cfg(feature = "tch"),
     Remote: cfg(feature = "remote"),
     Capture: cfg(feature = "capture"),
 )]
@@ -54,10 +53,6 @@ macro_rules! impl_linalg_ops {
 impl_linalg_ops!(cortex_core::backend::Flex);
 #[cfg(feature = "cubecl-backend")]
 impl LinalgOps for cortex_cubecl::CubeBackend {}
-#[cfg(feature = "ndarray")]
-impl_linalg_ops!(cortex_core::backend::NdArray);
-#[cfg(feature = "tch")]
-impl_linalg_ops!(cortex_core::backend::LibTorch);
 #[cfg(feature = "router")]
 impl<C: cortex_router::RouterChannel> LinalgOps for cortex_router::BackendRouter<C> {}
 

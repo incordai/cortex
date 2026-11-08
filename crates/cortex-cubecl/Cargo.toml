@@ -1,4 +1,5 @@
 [package]
+workspace = "../.."
 authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
 categories = ["science"]
 description = "Generic backend that can be compiled just-in-time to any shader language target"
@@ -30,7 +31,7 @@ std = [
     "cortex-fusion?/std",
     "cortex-cubecl-fusion?/std",
 ]
-doc = ["default", "wgpu", "fft"]
+doc = ["default", "wgpu", "fft", "dep:branches"]
 # Native FFT kernels, enabled by cortex-signal.
 fft = ["cubek/fft"]
 
@@ -43,7 +44,8 @@ cuda = ["cubecl/cuda", "cortex-backend/cubecl-cuda"]
 hip = ["cubecl/hip", "cortex-backend/cubecl-hip"]
 cpu = ["cubecl/cpu", "cortex-backend/cubecl-cpu"]
 wgpu = ["cubecl/wgpu", "cortex-backend/cubecl-wgpu"]
-metal = ["wgpu", "cubecl/metal", "cortex-backend/cubecl-metal"]
+wgpu-msl = ["wgpu", "cubecl/wgpu-msl", "cortex-backend/cubecl-wgpu-msl"]
+metal = ["cubecl/metal", "cortex-backend/cubecl-metal"]
 vulkan = ["wgpu", "cubecl/vulkan", "cortex-backend/cubecl-vulkan"]
 webgpu = ["wgpu", "cubecl/webgpu", "cortex-backend/cubecl-webgpu"]
 
@@ -56,12 +58,16 @@ tracing = [
     "cortex-cubecl-fusion?/tracing",
 ]
 
+# Compile persistent caches; runtime configuration controls which caches are used.
+persistence = ["cubecl/persistence"]
 autotune = ["cortex-cubecl-fusion?/autotune"]
 autotune-checks = [
     "autotune",
     "cubecl/autotune-checks",
+    "cubek/autotune-checks",
     "cortex-cubecl-fusion?/autotune-checks",
 ]
+
 
 fusion = ["cortex-fusion", "cortex-cubecl-fusion"]
 fusion-experimental = ["fusion"]
@@ -70,6 +76,7 @@ template = []
 
 
 [dependencies]
+branches = { workspace = true, optional = true }
 cortex-cubecl-fusion = { workspace = true, optional = true }
 cortex-fusion = { workspace = true, optional = true }
 cortex-ir = { workspace = true }
@@ -82,9 +89,11 @@ cortex-backend = { workspace = true, features = [
 cubecl = { workspace = true, features = ["stdlib"] }
 cubek = { workspace = true, features = [
     "attention",
+    "attention-tiled",
+    "attention-backward",
     "matmul",
-    "matmul-multi-level",
     "matmul-tiled",
+    "microkernel",
     "convolution",
     "interpolate",
     "pool",

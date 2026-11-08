@@ -82,7 +82,8 @@
 //! | CUDA                    | `cuda`   | `Device::cuda(0)`                    |
 //! | ROCm                    | `rocm`   | `Device::rocm(0)`                    |
 //! | wgpu (any graphics API) | `wgpu`   | `Device::wgpu(Default::default())`   |
-//! | Metal                   | `metal`  | `Device::metal(Default::default())`  |
+//! | Metal                   | `metal`  | `Device::metal()`                    |
+//! | Metal through wgpu      | `wgpu-msl` | `Device::wgpu_msl(Default::default())` |
 //! | Vulkan                  | `vulkan` | `Device::vulkan(Default::default())` |
 //! | WebGPU                  | `webgpu` | `Device::webgpu(Default::default())` |
 //! | CubeCL CPU              | `cpu`    | `Device::cpu()`                      |
@@ -90,7 +91,6 @@
 //!
 //! Autodiff and kernel fusion are decorators over these backends: `device.autodiff()` enables
 //! gradients for tensors created on a device, and the CubeCL backends fuse operations by default.
-//! NdArray (`ndarray`) and LibTorch (`tch`) are deprecated.
 //!
 //! ## Quantization
 //!
@@ -125,25 +125,28 @@
 //!   - `wgpu`: Makes available the WGPU backend, on whichever graphics API the platform provides
 //!   - `webgpu`: Adds `Device::webgpu`, pinned to WebGPU (implies `wgpu`)
 //!   - `vulkan`: Adds `Device::vulkan`, pinned to Vulkan (implies `wgpu`)
-//!   - `metal`: Adds `Device::metal`, pinned to Metal with native MSL (implies `wgpu`)
+//!   - `metal`: Adds `Device::metal`, cubecl's own Metal runtime (no wgpu)
+//!   - `wgpu-msl`: Adds `Device::wgpu_msl`, wgpu pinned to Metal compiling MSL (implies `wgpu`)
 //!   - `cuda`: Makes available the CUDA backend
 //!   - `rocm`: Makes available the ROCm backend
 //!   - `cpu`: Makes available the CubeCL CPU backend
-//!   - `tch`: Makes available the LibTorch backend (deprecated - use a CubeCL backend instead)
 //!   - `flex`: Makes available the Flex backend (pure-Rust CPU, std/no_std/WASM)
-//!   - `ndarray`: Makes available the NdArray backend (deprecated - use `flex` instead)
 //! - Backend specifications
-//!   - `simd`: Enable SIMD kernels in the Flex and NdArray backends
-//!   - `rayon`: Enable multi-threaded execution in the Flex and NdArray backends
-//!   - `accelerate`, `blas-netlib`, `openblas`, `openblas-system`: BLAS providers for the NdArray
-//!     backend
+//!   - `simd`: Enable SIMD kernels in the Flex backend
+//!   - `rayon`: Enable multi-threaded execution in the Flex backend
 //!   - `autotune`: Enable running benchmarks to select the best kernel in backends that support it.
 //!   - `autotune-checks`: Check that every autotune candidate produces the same output (debugging).
+//!   - `persistence`: Enable persistent CubeCL caches across process runs, including when default
+//!     features are disabled. Compiled-kernel caching also requires `compilation.cache = true`
+//!     in the CubeCL runtime configuration. Does not select a backend.
 //!   - `x86-v4`: Enable AVX-512 matmul kernels in the Flex backend.
 //!   - `apple-amx`: Enable the experimental Apple AMX matmul kernels in the Flex backend.
 //!   - `template`: Enable hand-written, non-JIT custom kernels in the CubeCL backends.
 //!   - `fusion`: Enable operation fusion in backends that support it.
 //!   - `tracing`: Enable diagnostic tracing in the selected backends (disabled by default).
+//!   - `instrument`: Arm the `#[compute]` annotations of the layers and of your own components,
+//!     for `cortex::instrument::Instrument` to measure (disabled by default; without it the
+//!     annotations compile away).
 //! - Backend decorators
 //!   - `autodiff`: Makes available the Autodiff backend
 //! - Model Storage
@@ -153,8 +156,12 @@
 //!   - `pytorch`: Enables PyTorch checkpoint import (implies `store`)
 //! - Others:
 //!   - `std`: Activates the standard library (deactivate for no_std)
-//!   - `linalg`: Enables linear algebra operations
+//!   - `linalg`: Enables linear algebra operations, and the `cortex::nn` items built on them
+//!     (orthogonal initialization, cosine similarity and pairwise distance modules, cosine
+//!     embedding and triplet margin losses)
 //!   - `capture`: Makes the non-executing graph capture backend available.
+//!   - `shard`: Makes the experimental `Device::shard_options` available, to make a device whose
+//!     tensors can be split over several devices for tensor parallelism.
 //!   - `ir`: Makes Cortex's operation intermediate representation available.
 //!   - `cubecl`: Re-exports CubeCL as `cortex::cubecl` for writing custom kernels.
 //!   - `signal`: Enables signal processing operations from `cortex-signal`.
@@ -223,6 +230,8 @@ pub mod rl {
 pub use cortex_core::tensor::remote;
 #[cfg(feature = "remote-server")]
 pub use cortex_core::tensor::server;
+#[cfg(feature = "shard")]
+pub use cortex_core::tensor::shard;
 
 /// Model storage and serialization: the non-generic record system (always available), plus,
 /// with the `store` feature, the snapshot tooling and cortexpack stores. The `safetensors` and
