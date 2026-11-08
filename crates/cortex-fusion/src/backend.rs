@@ -1,0 +1,576 @@
+use crate::{
+    Collective, CollectivePart, FusionTensor,
+    client::GlobalFusionClient,
+    stream::{Context, OrderedExecution},
+};
+use cortex_backend::RandomKey;
+use cortex_backend::{
+    Backend, BackendGraph, BackendTypes, DType, DeviceDescription, DeviceOps, DeviceTelemetry,
+    EnvironmentBundle, EnvironmentError, EnvironmentId, EnvironmentOrigin, ExecutionError,
+    ExecutionMode, ExecutionModeToken, ExecutionStatistics, MemoryReport, Peak, PeakError, PeakKey,
+    ProfileDuration, ProfileOptions, ProfileToken, Shape, profile_with_tokens,
+    tensor::{BoolTensor, Device, FloatTensor, IntTensor, QuantizedTensor},
+};
+use cortex_ir::{BackendIr, HandleContainer, OperationIr, TensorHandle, TensorIr};
+use cortex_std::device_handle::CallError;
+use serde::{Serialize, de::DeserializeOwned};
+use std::marker::PhantomData;
+
+/// Get the client for the given device.
+pub fn get_client<B: FusionBackend>(device: &Device<B>) -> Client<B::FusionRuntime> {
+    GlobalFusionClient::load(device)
+}
+
+/// The fusion server could not run a task at all: it panicked, or is gone.
+pub(crate) fn server_error(err: CallError) -> ExecutionError {
+    ExecutionError::with_context(format!("the fusion server failed to run a task: {err:?}"))
+}
+
+/// Enable dynamic operation fusion on a backend that implements [fusion backend](crate::FusionBackend).
+#[derive(Clone, Debug, Default)]
+pub struct Fusion<B: FusionBackend> {
+    _backend: PhantomData<B>,
+}
+
+impl<B: FusionBackend> BackendTypes for Fusion<B> {
+    type Device = B::Device;
+
+    type FloatTensorPrimitive = FusionTensor<B::FusionRuntime>;
+    type IntTensorPrimitive = FusionTensor<B::FusionRuntime>;
+    type BoolTensorPrimitive = FusionTensor<B::FusionRuntime>;
+    type QuantizedTensorPrimitive = FusionTensor<B::FusionRuntime>;
+
+    // Fusion adds nothing to a captured graph: the fused kernels are recorded
+    // on the inner backend's stream, so the graph handle is the inner one.
+    type GraphPrimitive = B::GraphPrimitive;
+}
+
+impl<B: FusionBackend> Backend for Fusion<B> {
+    fn name(device: &Self::Device) -> String {
+        format!("fusion<{}>", B::name(device))
+    }
+
+    fn seed(device: &B::Device, seed: u64) {
+        B::seed(device, seed);
+    }
+
+    fn next_random_key(device: &Self::Device) -> RandomKey {
+        B::next_random_key(device)
+    }
+
+    fn sync(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .try_sync(move || B::sync(&device))
+            .map_err(server_error)?
+    }
+
+    fn profile<O: Send + 'static>(
+        device: &Self::Device,
+        options: ProfileOptions,
+        func: impl FnOnce() -> O + Send,
+    ) -> Result<(O, ProfileDuration), ExecutionError> {
+        // The inner backend's closure-bracketed window would open on the
+        // *calling* thread's stream, but fused operations execute on the
+        // fusion server thread and launch on its stream — and only when the
+        // queue decides to. So the window is opened and closed from that
+        // thread instead, as two tasks in order with the registered
+        // operations. Neither touches the queue: what was still queued when
+        // the window opened may run inside it, and what is still queued when
+        // it closes stays out, unless the caller asked for a flush — the
+        // measurement never changes how the queue batches.
+        //
+        // An inner backend with no windows is measured the way it measures
+        // itself: between two syncs, which drain the queue as they go.
+        profile_with_tokens::<Self, O>(device, options, func)
+    }
+
+    fn profile_start(device: &Self::Device) -> Result<Option<ProfileToken>, ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .run(move || B::profile_start(&device))
+            .map_err(server_error)?
+    }
+
+    fn profile_end(
+        device: &Self::Device,
+        token: ProfileToken,
+        options: ProfileOptions,
+    ) -> Result<ProfileDuration, ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        // The options go on down: a flush here drains this queue, and the
+        // inner backend's own queue (a remote server's) is its to drain.
+        match options.flushes() {
+            true => client.sync(move || B::profile_end(&device, token, options)),
+            false => client
+                .run(move || B::profile_end(&device, token, options))
+                .map_err(server_error)?,
+        }
+    }
+
+    /// Sent through the queue the window's own marks travelled, so it is
+    /// dropped in order with them — and never flushed: abandoning happens on
+    /// a panic, where draining the queue would run the very work that was
+    /// unwinding out from under it.
+    fn profile_abandon(device: &Self::Device, token: ProfileToken) {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        let _ = client.run(move || B::profile_abandon(&device, token));
+    }
+
+    /// Opened after the calling stream's queue drains, so what was registered
+    /// before runs under the mode it was registered in.
+    fn execution_mode_open(
+        device: &Self::Device,
+        mode: ExecutionMode,
+    ) -> Result<Option<ExecutionModeToken>, ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .try_sync(move || B::execution_mode_open(&device, mode))
+            .map_err(server_error)?
+    }
+
+    /// Read where the backend counts, without a hop through the queue: the
+    /// queue holds launches, not their statistics.
+    fn execution_mode_statistics(
+        device: &Self::Device,
+        token: ExecutionModeToken,
+    ) -> Result<ExecutionStatistics, ExecutionError> {
+        B::execution_mode_statistics(device, token)
+    }
+
+    /// Closed after the queue of the stream the mode was opened on drains, so
+    /// what was registered there under the mode runs under it, whichever
+    /// thread closes it. A drain that fails still closes the mode, here,
+    /// rather than leave it discarding every later launch.
+    fn execution_mode_close(
+        device: &Self::Device,
+        token: ExecutionModeToken,
+    ) -> Result<ExecutionStatistics, ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let inner = device.clone();
+        let drained = token
+            .opened_on
+            .executes(|| client.try_sync(move || B::execution_mode_close(&inner, token)));
+        match drained {
+            Ok(closed) => closed,
+            Err(err) => {
+                let closed = token
+                    .opened_on
+                    .executes(|| B::execution_mode_close(device, token));
+                closed.and(Err(server_error(err)))
+            }
+        }
+    }
+
+    fn environment_create(
+        device: &Self::Device,
+        name: String,
+        origin: EnvironmentOrigin,
+    ) -> Result<EnvironmentId, EnvironmentError> {
+        B::environment_create(device, name, origin)
+    }
+
+    /// Activated after the calling stream's queue drains, so what was
+    /// registered before compiles into the environment it was registered in.
+    fn environment_activate(
+        device: &Self::Device,
+        id: EnvironmentId,
+    ) -> Result<EnvironmentId, EnvironmentError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .try_sync(move || B::environment_activate(&device, id))
+            .map_err(server_error)?
+    }
+
+    fn environment_active(device: &Self::Device) -> Result<EnvironmentId, EnvironmentError> {
+        B::environment_active(device)
+    }
+
+    /// Saved after the calling stream's queue drains, so what it compiles is
+    /// in the save.
+    fn environment_save(
+        device: &Self::Device,
+        id: EnvironmentId,
+    ) -> Result<EnvironmentBundle, EnvironmentError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .try_sync(move || B::environment_save(&device, id))
+            .map_err(server_error)?
+    }
+
+    fn environment_merge(
+        device: &Self::Device,
+        id: EnvironmentId,
+        origin: EnvironmentOrigin,
+    ) -> Result<(), EnvironmentError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .try_sync(move || B::environment_merge(&device, id, origin))
+            .map_err(server_error)?
+    }
+
+    fn ad_enabled(_device: &Self::Device) -> bool {
+        false
+    }
+
+    fn memory_persistent_allocations<
+        Output: Send,
+        Input: Send,
+        Func: Fn(Input) -> Output + Send,
+    >(
+        device: &Self::Device,
+        input: Input,
+        func: Func,
+    ) -> Output {
+        // The inner backend's closure-bracketed toggle would arm the *calling*
+        // thread's stream, but fused operations execute on the fusion server
+        // thread and allocate on its stream. Arm a standing mode from that
+        // thread instead — `sync` drains previously recorded operations
+        // first, keeping them out of the persistent window.
+        //
+        // Note that sync here doesn't call `B::sync`.
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let armed = device.clone();
+        client.sync(move || B::memory_persistent(&armed, true));
+
+        // Record on this thread; the server drains the fused operations onto
+        // its (armed) stream as it goes.
+        let output = func(input);
+
+        // Drain the remaining recording inside the window (`sync` drains
+        // before running its closure), then disarm.
+        let disarmed = device.clone();
+        client.sync(move || B::memory_persistent(&disarmed, false));
+
+        output
+    }
+
+    fn memory_cleanup(device: &Self::Device) {
+        B::memory_cleanup(device)
+    }
+
+    fn device_description(device: &Self::Device) -> Option<DeviceDescription> {
+        B::device_description(device)
+    }
+
+    fn measure_telemetry(device: &Self::Device) -> DeviceTelemetry {
+        B::measure_telemetry(device)
+    }
+
+    /// Read on the *calling* stream, after its queue drains: the pools it
+    /// reports are the ones that stream's fused operations allocate from, and
+    /// what it still holds queued would otherwise be missing from the usage.
+    fn measure_memory(device: &Self::Device) -> Option<MemoryReport> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+
+        client.sync(move || B::measure_memory(&device))
+    }
+
+    /// The probes launch on the backend directly: the queue holds none of
+    /// their work.
+    fn measure_peaks(device: &Self::Device, keys: &[PeakKey]) -> Vec<Result<Peak, PeakError>> {
+        B::measure_peaks(device, keys)
+    }
+
+    fn staging<'a, Iter>(data: Iter, device: &Self::Device)
+    where
+        Iter: Iterator<Item = &'a mut cortex_backend::TensorData>,
+    {
+        B::staging(data, device);
+    }
+
+    fn supports_dtype(device: &Self::Device, dtype: DType) -> bool {
+        B::supports_dtype(device, dtype)
+    }
+
+    fn dtype_usage(device: &Self::Device, dtype: DType) -> cortex_backend::DTypeUsageSet {
+        B::dtype_usage(device, dtype)
+    }
+
+    fn device_count(type_id: u16) -> usize {
+        B::device_count(type_id)
+    }
+
+    fn flush(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        client
+            .try_sync(move || B::flush(&device))
+            .map_err(server_error)?
+    }
+
+    fn graph_prepare(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        // `client.sync` drains the lazy queue and runs the closure without a
+        // device sync — the inner backend then arms persistent allocation.
+        client.sync(move || B::graph_prepare(&device))
+    }
+
+    fn graph_start_capture(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        // Drain any pending fused operations so nothing leaks into the capture
+        // window before it opens, then begin capture on the same stream.
+        client.sync(move || B::graph_start_capture(&device))
+    }
+
+    fn graph_stop_capture(device: &Self::Device) -> Result<BackendGraph<Self>, ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        // Drain the capture run's fused kernels onto the captured stream (this
+        // is where they actually launch), then close the capture.
+        client.sync(move || B::graph_stop_capture(&device))
+    }
+
+    unsafe fn graph_replay(
+        device: &Self::Device,
+        graph: &BackendGraph<Self>,
+    ) -> Result<(), ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        // Drain any queued fused operations onto the stream first (no device
+        // sync), then launch the captured graph after them.
+        client.sync(|| ());
+        // Safety: forwarded verbatim from this method's own contract.
+        unsafe { B::graph_replay(device, graph) }
+    }
+}
+
+/// The status of a [fuser](OperationFuser).
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub enum FuserStatus {
+    /// No more operations can be fused.
+    Closed,
+    /// More operations can be fused.
+    Open,
+}
+
+/// The properties of a [fuser](OperationFuser).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FuserProperties {
+    /// The score of the optimization, higher is better.
+    pub score: u64,
+    /// If the operation is ready to be executed.
+    pub ready: bool,
+}
+
+/// The fusion operation abstraction allows implementations to fuse many
+/// [tensor operations](OperationIr) into one, improving the performance of the backend.
+///
+///
+/// # Notes
+///
+/// The implementations are free to execute the registered operations the way they want to improve
+/// the speed and efficiency of the computational graph. It doesn't mean that all registered
+/// operations should be fused, but that another way of executing them is more efficient.
+///
+/// Also, it is important to return (FuserStatus::Closed) when no more registered operation can
+/// improve the performance.
+pub trait OperationFuser<O>: Send {
+    /// Register a new [tensor operation](OperationIr).
+    fn fuse(&mut self, operation: &OperationIr);
+    /// Finish the optimization and create a fusion operation.
+    fn finish(&mut self) -> O;
+    /// Reset the state.
+    fn reset(&mut self);
+    /// Return the builder [status](FuserStatus).
+    fn status(&self) -> FuserStatus;
+    /// Return the builder [properties](FuserProperties).
+    fn properties(&self) -> FuserProperties;
+    /// The number of operation fused.
+    fn len(&self) -> usize;
+    /// If no operations are fused.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Clone the optimization builder.
+    fn clone_dyn(&self) -> Box<dyn OperationFuser<O>>;
+}
+
+/// The number of operations contained in the data structure.
+pub trait NumOperations: core::fmt::Debug {
+    /// The number of registered operations.
+    fn len(&self) -> usize;
+    /// If the current optimization is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// The name of the optimization.
+    fn name(&self) -> &'static str;
+    /// The highest relative shape id this optimization names, if it names any.
+    /// `None` means the optimization names no relative shape, so it fits any stream.
+    fn max_relative_shape_id(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// The optimization created from a [fuser](OperationFuser).
+pub trait Optimization<R: FusionRuntime>: Send + NumOperations {
+    /// Execute the optimization.
+    fn execute(&mut self, context: &mut Context<R::FusionHandle>, execution: &OrderedExecution<R>);
+
+    /// Returns the state that can be serialized.
+    fn to_state(&self) -> R::OptimizationState;
+    /// Create the optimization from the state.
+    fn from_state(device: &R::FusionDevice, state: R::OptimizationState) -> Self;
+}
+
+/// Type alias for `<R as FusionRuntime>::FusionDevice`.
+pub type FusionDevice<R> = <R as FusionRuntime>::FusionDevice;
+/// Type alias for `<R as FusionRuntime>::FusionHandle`.
+pub type FusionHandle<R> = <R as FusionRuntime>::FusionHandle;
+/// Client alias.
+pub type Client<R> = GlobalFusionClient<R>;
+
+/// Trait that defines a runtime that will benefits from fused operations.
+pub trait FusionRuntime: Send + Sync + Sized + core::fmt::Debug + 'static {
+    /// The state that can be serialized for an optimization.
+    type OptimizationState: Serialize + DeserializeOwned;
+    /// Optimization type for the backend.
+    type Optimization: Optimization<Self>;
+    /// Handle used to store tensor dynamically.
+    type FusionHandle: Clone + Send;
+    /// Device used by the runtime.
+    type FusionDevice: DeviceOps;
+
+    /// The list of fusers that will be used to optimize the computational graph.
+    fn fusers(device: Self::FusionDevice) -> Vec<Box<dyn OperationFuser<Self::Optimization>>>;
+
+    /// Create a cross-stream alias of `handle` to register under a fresh tensor id.
+    ///
+    /// Called by [`MultiStream::tag_shared_view`](crate::stream::MultiStream::tag_shared_view) when
+    /// a tensor is shared from one stream to another. The new handle must be an *independent*
+    /// container entry over the *same* backing buffer, so that consuming one alias (a `ReadWrite`
+    /// last-use that frees its handle) never frees the buffer out from under the other stream.
+    ///
+    /// The default just clones the handle, which is exactly right for local backends whose handle
+    /// is an `Arc`-style refcount over a device buffer — the clone is a new map entry sharing the
+    /// allocation. Backends whose handle is a *remote* resource (the router/remote backend, where
+    /// the handle is a thin id pointing at a server-side tensor) must override this: a bare clone
+    /// keeps the same server id, so all aliases collapse to one server handle and the first consume
+    /// frees it for everyone. Such backends allocate a fresh server id aliasing the same buffer.
+    fn alias_handle(handle: &Self::FusionHandle) -> Self::FusionHandle {
+        handle.clone()
+    }
+
+    /// Reclaim a `ReadWrite` (last-use) handle as the fusion engine drains a block.
+    ///
+    /// The default removes the container entry; the handle's own `Drop` releases the backend
+    /// resource. This is correct for local backends, whose handle is an `Arc`-style buffer refcount.
+    ///
+    /// A runtime whose handle is a *remote* resource must override this. The router/remote backend
+    /// frees a tensor by registering an `OperationIr::Drop`, but a block that ran **already** freed
+    /// it server-side — a replayed op (including any `Drop`) pops its `ReadWrite` inputs there. So
+    /// letting the handle's `Drop` run registers a *second*, redundant `Drop` for the same id (the
+    /// "unfused drop" traffic), and the override suppresses that re-registration.
+    ///
+    /// `ran` is what says whether that holds for *this* operation: a block is drained whether or
+    /// not its operations ran, and one that did not was never replayed, so the server still holds
+    /// its inputs and only the handle's own `Drop` will free them.
+    fn free_handle(
+        handles: &mut HandleContainer<Self::FusionHandle>,
+        tensor: &TensorIr,
+        ran: OperationRan,
+    ) {
+        let _ = ran;
+        handles.free(tensor);
+    }
+}
+
+/// Whether the operation that consumed a tensor ran.
+///
+/// A drained block has usually run everything in it, but an operation whose input held a
+/// [`TensorError`](cortex_ir::TensorError) is skipped, and one that panicked stopped part way. Both
+/// are consumed by the queue all the same — the difference is only visible to a backend whose
+/// handles live somewhere the operation never reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperationRan {
+    /// It ran to completion.
+    Yes,
+    /// It was skipped, or it failed part way through.
+    No,
+}
+
+/// Trait that allows an existing [backend](Backend) to specify graph optimizations using
+/// [operation fuser](crate::OperationFuser).
+pub trait FusionBackend:
+    BackendIr<Handle = FusionHandle<Self::FusionRuntime>, Device = FusionDevice<Self::FusionRuntime>>
+{
+    /// The runtime used for this backend.
+    type FusionRuntime: FusionRuntime;
+
+    /// Cast a float tensor and returns the resulting handle.
+    fn cast_float(tensor: FloatTensor<Self>, dtype: DType) -> Self::Handle;
+
+    /// Pointer to the full precision fusion backend.
+    type FullPrecisionBackend: FusionBackend<FusionRuntime = Self::FusionRuntime>;
+
+    /// Set the standing persistent-allocation mode of the device stream that
+    /// executes fused operations.
+    ///
+    /// `Fusion`'s `memory_persistent_allocations` cannot bracket the inner
+    /// allocations with a closure: fused operations are recorded on the
+    /// calling thread but execute later, on the fusion execution thread and
+    /// its own device stream. The execution thread arms/disarms this standing
+    /// mode instead (see the `Backend` impl). Defaults to a no-op for
+    /// backends without allocation modes.
+    fn memory_persistent(_device: &Self::Device, _enabled: bool) {}
+
+    /// Each member's part of `collective` over members on `devices` of `shape` and `dtype`,
+    /// member `i` at position `i`, when each member's device runs its own part natively.
+    ///
+    /// Fusion queues each part on its member's stream, so the caller never waits for the members.
+    /// `None` when the members cannot run it so, which Fusion then runs on the caller.
+    fn collective_parts(
+        devices: &[Self::Device],
+        shape: &Shape,
+        dtype: DType,
+        collective: Collective,
+    ) -> Option<Vec<Box<dyn CollectivePart<Self>>>>;
+}
+
+// Fusion implements `BackendIr` to enable router backend usage.
+impl<B: FusionBackend> BackendIr for Fusion<B> {
+    type Handle = FusionTensor<B::FusionRuntime>;
+
+    fn float_tensor(handle: TensorHandle<Self::Handle>) -> FloatTensor<Self> {
+        handle.handle
+    }
+
+    fn int_tensor(handle: TensorHandle<Self::Handle>) -> IntTensor<Self> {
+        handle.handle
+    }
+
+    fn bool_tensor(handle: TensorHandle<Self::Handle>) -> BoolTensor<Self> {
+        handle.handle
+    }
+
+    fn quantized_tensor(handle: TensorHandle<Self::Handle>) -> QuantizedTensor<Self> {
+        handle.handle
+    }
+
+    fn float_tensor_handle(tensor: FloatTensor<Self>) -> Self::Handle {
+        tensor
+    }
+
+    fn int_tensor_handle(tensor: IntTensor<Self>) -> Self::Handle {
+        tensor
+    }
+
+    fn bool_tensor_handle(tensor: BoolTensor<Self>) -> Self::Handle {
+        tensor
+    }
+
+    fn quantized_tensor_handle(tensor: QuantizedTensor<Self>) -> Self::Handle {
+        tensor
+    }
+}

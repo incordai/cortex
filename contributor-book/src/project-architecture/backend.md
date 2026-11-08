@@ -1,0 +1,98 @@
+# Backend
+
+The low-level `Backend` trait defines the implementation contract for tensor operations. Its
+`BackendTypes` supertrait supplies device, float, integer, boolean, quantized tensor, and captured
+graph primitive types. Backend implementations and decorators remain generic where useful;
+application tensors and modules select them at runtime through `Device`.
+
+See [Tensor](./tensor.md) for the Tensor → Bridge → Dispatch → Backend path.
+
+## Element types
+
+Precision is a runtime property. `BackendTypes` no longer has associated `FloatElem` or `IntElem`
+types. Tensor primitives expose their dtype through metadata, and operations accept dtype or scalar
+information as needed.
+
+Users can configure default dtypes with `Device::configure(DeviceConfig::default()...)` before
+creating tensors, request an explicit dtype when creating a tensor, or call `tensor.cast(...)`.
+Device settings are initialized once; creating the first tensor uses the backend's defaults if
+configuration has not happened earlier. A backend reports which dtypes it supports through
+`supports_dtype`. See the Cortex Book's
+[Device Settings](https://cortex.dev/books/cortex/building-blocks/backend.html#device-settings) section
+for configuration and per-tensor dtype examples.
+
+Do not assume every backend supports every precision. Backend kernels should handle the dtypes they
+advertise, and shared tests use the test target's `FloatElem` and `IntElem` aliases.
+
+## Operations
+
+Backend operations are associated functions taking and returning primitives. Backends may enqueue
+work asynchronously and reuse uniquely owned storage. The public tensor API handles user-facing
+shape checks, while the bridge and dispatch layers route to the appropriate primitive operations.
+
+CubeCL runtimes share `cortex_cubecl::CubeBackend`; the device selects CUDA, ROCm, WGPU, or CPU.
+`cortex_cubecl::Cube` wraps that backend with `Fusion` when the fusion feature is enabled. Runtime
+facade names such as `Cuda` and `Wgpu` are aliases of `Cube`, not distinct extension selectors.
+
+Runtime dispatch uses a fixed backend catalog defined in
+`crates/cortex-backend-extension/src/catalog.rs`, shared by generated and handwritten routing.
+`#[backend_extension]` extends the operations available on supported backends; it does not provide a
+mechanism for registering additional backends.
+
+## Kernels and fusion
+
+`cortex-cubecl` implements Cortex's backend operations using local CubeCL kernels and reusable CubeK
+kernels. CubeK supplies kernels such as matrix multiplication and reductions, built with CubeCL.
+CubeCL provides the kernel language, compilation, and runtime infrastructure for executing them on
+supported devices. Cortex kernels can also use CubeCL directly.
+
+With fusion enabled, `cortex-fusion` queues operations and coordinates their grouping into
+optimizations. `cortex-cubecl-fusion` supplies the CubeCL implementations of those optimizations:
+element-wise chains and combinations of matmul or reductions with element-wise work. Enabling fusion
+does not mean every operation will be fused; execution also needs unfused and fallback paths.
+
+For example, ordinary matmul passes through
+[`cortex-cubecl`'s matmul implementation](https://github.com/tracel-ai/burn/blob/main/crates/burn-cubecl/src/kernel/matmul/base.rs),
+which states the operands as CubeK reads them and runs the plan CubeK's selection gives for the
+product. For a supported matmul followed by element-wise operations,
+[`cortex-cubecl-fusion`'s matmul optimization](https://github.com/tracel-ai/burn/blob/main/crates/burn-cubecl-fusion/src/optim/matmul/optimization.rs)
+runs the routine CubeK elected for the product with its output stored through the fused
+element-wise block instead of a buffer. This can avoid separate launches and intermediate memory
+traffic. Both paths execute through CubeCL.
+
+Use these responsibilities to locate a change:
+
+- **Cortex operation integration:** `cortex-cubecl` for tensor handling and kernel selection.
+- **Fusion:** `cortex-fusion` for general scheduling and coordination; `cortex-cubecl-fusion` for fused
+  kernel generation and CubeK integration.
+- **Reusable kernel algorithms:** CubeK, when the change belongs to a kernel shared across
+  consumers.
+- **Kernel compilation or runtime behavior:** CubeCL.
+
+Check existing implementations and the dependency versions used by this checkout before adding a
+kernel. Validate affected operations with fusion enabled and disabled, including fallback cases and
+relevant layouts and dtypes. Follow the
+[testing guide](../getting-started/testing.md#tensor-operations) for backend aliases and shared
+suites; report hardware coverage and any configurations not tested.
+
+## Autodiff
+
+`cortex_autodiff::Autodiff<B, C>` decorates a backend with first-order reverse-mode differentiation,
+where `C` is a checkpoint strategy. The low-level `AutodiffBackend` trait defines backward and
+gradient access. At the public API, autodiff is a runtime context carried by tensors and supplied as
+a creation default by devices.
+
+Enabling autodiff does not automatically track every input. Source leaves use `require_grad()`;
+operations depending on tracked inputs record backward steps. Backward consumes reachable steps,
+including steps shared by cloned handles. Repeated backward through consumed intermediates is
+rejected; parameter leaves can be reused in fresh forwards.
+
+`#[backend_extension(Autodiff, Cube)]` generates runtime routing for an extension. The author still
+supplies its implementation for `Autodiff<B, C>` (a composition of differentiable operations or a
+custom backward pass). See the
+[extension guide](https://cortex.dev/books/cortex/advanced/backend-extension/).
+
+When writing a custom backward pass, obtain input `NodeGuard`s with `AutodiffTensor::node()` or
+`into_parts()` and pass them to `Backward::prepare`. They must stay alive through child-step
+registration, but must not be stored in backward or checkpoint state. Access the primitive with
+`primitive()` or `into_parts()`; the old public fields are private.

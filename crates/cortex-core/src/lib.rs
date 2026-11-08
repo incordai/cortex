@@ -1,0 +1,120 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+//! The core of Cortex: modules, configuration, records and data loading, on top of the tensor API.
+//!
+//! Applications should depend on [`cortex`](https://docs.rs/cortex), which re-exports everything here
+//! together with neural network layers, optimizers and training. This crate is the dependency for
+//! libraries that only need the core abstractions.
+//!
+//! - [`tensor`]: Cortex's tensor API, re-exported from `cortex-tensor`.
+//! - [`module`]: the [`Module`](module::Module) trait, implemented with `#[derive(Module)]`, and
+//!   [`Param`](module::Param) for trainable tensors.
+//! - [`config`]: serializable configuration structs with `#[derive(Config)]`.
+//! - [`store`]: module records and the cortexpack format.
+//! - [`data`]: datasets, batchers and data loaders (`std` only).
+//! - [`instrument`]: declaring components with `#[compute]` and measuring where a pass's device
+//!   time goes.
+//! - [`prelude`]: the types most programs import.
+//!
+//! # Feature flags
+//!
+//! Backend features (`wgpu`, `cuda`, `flex`, ...) and the `autodiff`, `fusion`, `remote` and
+//! `capture` features match those of `cortex`. Others:
+//!
+//! - `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
+//! - `dataset`: the dataset library in [`data`]; `vision`, `audio` and `sqlite` add sources.
+//! - `network`: file downloads with a progress bar.
+//! - `instrument`: arm the `#[compute]` annotations, for [`instrument`] to measure a model.
+//!   Without it they compile away.
+//! - `tracing`: trace operations with the `tracing` crate.
+
+// `derive_new` provides the `#[derive(new)]` macro used across the crate; the lint mistakenly
+// reports the `#[macro_use]` as unused.
+#[allow(unused_imports)]
+#[macro_use]
+extern crate derive_new;
+
+/// Re-export serde for proc macros.
+pub use serde;
+
+/// The configuration module.
+pub mod config;
+
+/// Data module.
+#[cfg(feature = "std")]
+pub mod data;
+
+/// Module for the neural network module.
+pub mod module;
+
+/// Module for saving and loading module/optimizer state in the cortexpack format.
+pub mod store;
+
+/// Declaring components and measuring where a pass's device time goes.
+pub use cortex_instrument as instrument;
+
+/// Module for the tensor.
+pub mod tensor;
+// Tensor at root: `cortex::Tensor`
+pub use tensor::Tensor;
+
+#[cfg(feature = "extension")]
+/// Backend module.
+pub mod backend;
+
+extern crate alloc;
+
+// TODO: configurable device priority
+#[cfg(test)]
+#[allow(missing_docs)]
+pub fn test_device() -> cortex_tensor::Device {
+    cortex_tensor::Device::flex()
+}
+
+#[cfg(test)]
+mod test_utils {
+    use crate as cortex;
+    use crate::module::Module;
+    use crate::module::Param;
+    use cortex_tensor::Device;
+    use cortex_tensor::Tensor;
+
+    /// Simple linear module.
+    #[derive(Module, Debug)]
+    pub struct SimpleLinear {
+        pub weight: Param<Tensor<2>>,
+        pub bias: Option<Param<Tensor<1>>>,
+    }
+
+    impl SimpleLinear {
+        pub fn new(in_features: usize, out_features: usize, device: &Device) -> Self {
+            let weight = Tensor::random(
+                [out_features, in_features],
+                cortex_tensor::Distribution::Default,
+                device,
+            );
+            let bias = Tensor::random([out_features], cortex_tensor::Distribution::Default, device);
+
+            Self {
+                weight: Param::from_tensor(weight),
+                bias: Some(Param::from_tensor(bias)),
+            }
+        }
+    }
+}
+
+pub mod prelude {
+    //! Structs and macros used by most projects. Add `use
+    //! cortex::prelude::*` to your code to quickly get started with
+    //! Cortex.
+    pub use crate::{
+        config::Config,
+        module::Module,
+        tensor::{
+            Bool, Device, DeviceIndex, DeviceKind, ElementConversion, Float, Int, Shape, SliceArg,
+            Tensor, TensorData, assert_shape, cast::ToElement, debug_assert_shape, s,
+        },
+    };
+}

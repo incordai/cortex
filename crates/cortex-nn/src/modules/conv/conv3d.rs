@@ -1,0 +1,374 @@
+use crate::Initializer;
+use alloc::format;
+
+use crate::modules::bounds::{self, Windows};
+use cortex::instrument::{Bounds, compute};
+use cortex::tensor::module::conv_output_size;
+use cortex_core as cortex;
+
+use crate::PaddingConfig3d;
+use cortex::config::Config;
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay, Param};
+use cortex::tensor::Device;
+use cortex::tensor::Tensor;
+use cortex::tensor::module::conv3d;
+use cortex::tensor::ops::ConvOptions;
+
+use crate::conv::checks;
+
+/// Configuration to create a [3D convolution](Conv3d) layer, using the [init function](Conv3dConfig::init).
+#[derive(Config, Debug)]
+pub struct Conv3dConfig {
+    /// The number of channels.
+    pub channels: [usize; 2],
+    /// The size of the kernel.
+    pub kernel_size: [usize; 3],
+    /// The stride of the convolution.
+    #[config(default = "[1, 1, 1]")]
+    pub stride: [usize; 3],
+    /// Spacing between kernel elements.
+    #[config(default = "[1, 1, 1]")]
+    pub dilation: [usize; 3],
+    /// Controls the connections between input and output channels.
+    #[config(default = "1")]
+    pub groups: usize,
+    /// The padding configuration. `Same` resolves to asymmetric padding when the total
+    /// padding of an axis is odd, so outputs always have `ceil(input / stride)` elements.
+    #[config(default = "PaddingConfig3d::Valid")]
+    pub padding: PaddingConfig3d,
+    /// If bias should be added to the output.
+    #[config(default = true)]
+    pub bias: bool,
+    /// The type of function used to initialize neural network parameters
+    #[config(
+        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0),fan_out_only:false}"
+    )]
+    pub initializer: Initializer,
+}
+
+/// Applies a 3D convolution over input tensors.
+///
+/// Should be created with [Conv3dConfig].
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct Conv3d {
+    /// Tensor of shape `[channels_out, channels_in / groups, kernel_size_1, kernel_size_2, kernel_size_3]`
+    pub weight: Param<Tensor<5>>,
+    /// Tensor of shape `[channels_out]`
+    pub bias: Option<Param<Tensor<1>>>,
+    /// Stride of the convolution.
+    pub stride: [usize; 3],
+    /// Size of the kernel.
+    pub kernel_size: [usize; 3],
+    /// Spacing between kernel elements.
+    pub dilation: [usize; 3],
+    /// Controls the connections between input and output channels.
+    pub groups: usize,
+    /// The padding configuration.
+    #[module(skip)]
+    pub padding: PaddingConfig3d,
+}
+
+impl Conv3dConfig {
+    /// Initialize a new [conv3d](Conv3d) module.
+    pub fn init(&self, device: &Device) -> Conv3d {
+        checks::checks_channels_div_groups(self.channels[0], self.channels[1], self.groups);
+        if self.padding == PaddingConfig3d::Same {
+            let effective_kernel: [usize; 3] =
+                core::array::from_fn(|i| (self.kernel_size[i] - 1) * self.dilation[i] + 1);
+            checks::check_same_padding_support(&effective_kernel);
+        }
+
+        let shape = [
+            self.channels[1],
+            self.channels[0] / self.groups,
+            self.kernel_size[0],
+            self.kernel_size[1],
+            self.kernel_size[2],
+        ];
+
+        let k = self.kernel_size.iter().product::<usize>();
+        let fan_in = self.channels[0] / self.groups * k;
+        let fan_out = self.channels[1] / self.groups * k;
+
+        let weight = self
+            .initializer
+            .init_with(shape, Some(fan_in), Some(fan_out), device);
+        let mut bias = None;
+
+        if self.bias {
+            bias = Some(self.initializer.init_with(
+                [self.channels[1]],
+                Some(fan_in),
+                Some(fan_out),
+                device,
+            ));
+        }
+
+        Conv3d {
+            weight,
+            bias,
+            stride: self.stride,
+            kernel_size: self.kernel_size,
+            dilation: self.dilation,
+            padding: self.padding.clone(),
+            groups: self.groups,
+        }
+    }
+}
+
+impl ModuleDisplay for Conv3d {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        // Format arrays as strings (consistent with Conv2d/Conv1d).
+        let stride = format!("{:?}", self.stride);
+        let kernel_size = format!("{:?}", self.kernel_size);
+        let dilation = format!("{:?}", self.dilation);
+
+        // Weight dims: [channels_out, channels_in/groups, k1, k2, k3]
+        let [channels_out, group_channels_in, _, _, _] = self.weight.dims();
+        let channels_in = group_channels_in * self.groups;
+        let ch_out = format!("{:?}", channels_out);
+        let ch_in = format!("{:?}", channels_in);
+
+        content
+            .add("ch_in", &ch_in)
+            .add("ch_out", &ch_out)
+            .add("stride", &stride)
+            .add("kernel_size", &kernel_size)
+            .add("dilation", &dilation)
+            .add("groups", &self.groups)
+            .add_debug_attribute("padding", &self.padding)
+            .optional()
+    }
+}
+
+impl Conv3d {
+    /// The options the convolution runs with, its padding resolved against `input`'s size.
+    fn options(&self, input: &Tensor<5>) -> ConvOptions<3> {
+        let [_batch_size, _channels_in, depth_in, height_in, width_in] = input.dims();
+        let effective_kernel =
+            core::array::from_fn(|i| (self.kernel_size[i] - 1) * self.dilation[i] + 1);
+        let (depth, height, width) = self.padding.calculate_padding_3d_pairs(
+            depth_in,
+            height_in,
+            width_in,
+            &effective_kernel,
+            &self.stride,
+        );
+        ConvOptions::new_with_padding(
+            self.stride,
+            [depth, height, width],
+            self.dilation,
+            self.groups,
+        )
+    }
+
+    /// None where the convolution cannot size its output, which it rejects.
+    fn bounds(&self, input: &Tensor<5>) -> Option<Bounds> {
+        let options = self.options(input);
+        let weight = self.weight.val();
+        let output_size = conv_output_size(bounds::spatial(input), &weight.shape(), &options)?;
+        let windowing = Windows::convolution(self.kernel_size, &options).over(input, output_size);
+        Some(windowing.convolution(input, &weight, &self.bias))
+    }
+
+    /// Applies the forward pass on the input tensor.
+    ///
+    /// See [conv3d](cortex::tensor::module::conv3d) for more information.
+    ///
+    /// # Shapes
+    ///
+    /// - input: `[batch_size, channels_in, depth_in, height_in, width_in]`
+    /// - output: `[batch_size, channels_out, depth_out, height_out, width_out]`
+    #[compute(bounds = Self::bounds)]
+    pub fn forward(&self, input: Tensor<5>) -> Tensor<5> {
+        let options = self.options(&input);
+        conv3d(
+            input,
+            self.weight.val(),
+            self.bias.as_ref().map(|bias| bias.val()),
+            options,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cortex::tensor::{ElementConversion, Tolerance};
+    type FT = f32;
+
+    use super::*;
+    use cortex::tensor::TensorData;
+
+    #[test]
+    fn initializer_default() {
+        let device = Device::default();
+        device.seed(0);
+
+        let config = Conv3dConfig::new([5, 1], [5, 5, 5]);
+        let k = (config.channels[0]
+            * config.kernel_size[0]
+            * config.kernel_size[1]
+            * config.kernel_size[2]) as f64;
+        let k = (config.groups as f64 / k).sqrt().elem::<FT>();
+        let conv = config.init(&device);
+
+        conv.weight.to_data().assert_within_range(-k..k);
+    }
+
+    #[test]
+    fn initializer_zeros() {
+        let device = Device::default();
+        device.seed(0);
+
+        let config = Conv3dConfig::new([5, 2], [5, 5, 5]).with_initializer(Initializer::Zeros);
+        let conv = config.init(&device);
+
+        assert_eq!(config.initializer, Initializer::Zeros);
+        conv.weight.to_data().assert_approx_eq::<FT>(
+            &TensorData::zeros::<f32, _>(conv.weight.shape()),
+            Tolerance::default(),
+        );
+    }
+
+    #[test]
+    fn initializer_fan_out() {
+        let device = Device::default();
+        device.seed(0);
+
+        let init = Initializer::KaimingUniform {
+            gain: 1.0 / 3.0f64.sqrt(),
+            fan_out_only: true, // test that fan_out is passed to `init_with()`
+        };
+        let config = Conv3dConfig::new([5, 1], [5, 5, 5]).with_initializer(init.clone());
+        let c = config.init(&device);
+        let _ = c.weight.val(); // initializes param
+
+        assert_eq!(config.initializer, init);
+    }
+
+    #[test]
+    fn initializer_fan_with_groups_is_valid() {
+        let device = Device::default();
+        device.seed(0);
+
+        let init = Initializer::KaimingUniform {
+            gain: 1.0 / 3.0f64.sqrt(),
+            fan_out_only: true,
+        };
+
+        let config = Conv3dConfig::new([4, 4], [1, 1, 1])
+            .with_initializer(init.clone())
+            .with_groups(4);
+        let _ = config.init(&device);
+
+        assert_eq!(config.initializer, init);
+    }
+
+    #[test]
+    #[should_panic = "Same padding with an even kernel size is not supported"]
+    fn same_with_even_kernel_is_invalid() {
+        let device = Default::default();
+        let config = Conv3dConfig::new([4, 4], [2, 2, 2]).with_padding(PaddingConfig3d::Same);
+        let _ = config.init(&device);
+    }
+
+    #[test]
+    fn same_padding_with_stride_is_asymmetric() {
+        let device = Device::default().autodiff();
+        let conv = Conv3dConfig::new([1, 1], [3, 3, 3])
+            .with_stride([2, 2, 2])
+            .with_padding(PaddingConfig3d::Same)
+            .with_bias(false)
+            .with_initializer(Initializer::Constant { value: 1.0 })
+            .init(&device);
+        let input = Tensor::<1, cortex::tensor::Int>::arange(0..64, &device)
+            .reshape([1, 1, 4, 4, 4])
+            .float()
+            .require_grad();
+
+        let output = conv.forward(input.clone());
+        let grads = output.clone().sum().backward();
+
+        assert_eq!(output.dims(), [1, 1, 2, 2, 2]);
+        let tolerance = Tolerance::rel_abs(0.01, 0.01);
+        output.to_data().assert_approx_eq::<FT>(
+            &TensorData::new(
+                vec![567.0f32, 405., 486., 342., 810., 558., 612., 420.],
+                [1, 1, 2, 2, 2],
+            ),
+            tolerance,
+        );
+        conv.weight
+            .val()
+            .grad(&grads)
+            .unwrap()
+            .reshape([27])
+            .to_data()
+            .assert_approx_eq::<FT>(
+                &TensorData::from([
+                    168.0f32, 176., 88., 200., 208., 104., 100., 104., 52., 296., 304., 152., 328.,
+                    336., 168., 164., 168., 84., 148., 152., 76., 164., 168., 84., 82., 84., 42.,
+                ]),
+                tolerance,
+            );
+        let plane = [
+            [1.0f32, 1., 2., 1.],
+            [1., 1., 2., 1.],
+            [2., 2., 4., 2.],
+            [1., 1., 2., 1.],
+        ];
+        let c = [1.0f32, 1., 2., 1.];
+        let expected: alloc::vec::Vec<f32> = c
+            .iter()
+            .flat_map(|c| plane.iter().flatten().map(move |p| c * p))
+            .collect();
+        input
+            .grad(&grads)
+            .unwrap()
+            .reshape([64])
+            .to_data()
+            .assert_approx_eq::<FT>(&TensorData::from(expected.as_slice()), tolerance);
+    }
+
+    #[test]
+    fn same_with_dilation_uses_effective_kernel() {
+        let device = Default::default();
+        let conv = Conv3dConfig::new([1, 1], [2, 2, 2])
+            .with_padding(PaddingConfig3d::Same)
+            .with_dilation([2, 2, 2])
+            .with_bias(false)
+            .init(&device);
+
+        let output = conv.forward(Tensor::<5>::zeros([1, 1, 4, 5, 6], &device));
+
+        assert_eq!(output.dims(), [1, 1, 4, 5, 6]);
+    }
+
+    #[test]
+    fn display() {
+        let config = Conv3dConfig::new([5, 1], [5, 5, 5]);
+        let conv = config.init(&Default::default());
+
+        assert_eq!(
+            alloc::format!("{conv}"),
+            "Conv3d {ch_in: 5, ch_out: 1, stride: [1, 1, 1], kernel_size: [5, 5, 5], dilation: [1, 1, 1], groups: 1, padding: Valid, params: 626}"
+        );
+    }
+
+    #[test]
+    #[should_panic = "Number of channels in input tensor and input channels of convolution must be equal. got: 4, expected: 5"]
+    fn input_channels_mismatch() {
+        let config = Conv3dConfig::new([5, 3], [3, 3, 3]);
+        let conv = config.init(&Default::default());
+
+        let input = Tensor::<5>::zeros([1, 4, 10, 10, 10], &Default::default());
+        let _ = conv.forward(input);
+    }
+}

@@ -1,0 +1,353 @@
+use super::*;
+use cortex_tensor::Distribution;
+use cortex_tensor::Tolerance;
+use cortex_tensor::module::{max_pool2d, max_pool2d_with_indices};
+use cortex_tensor::ops::MaxPoolOptions;
+
+#[test]
+fn test_max_pool2d_simple_1() {
+    let kernel_size_1 = 3;
+    let kernel_size_2 = 3;
+    let padding_1 = 0;
+    let padding_2 = 0;
+    let stride_1 = 1;
+    let stride_2 = 1;
+    let dilation_1 = 1;
+    let dilation_2 = 1;
+
+    let device = AutodiffDevice::new();
+    let x = TestTensor::from_data(
+        [[[
+            [0.2479, 0.6386, 0.3166, 0.5742],
+            [0.7065, 0.1940, 0.6305, 0.8959],
+            [0.5416, 0.8602, 0.8129, 0.1662],
+            [0.3358, 0.3059, 0.8293, 0.0990],
+        ]]],
+        &device,
+    )
+    .require_grad();
+    let x_grad_expected = TestTensor::<4>::from_data(
+        [[[
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 2.0],
+            [0.0, 2.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ]]],
+        &device,
+    );
+
+    let output = max_pool2d(
+        x.clone(),
+        MaxPoolOptions::new([kernel_size_1, kernel_size_2])
+            .with_stride([stride_1, stride_2])
+            .with_padding([padding_1, padding_2])
+            .with_dilation([dilation_1, dilation_2]),
+    );
+    let grads = output.backward();
+
+    // Asserts
+    let x_grad_actual = x.grad(&grads).unwrap();
+    x_grad_expected
+        .to_data()
+        .assert_approx_eq::<FloatElem>(&x_grad_actual.to_data(), Tolerance::default());
+}
+
+#[test]
+fn test_max_pool2d_simple_2() {
+    let kernel_size_1 = 2;
+    let kernel_size_2 = 2;
+    let padding_1 = 1;
+    let padding_2 = 1;
+    let stride_1 = 1;
+    let stride_2 = 1;
+    let dilation_1 = 1;
+    let dilation_2 = 1;
+
+    let device = AutodiffDevice::new();
+    let x = TestTensor::from_data(
+        [[[
+            [0.2479, 0.6386, 0.3166, 0.5742],
+            [0.7065, 0.1940, 0.6305, 0.8959],
+            [0.5416, 0.8602, 0.8129, 0.1662],
+            [0.3358, 0.3059, 0.8293, 0.0990],
+        ]]],
+        &device,
+    )
+    .require_grad();
+    let x_grad_expected = TestTensor::<4>::from_data(
+        [[[
+            [1., 3., 0., 2.],
+            [3., 0., 0., 4.],
+            [1., 4., 0., 1.],
+            [2., 0., 3., 1.],
+        ]]],
+        &device,
+    );
+
+    let output = max_pool2d(
+        x.clone(),
+        MaxPoolOptions::new([kernel_size_1, kernel_size_2])
+            .with_stride([stride_1, stride_2])
+            .with_padding([padding_1, padding_2])
+            .with_dilation([dilation_1, dilation_2]),
+    );
+    let grads = output.backward();
+
+    // Asserts
+    let x_grad_actual = x.grad(&grads).unwrap();
+    x_grad_expected
+        .to_data()
+        .assert_approx_eq::<FloatElem>(&x_grad_actual.to_data(), Tolerance::default());
+}
+
+#[test]
+fn test_max_pool2d_with_dilation() {
+    let kernel_size_1 = 2;
+    let kernel_size_2 = 2;
+    let padding_1 = 1;
+    let padding_2 = 1;
+    let stride_1 = 1;
+    let stride_2 = 1;
+    let dilation_1 = 2;
+    let dilation_2 = 2;
+
+    let device = AutodiffDevice::new();
+    let x = TestTensor::from_data(
+        [[[
+            [0.2479, 0.6386, 0.3166, 0.5742],
+            [0.7065, 0.1940, 0.6305, 0.8959],
+            [0.5416, 0.8602, 0.8129, 0.1662],
+            [0.3358, 0.3059, 0.8293, 0.0990],
+        ]]],
+        &device,
+    )
+    .require_grad();
+    let x_grad_expected = TestTensor::<4>::from_data(
+        [[[
+            [0., 0., 0., 0.],
+            [1., 1., 1., 2.],
+            [0., 4., 4., 0.],
+            [0., 1., 2., 0.],
+        ]]],
+        &device,
+    );
+
+    let output = max_pool2d(
+        x.clone(),
+        MaxPoolOptions::new([kernel_size_1, kernel_size_2])
+            .with_stride([stride_1, stride_2])
+            .with_padding([padding_1, padding_2])
+            .with_dilation([dilation_1, dilation_2]),
+    );
+    let grads = output.backward();
+
+    // Asserts
+    let x_grad_actual = x.grad(&grads).unwrap();
+    x_grad_expected
+        .to_data()
+        .assert_approx_eq::<FloatElem>(&x_grad_actual.to_data(), Tolerance::default());
+}
+
+#[test]
+fn test_max_pool2d_complex() {
+    let kernel_size_1 = 4;
+    let kernel_size_2 = 2;
+    let padding_1 = 2;
+    let padding_2 = 1;
+    let stride_1 = 1;
+    let stride_2 = 2;
+    let dilation_1 = 1;
+    let dilation_2 = 1;
+
+    let device = AutodiffDevice::new();
+    let x = TestTensor::from_data(
+        [[[
+            [0.5388, 0.0676, 0.7122, 0.8316, 0.0653],
+            [0.9154, 0.1536, 0.9089, 0.8016, 0.7518],
+            [0.2073, 0.0501, 0.8811, 0.5604, 0.5075],
+            [0.4384, 0.9963, 0.9698, 0.4988, 0.2609],
+            [0.3391, 0.2230, 0.4610, 0.5365, 0.6880],
+        ]]],
+        &device,
+    )
+    .require_grad();
+    let x_grad_expected = TestTensor::<4>::from_data(
+        [[[
+            [0., 0., 0., 3., 0.],
+            [4., 0., 2., 1., 0.],
+            [0., 0., 0., 0., 0.],
+            [2., 4., 0., 0., 0.],
+            [0., 0., 0., 0., 2.],
+        ]]],
+        &device,
+    );
+
+    let output = max_pool2d(
+        x.clone(),
+        MaxPoolOptions::new([kernel_size_1, kernel_size_2])
+            .with_stride([stride_1, stride_2])
+            .with_padding([padding_1, padding_2])
+            .with_dilation([dilation_1, dilation_2]),
+    );
+    let grads = output.backward();
+
+    // Asserts
+    let x_grad_actual = x.grad(&grads).unwrap();
+    x_grad_expected
+        .to_data()
+        .assert_approx_eq::<FloatElem>(&x_grad_actual.to_data(), Tolerance::default());
+}
+
+#[test]
+fn test_max_pool2d_ceil_mode() {
+    // Test ceil_mode=true with gradient computation
+    // Using 1x1x6x6 input with kernel 3x3, stride 2x2, padding 0
+    // Floor mode: output 2x2
+    // Ceil mode: output 3x3
+    let kernel_size_1 = 3;
+    let kernel_size_2 = 3;
+    let padding_1 = 0;
+    let padding_2 = 0;
+    let stride_1 = 2;
+    let stride_2 = 2;
+    let dilation_1 = 1;
+    let dilation_2 = 1;
+
+    let device = AutodiffDevice::new();
+    // Input (values 1-36):
+    let x = TestTensor::from_data(
+        [[[
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            [13.0, 14.0, 15.0, 16.0, 17.0, 18.0],
+            [19.0, 20.0, 21.0, 22.0, 23.0, 24.0],
+            [25.0, 26.0, 27.0, 28.0, 29.0, 30.0],
+            [31.0, 32.0, 33.0, 34.0, 35.0, 36.0],
+        ]]],
+        &device,
+    )
+    .require_grad();
+
+    // Expected gradients for ceil_mode output 3x3:
+    // Output positions and their max value positions:
+    // (0,0): max at (2,2)=15 -> grad[2,2] += 1
+    // (0,1): max at (2,4)=17 -> grad[2,4] += 1
+    // (0,2): max at (2,5)=18 -> grad[2,5] += 1
+    // (1,0): max at (4,2)=27 -> grad[4,2] += 1
+    // (1,1): max at (4,4)=29 -> grad[4,4] += 1
+    // (1,2): max at (4,5)=30 -> grad[4,5] += 1
+    // (2,0): max at (5,2)=33 -> grad[5,2] += 1
+    // (2,1): max at (5,4)=35 -> grad[5,4] += 1
+    // (2,2): max at (5,5)=36 -> grad[5,5] += 1
+    let x_grad_expected = TestTensor::<4>::from_data(
+        [[[
+            [0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0.],
+            [0., 0., 1., 0., 1., 1.],
+            [0., 0., 0., 0., 0., 0.],
+            [0., 0., 1., 0., 1., 1.],
+            [0., 0., 1., 0., 1., 1.],
+        ]]],
+        &device,
+    );
+
+    let output = max_pool2d(
+        x.clone(),
+        MaxPoolOptions::new([kernel_size_1, kernel_size_2])
+            .with_stride([stride_1, stride_2])
+            .with_padding([padding_1, padding_2])
+            .with_dilation([dilation_1, dilation_2])
+            .with_ceil_mode(true),
+    );
+    let grads = output.backward();
+
+    // Asserts
+    let x_grad_actual = x.grad(&grads).unwrap();
+    x_grad_expected
+        .to_data()
+        .assert_approx_eq::<FloatElem>(&x_grad_actual.to_data(), Tolerance::default());
+}
+
+#[test]
+fn test_max_pool2d_with_indices_grads_overlapping_padded() {
+    let test = MaxPool2dWithIndicesTestCase {
+        height: 9,
+        width: 7,
+        kernel_size: 3,
+        stride: 1,
+        padding: 1,
+        dilation: 1,
+        ceil_mode: false,
+    };
+    test.assert_grads_match_max_pool2d();
+}
+
+#[test]
+fn test_max_pool2d_with_indices_grads_ceil_mode() {
+    // (8 - 3) / 2 + 1 and (6 - 3) / 2 + 1: floor gives 3x2 windows, ceil gives 4x3.
+    let test = MaxPool2dWithIndicesTestCase {
+        height: 8,
+        width: 6,
+        kernel_size: 3,
+        stride: 2,
+        padding: 0,
+        dilation: 1,
+        ceil_mode: true,
+    };
+    test.assert_grads_match_max_pool2d();
+}
+
+#[test]
+fn test_max_pool2d_with_indices_grads_dilated() {
+    let test = MaxPool2dWithIndicesTestCase {
+        height: 9,
+        width: 7,
+        kernel_size: 2,
+        stride: 2,
+        padding: 1,
+        dilation: 2,
+        ceil_mode: false,
+    };
+    test.assert_grads_match_max_pool2d();
+}
+
+/// `max_pool2d_with_indices` registers its own backward and must route gradients like
+/// `max_pool2d`.
+struct MaxPool2dWithIndicesTestCase {
+    height: usize,
+    width: usize,
+    kernel_size: usize,
+    stride: usize,
+    padding: usize,
+    dilation: usize,
+    ceil_mode: bool,
+}
+
+impl MaxPool2dWithIndicesTestCase {
+    fn assert_grads_match_max_pool2d(self) {
+        let device = AutodiffDevice::new();
+        let shape = [2, 3, self.height, self.width];
+        let data = TestTensor::<4>::random(shape, Distribution::Default, &device).into_data();
+        let options = MaxPoolOptions::new([self.kernel_size; 2])
+            .with_stride([self.stride; 2])
+            .with_padding([self.padding; 2])
+            .with_dilation([self.dilation; 2])
+            .with_ceil_mode(self.ceil_mode);
+
+        let grad = |with_indices: bool| {
+            let x = TestTensor::<4>::from_data(data.clone(), &device).require_grad();
+            let output = if with_indices {
+                max_pool2d_with_indices(x.clone(), options.clone()).0
+            } else {
+                max_pool2d(x.clone(), options.clone())
+            };
+            let weights =
+                TestTensorInt::<1>::arange(1..output.shape().num_elements() as i64 + 1, &device)
+                    .float()
+                    .reshape::<4, _>(output.shape());
+            let grads = (output * weights).sum().backward();
+            x.grad(&grads).unwrap().into_data()
+        };
+        grad(true).assert_eq(&grad(false), false);
+    }
+}

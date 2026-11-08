@@ -1,0 +1,12 @@
+[cubecl.environment]
+path = "target"
+
+[cubecl.profiling]
+logger = { log = "info", level = "disabled" }
+
+[cubecl.autotune]
+logger = { log = "info", level = "minimal" }
+
+[cubecl.compilation]
+logger = { log = "info", level = "disabled" }
+cache = true

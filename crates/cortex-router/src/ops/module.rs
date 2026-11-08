@@ -1,0 +1,1384 @@
+use alloc::boxed::Box;
+
+use cortex_backend::ops::{
+    AttentionBackward, AttentionCache, AttentionModuleOptions, ConvOptions, ConvTransposeOptions,
+    DeformConv2dBackward, DeformConvOptions, InterpolateOptions, MaxPool1dBackward,
+    MaxPool1dWithIndices, MaxPool2dBackward, MaxPool2dWithIndices, MaxPool3dBackward,
+    MaxPool3dWithIndices, ModuleOps,
+};
+use cortex_backend::tensor::{BoolTensor, FloatTensor, IntTensor};
+use cortex_ir::*;
+use cortex_std::IntDType;
+
+use crate::{BackendRouter, RouterChannel, RouterClient};
+
+impl<R: RouterChannel> ModuleOps<Self> for BackendRouter<R> {
+    fn batch_norm(
+        x: FloatTensor<Self>,
+        gamma: FloatTensor<Self>,
+        beta: FloatTensor<Self>,
+        mean: FloatTensor<Self>,
+        variance: FloatTensor<Self>,
+        epsilon: f64,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let x = x.into_ir();
+        let epsilon = ScalarIr::new(epsilon, &x.dtype);
+        let desc = BatchNormOpIr::create(
+            x,
+            gamma.into_ir(),
+            beta.into_ir(),
+            mean.into_ir(),
+            variance.into_ir(),
+            epsilon,
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(ModuleOperationIr::BatchNorm(desc)))
+            .output()
+    }
+
+    fn ctc_loss(
+        log_probs: FloatTensor<Self>,
+        targets: IntTensor<Self>,
+        input_lengths: IntTensor<Self>,
+        target_lengths: IntTensor<Self>,
+        blank: usize,
+    ) -> FloatTensor<Self> {
+        let client = log_probs.client.clone();
+        let desc = CtcLossOpIr::create(
+            log_probs.into_ir(),
+            targets.into_ir(),
+            input_lengths.into_ir(),
+            target_lengths.into_ir(),
+            blank,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::CtcLoss(desc)))
+            .output()
+    }
+
+    fn has_attention_backward() -> bool {
+        // The forward and the backward are one operation each for the backend on the other side:
+        // the interpreter answers them with that backend's own kernels, or with the default
+        // composition when it has none.
+        true
+    }
+
+    fn attention_with_logsumexp(
+        query: FloatTensor<Self>,
+        key: FloatTensor<Self>,
+        value: FloatTensor<Self>,
+        options: AttentionModuleOptions,
+    ) -> (FloatTensor<Self>, FloatTensor<Self>) {
+        let client = query.client.clone();
+        let desc = AttentionWithLogsumexpOpIr::create(
+            query.into_ir(),
+            key.into_ir(),
+            value.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        let [out, logsumexp] = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::AttentionWithLogsumexp(desc),
+            ))
+            .outputs();
+        (out, logsumexp)
+    }
+
+    fn attention_backward(
+        query: FloatTensor<Self>,
+        key: FloatTensor<Self>,
+        value: FloatTensor<Self>,
+        out: FloatTensor<Self>,
+        logsumexp: FloatTensor<Self>,
+        out_grad: FloatTensor<Self>,
+        options: AttentionModuleOptions,
+    ) -> AttentionBackward<Self> {
+        let client = query.client.clone();
+        let desc = AttentionBackwardOpIr::create(
+            query.into_ir(),
+            key.into_ir(),
+            value.into_ir(),
+            out.into_ir(),
+            logsumexp.into_ir(),
+            out_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        let [query_grad, key_grad, value_grad] = client
+            .register(OperationIr::Module(ModuleOperationIr::AttentionBackward(
+                Box::new(desc),
+            )))
+            .outputs();
+        AttentionBackward::new(query_grad, key_grad, value_grad)
+    }
+
+    fn has_ctc_loss_backward() -> bool {
+        // The gradient is one operation for the backend on the other side, which a router
+        // cannot name here: the interpreter answers it with that backend's own kernel, or
+        // with the default gradient when it has none.
+        true
+    }
+
+    fn ctc_loss_backward(
+        log_probs: FloatTensor<Self>,
+        targets: IntTensor<Self>,
+        input_lengths: IntTensor<Self>,
+        target_lengths: IntTensor<Self>,
+        grad_loss: FloatTensor<Self>,
+        blank: usize,
+    ) -> FloatTensor<Self> {
+        let client = log_probs.client.clone();
+        let desc = CtcLossBackwardOpIr::create(
+            log_probs.into_ir(),
+            targets.into_ir(),
+            input_lengths.into_ir(),
+            target_lengths.into_ir(),
+            grad_loss.into_ir(),
+            blank,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::CtcLossBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn embedding(weights: FloatTensor<Self>, indices: IntTensor<Self>) -> FloatTensor<Self> {
+        let client = weights.client.clone();
+        let desc = EmbeddingOpIr::create(weights.into_ir(), indices.into_ir(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Embedding(desc)))
+            .output()
+    }
+
+    fn embedding_backward(
+        weights: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = weights.client.clone();
+        let desc = EmbeddingBackwardOpIr::create(
+            weights.into_ir(),
+            output_grad.into_ir(),
+            indices.into_ir(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::EmbeddingBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn linear(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = LinearOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Linear(desc)))
+            .output()
+    }
+
+    fn linear_x_backward(
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = weight.client.clone();
+        let desc = LinearXBackwardOpIr::create(weight.into_ir(), output_grad.into_ir(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::LinearXBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn linear_weight_backward(
+        x: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = LinearWeightBackwardOpIr::create(x.into_ir(), output_grad.into_ir(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::LinearWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn linear_bias_backward(output_grad: FloatTensor<Self>) -> FloatTensor<Self> {
+        let client = output_grad.client.clone();
+        let desc =
+            LinearBiasBackwardOpIr::create(output_grad.into_ir(), || client.create_empty_handle());
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::LinearBiasBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn layer_norm(
+        tensor: FloatTensor<Self>,
+        gamma: FloatTensor<Self>,
+        beta: Option<FloatTensor<Self>>,
+        epsilon: f64,
+    ) -> FloatTensor<Self> {
+        let client = tensor.client.clone();
+        let desc = LayerNormOpIr::create(
+            tensor.into_ir(),
+            gamma.into_ir(),
+            beta.map(|b| b.into_ir()),
+            epsilon,
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(ModuleOperationIr::LayerNorm(desc)))
+            .output()
+    }
+
+    fn unfold4d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        options: cortex_backend::ops::UnfoldOptions,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Unfold4dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            Unfold4dOptionsIr {
+                stride: options.stride,
+                padding: options.padding,
+                dilation: options.dilation,
+            },
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Unfold4d(desc)))
+            .output()
+    }
+
+    fn conv_transpose1d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose1dWeightBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::ConvTranspose1dWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv_transpose1d_bias_backward(
+        x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose1dBiasBackwardOpIr::create(
+            x.into_ir(),
+            bias.into_ir(),
+            output_grad.into_ir(),
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::ConvTranspose1dBiasBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv_transpose2d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose2dWeightBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::ConvTranspose2dWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv_transpose2d_bias_backward(
+        x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose2dBiasBackwardOpIr::create(
+            x.into_ir(),
+            bias.into_ir(),
+            output_grad.into_ir(),
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::ConvTranspose2dBiasBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv_transpose3d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose3dWeightBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::ConvTranspose3dWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv_transpose3d_bias_backward(
+        x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose3dBiasBackwardOpIr::create(
+            x.into_ir(),
+            bias.into_ir(),
+            output_grad.into_ir(),
+            || client.create_empty_handle(),
+        );
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::ConvTranspose3dBiasBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv1d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv1dOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv1d(desc)))
+            .output()
+    }
+
+    fn conv1d_x_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv1dXBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv1dXBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv1d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv1dWeightBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::Conv1dWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv1d_bias_backward(
+        x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv1dBiasBackwardOpIr::create(
+            x.into_ir(),
+            bias.into_ir(),
+            output_grad.into_ir(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv1dBiasBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv2d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv2dOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv2d(desc)))
+            .output()
+    }
+
+    fn conv2d_x_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv2dXBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv2dXBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv2d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv2dWeightBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::Conv2dWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv2d_bias_backward(
+        x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv2dBiasBackwardOpIr::create(
+            x.into_ir(),
+            bias.into_ir(),
+            output_grad.into_ir(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv2dBiasBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv3d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv3dOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv3d(desc)))
+            .output()
+    }
+
+    fn conv3d_x_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv3dXBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv3dXBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv3d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv3dWeightBackwardOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::Conv3dWeightBackward(desc),
+            ))
+            .output()
+    }
+
+    fn conv3d_bias_backward(
+        x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = Conv3dBiasBackwardOpIr::create(
+            x.into_ir(),
+            bias.into_ir(),
+            output_grad.into_ir(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Conv3dBiasBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv_transpose1d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose1dOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::ConvTranspose1d(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv_transpose2d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose2dOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::ConvTranspose2d(
+                desc,
+            )))
+            .output()
+    }
+
+    fn conv_transpose3d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = ConvTranspose3dOpIr::create(
+            x.into_ir(),
+            weight.into_ir(),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::ConvTranspose3d(
+                desc,
+            )))
+            .output()
+    }
+
+    fn avg_pool1d(
+        x: FloatTensor<Self>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = AvgPool1dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AvgPool1d(desc)))
+            .output()
+    }
+
+    fn avg_pool2d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = AvgPool2dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AvgPool2d(desc)))
+            .output()
+    }
+
+    fn avg_pool3d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = AvgPool3dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AvgPool3d(desc)))
+            .output()
+    }
+
+    fn avg_pool1d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = AvgPool1dBackwardOpIr::create(
+            x.into_ir(),
+            grad.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AvgPool1dBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn avg_pool2d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = AvgPool2dBackwardOpIr::create(
+            x.into_ir(),
+            grad.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AvgPool2dBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn avg_pool3d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = AvgPool3dBackwardOpIr::create(
+            x.into_ir(),
+            grad.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AvgPool3dBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn max_pool1d(
+        x: FloatTensor<Self>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = MaxPool1dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::MaxPool1d(desc)))
+            .output()
+    }
+
+    fn max_pool2d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = MaxPool2dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::MaxPool2d(desc)))
+            .output()
+    }
+
+    fn max_pool3d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = MaxPool3dOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::MaxPool3d(desc)))
+            .output()
+    }
+
+    fn max_pool1d_with_indices(
+        x: FloatTensor<Self>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool1dWithIndices<Self> {
+        let client = x.client.clone();
+        let desc = MaxPool1dWithIndicesOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            indices_dtype.into(),
+            || client.create_empty_handle(),
+        );
+
+        let [out, out_indices] = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::MaxPool1dWithIndices(desc),
+            ))
+            .outputs();
+
+        MaxPool1dWithIndices::new(out, out_indices)
+    }
+
+    fn max_pool2d_with_indices(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool2dWithIndices<Self> {
+        let client = x.client.clone();
+        let desc = MaxPool2dWithIndicesOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            indices_dtype.into(),
+            || client.create_empty_handle(),
+        );
+
+        let [out, out_indices] = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::MaxPool2dWithIndices(desc),
+            ))
+            .outputs();
+
+        MaxPool2dWithIndices::new(out, out_indices)
+    }
+
+    fn max_pool3d_with_indices(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool3dWithIndices<Self> {
+        let client = x.client.clone();
+        let desc = MaxPool3dWithIndicesOpIr::create(
+            x.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            indices_dtype.into(),
+            || client.create_empty_handle(),
+        );
+
+        let [out, out_indices] = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::MaxPool3dWithIndices(desc),
+            ))
+            .outputs();
+
+        MaxPool3dWithIndices::new(out, out_indices)
+    }
+
+    fn max_pool1d_with_indices_backward(
+        x: FloatTensor<Self>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        ceil_mode: bool,
+        output_grad: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+    ) -> MaxPool1dBackward<Self> {
+        let client = x.client.clone();
+
+        let desc = MaxPool1dWithIndicesBackwardOpIr::create(
+            x.into_ir(),
+            output_grad.into_ir(),
+            indices.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        let out = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::MaxPool1dWithIndicesBackward(desc),
+            ))
+            .output();
+
+        MaxPool1dBackward::new(out)
+    }
+
+    fn max_pool2d_with_indices_backward(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+        output_grad: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+    ) -> MaxPool2dBackward<Self> {
+        let client = x.client.clone();
+
+        let desc = MaxPool2dWithIndicesBackwardOpIr::create(
+            x.into_ir(),
+            output_grad.into_ir(),
+            indices.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        let out = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::MaxPool2dWithIndicesBackward(desc),
+            ))
+            .output();
+
+        MaxPool2dBackward::new(out)
+    }
+
+    fn max_pool3d_with_indices_backward(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+        output_grad: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+    ) -> MaxPool3dBackward<Self> {
+        let client = x.client.clone();
+
+        let desc = MaxPool3dWithIndicesBackwardOpIr::create(
+            x.into_ir(),
+            output_grad.into_ir(),
+            indices.into_ir(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            || client.create_empty_handle(),
+        );
+
+        let out = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::MaxPool3dWithIndicesBackward(desc),
+            ))
+            .output();
+
+        MaxPool3dBackward::new(out)
+    }
+
+    fn adaptive_avg_pool1d(x: FloatTensor<Self>, output_size: usize) -> FloatTensor<Self> {
+        let client = x.client.clone();
+
+        let desc = AdaptiveAvgPool1dOpIr::create(x.into_ir(), output_size, || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AdaptiveAvgPool1d(
+                desc,
+            )))
+            .output()
+    }
+
+    fn adaptive_avg_pool2d(x: FloatTensor<Self>, output_size: [usize; 2]) -> FloatTensor<Self> {
+        let client = x.client.clone();
+
+        let desc = AdaptiveAvgPool2dOpIr::create(x.into_ir(), output_size, || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AdaptiveAvgPool2d(
+                desc,
+            )))
+            .output()
+    }
+
+    fn adaptive_avg_pool1d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+
+        let desc = AdaptiveAvgPool1dBackwardOpIr::create(x.into_ir(), grad.into_ir(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::AdaptiveAvgPool1dBackward(desc),
+            ))
+            .output()
+    }
+
+    fn adaptive_avg_pool2d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+
+        let desc = AdaptiveAvgPool2dBackwardOpIr::create(x.into_ir(), grad.into_ir(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::AdaptiveAvgPool2dBackward(desc),
+            ))
+            .output()
+    }
+
+    fn adaptive_avg_pool3d(x: FloatTensor<Self>, output_size: [usize; 3]) -> FloatTensor<Self> {
+        let client = x.client.clone();
+
+        let desc = AdaptiveAvgPool3dOpIr::create(x.into_ir(), output_size, || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::AdaptiveAvgPool3d(
+                desc,
+            )))
+            .output()
+    }
+
+    fn adaptive_avg_pool3d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+
+        let desc = AdaptiveAvgPool3dBackwardOpIr::create(x.into_ir(), grad.into_ir(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(
+                ModuleOperationIr::AdaptiveAvgPool3dBackward(desc),
+            ))
+            .output()
+    }
+
+    fn interpolate(
+        x: FloatTensor<Self>,
+        output_size: [usize; 2],
+        options: InterpolateOptions,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = InterpolateOpIr::create(x.into_ir(), output_size, options.into(), || {
+            client.create_empty_handle()
+        });
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Interpolate(desc)))
+            .output()
+    }
+
+    fn interpolate_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        output_size: [usize; 2],
+        options: InterpolateOptions,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = InterpolateBackwardOpIr::create(
+            x.into_ir(),
+            grad.into_ir(),
+            output_size,
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::InterpolateBackward(
+                desc,
+            )))
+            .output()
+    }
+
+    fn deform_conv2d(
+        x: FloatTensor<Self>,
+        offset: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        mask: Option<FloatTensor<Self>>,
+        bias: Option<FloatTensor<Self>>,
+        options: DeformConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        let client = x.client.clone();
+        let desc = DeformConv2dOpIr::create(
+            x.into_ir(),
+            offset.into_ir(),
+            weight.into_ir(),
+            mask.map(|mask| mask.into_ir()),
+            bias.map(|bias| bias.into_ir()),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::DeformableConv2d(
+                Box::new(desc),
+            )))
+            .output()
+    }
+
+    fn deform_conv2d_backward(
+        x: FloatTensor<Self>,
+        offset: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        mask: Option<FloatTensor<Self>>,
+        bias: Option<FloatTensor<Self>>,
+        output_grad: FloatTensor<Self>,
+        options: DeformConvOptions<2>,
+    ) -> DeformConv2dBackward<Self> {
+        let client = x.client.clone();
+        let has_bias = bias.is_some();
+        let has_mask = mask.is_some();
+
+        let desc = DeformConv2dBackwardOpIr::create(
+            x.into_ir(),
+            offset.into_ir(),
+            weight.into_ir(),
+            mask.map(|mask| mask.into_ir()),
+            bias.map(|bias| bias.into_ir()),
+            output_grad.into_ir(),
+            options.into(),
+            || client.create_empty_handle(),
+        );
+        let mut outputs = client
+            .register(OperationIr::Module(
+                ModuleOperationIr::DeformableConv2dBackward(Box::new(desc)),
+            ))
+            .into_iter();
+
+        // When the number of outputs is variable, the order is important
+        let input_grad = outputs.next().unwrap();
+        let offset_grad = outputs.next().unwrap();
+        let weight_grad = outputs.next().unwrap();
+        let mask_grad = has_mask.then(|| outputs.next().unwrap());
+        let bias_grad = has_bias.then(|| outputs.next().unwrap());
+
+        DeformConv2dBackward::new(input_grad, offset_grad, weight_grad, mask_grad, bias_grad)
+    }
+
+    fn attention(
+        query: FloatTensor<Self>,
+        key: FloatTensor<Self>,
+        value: FloatTensor<Self>,
+        mask: Option<BoolTensor<Self>>,
+        attn_bias: Option<FloatTensor<Self>>,
+        cache: Option<AttentionCache<Self>>,
+        options: AttentionModuleOptions,
+    ) -> FloatTensor<Self> {
+        let client = query.client.clone();
+        let (lengths, pages) = match cache {
+            Some(AttentionCache { lengths, pages }) => {
+                (Some(lengths.into_ir()), pages.map(|p| p.into_ir()))
+            }
+            None => (None, None),
+        };
+        let desc = AttentionOpIr::create(
+            query.into_ir(),
+            key.into_ir(),
+            value.into_ir(),
+            mask.map(|m: BoolTensor<Self>| m.into_ir()),
+            attn_bias.map(|ab| ab.into_ir()),
+            lengths,
+            pages,
+            options.into(),
+            || client.create_empty_handle(),
+        );
+
+        client
+            .register(OperationIr::Module(ModuleOperationIr::Attention(Box::new(
+                desc,
+            ))))
+            .output()
+    }
+}

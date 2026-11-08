@@ -1,0 +1,311 @@
+#[cfg(feature = "autotune")]
+use crate::engine::{launch::FuseTraceLauncher, trace::TraceError};
+#[cfg(feature = "autotune")]
+use crate::optim::reduce::tune::fused_reduce_autotune;
+#[cfg(feature = "autotune")]
+use crate::optim::reduce_broadcasted::{
+    launch::FusedReduceBroadcastedLaunch, tune::fused_broadcasted_reduce_autotune,
+};
+#[cfg(feature = "autotune")]
+use crate::tune::TunedTrace;
+use crate::{
+    CubeFusionHandle, FallbackOperation,
+    engine::trace::{FuseTrace, TuneOutput},
+    optim::{
+        FusedOperation,
+        elemwise::{ElemwiseOptimization, ElemwiseOptimizationState},
+        reduce::{ReduceOptimizationInfo, ReduceOptimizationState, ReduceOptimizationTuneArg},
+        reduce_broadcasted::launch::ReduceBroadcastedFuseBlock,
+    },
+};
+use cortex_fusion::stream::Context;
+use cubecl::prelude::*;
+#[cfg(feature = "autotune")]
+use cubek::reduce::launch::RoutineStrategy;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+pub struct ReduceBroadcastedOptimization {
+    pub(crate) info: Arc<ReduceBroadcastedOptimizationInfo>,
+    pub(crate) num_ops: usize,
+}
+
+pub(crate) struct ReduceBroadcastedOptimizationInfo {
+    pub(crate) fallbacks: Vec<ReduceBlockOptimInfo>,
+    pub(crate) broadcasted: Arc<ReduceBroadcastedInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct ReduceBroadcastedInfo {
+    pub(crate) blocks: Vec<ReduceBroadcastedFuseBlock>,
+    pub(crate) trace: FuseTrace,
+    pub(crate) reduce_axis: usize,
+}
+
+pub(crate) enum ReduceBlockOptimInfo {
+    Reduce(Arc<ReduceOptimizationInfo>),
+    Elemwise(Arc<ElemwiseOptimization>),
+}
+
+impl ReduceBlockOptimInfo {
+    pub fn from_state(device: &cubecl::Device, state: ReduceBlockState) -> Self {
+        match state {
+            ReduceBlockState::Reduce(state) => {
+                Self::Reduce(Arc::new(ReduceOptimizationInfo::from_state(device, state)))
+            }
+            ReduceBlockState::Elemwise(state) => {
+                Self::Elemwise(Arc::new(ElemwiseOptimization::from_state(device, state)))
+            }
+        }
+    }
+    pub fn to_state(&self) -> ReduceBlockState {
+        match self {
+            Self::Reduce(info) => ReduceBlockState::Reduce(info.to_state()),
+            Self::Elemwise(info) => ReduceBlockState::Elemwise(info.to_state()),
+        }
+    }
+}
+
+// Without the autotune, only the fallbacks are read: the rest is what it tunes over.
+#[cfg_attr(not(feature = "autotune"), allow(dead_code))]
+pub(crate) struct ReduceBroadcastedOptimizationTuneArg {
+    pub(crate) fallbacks: Vec<ReduceBlockOptimArg>,
+    pub(crate) broadcasted: Arc<ReduceBroadcastedInfo>,
+    pub(crate) client: Client,
+    pub(crate) device: cubecl::Device,
+}
+
+#[cfg(feature = "autotune")]
+impl TunedTrace for ReduceBroadcastedOptimizationTuneArg {
+    fn trace(&self) -> &FuseTrace {
+        &self.broadcasted.trace
+    }
+}
+
+pub(crate) enum ReduceBlockOptimArg {
+    Reduce(ReduceOptimizationTuneArg),
+    Elemwise(Arc<ElemwiseOptimization>),
+}
+
+impl ReduceBlockOptimArg {
+    pub fn execute_fallback(&self, context: &mut Context<CubeFusionHandle>) -> Option<TuneOutput> {
+        match self {
+            ReduceBlockOptimArg::Reduce(reduce) => {
+                #[cfg(feature = "autotune")]
+                {
+                    fused_reduce_autotune(reduce.clone(), context);
+                    None
+                }
+                #[cfg(not(feature = "autotune"))]
+                Some(reduce.execute_fallback(context))
+            }
+            ReduceBlockOptimArg::Elemwise(elem) => {
+                elem.execute(context);
+                None
+            }
+        }
+    }
+
+    pub fn execute_empty_axis_fallback(&self, context: &mut Context<CubeFusionHandle>) {
+        match self {
+            ReduceBlockOptimArg::Reduce(reduce) => {
+                reduce.execute_fallback(context);
+            }
+            ReduceBlockOptimArg::Elemwise(elem) => {
+                elem.execute(context);
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ReduceBroadcastedOptimizationState {
+    fallbacks: Vec<ReduceBlockState>,
+    broadcasted: ReduceBroadcastedInfo,
+    num_ops: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[allow(clippy::large_enum_variant)] // Only for serialization.
+pub enum ReduceBlockState {
+    Reduce(ReduceOptimizationState),
+    Elemwise(ElemwiseOptimizationState),
+}
+
+impl ReduceBroadcastedOptimizationTuneArg {
+    #[cfg(feature = "autotune")]
+    pub fn execute_fused(
+        &self,
+        context: &mut Context<CubeFusionHandle>,
+        strategy: RoutineStrategy,
+    ) -> Result<TuneOutput, TraceError<String>> {
+        let launch = FusedReduceBroadcastedLaunch::new(
+            &self.broadcasted.blocks,
+            self.broadcasted.reduce_axis,
+            strategy,
+        );
+        let launcher = FuseTraceLauncher::new(&self.broadcasted.trace, &launch);
+
+        launcher
+            .launch(&self.client, &self.device, context)
+            .map_err(|err| TraceError::RunnerError(format!("{:?}", err)))
+    }
+
+    pub fn execute_fallback(&self, context: &mut Context<CubeFusionHandle>) {
+        for fallback in self.fallbacks.iter() {
+            fallback.execute_fallback(context);
+        }
+    }
+
+    pub fn execute_empty_axis_fallback(&self, context: &mut Context<CubeFusionHandle>) {
+        for fallback in self.fallbacks.iter() {
+            fallback.execute_empty_axis_fallback(context);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+impl ReduceBroadcastedOptimization {
+    /// Execute the optimization.
+    pub fn execute(
+        &mut self,
+        context: &mut Context<CubeFusionHandle>,
+        fallback: impl Fn(usize) -> Box<dyn FallbackOperation>,
+    ) {
+        let mut current_index = 0;
+        let mut client = None;
+        let mut device = None;
+
+        let fallbacks = self
+            .info
+            .fallbacks
+            .iter()
+            .map(|info| {
+                match info {
+                    ReduceBlockOptimInfo::Reduce(info) => {
+                        // The index of the fallback reduce is the number of ops fused as read.
+                        let fallback = fallback(current_index + info.len_read);
+                        client = Some(info.client.clone());
+                        device = Some(info.device.clone());
+                        let arg = ReduceOptimizationTuneArg {
+                            info: info.clone(),
+                            fallback: Arc::new(fallback),
+                        };
+                        current_index += info.len;
+                        ReduceBlockOptimArg::Reduce(arg)
+                    }
+                    ReduceBlockOptimInfo::Elemwise(op) => ReduceBlockOptimArg::Elemwise(op.clone()),
+                }
+            })
+            .collect();
+
+        // An empty reduce input means either the reduced axis is empty, which no fused kernel
+        // accepts, or the output is empty, which leaves the kernels nothing to launch over.
+        let empty_input = self.info.fallbacks.iter().any(|fallback| match fallback {
+            ReduceBlockOptimInfo::Reduce(info) => {
+                let input = context.tensors.get(&info.reduce.op.input.id).unwrap();
+                input.shape.num_elements() == 0
+            }
+            ReduceBlockOptimInfo::Elemwise(_) => false,
+        });
+
+        let arg = ReduceBroadcastedOptimizationTuneArg {
+            fallbacks,
+            client: client.unwrap(),
+            device: device.unwrap(),
+            broadcasted: self.info.broadcasted.clone(),
+        };
+
+        if empty_input {
+            arg.execute_empty_axis_fallback(context);
+            return;
+        }
+
+        #[cfg(feature = "autotune")]
+        fused_broadcasted_reduce_autotune(arg, context);
+
+        #[cfg(not(feature = "autotune"))]
+        arg.execute_fallback(context);
+    }
+
+    pub fn to_state(&self) -> ReduceBroadcastedOptimizationState {
+        ReduceBroadcastedOptimizationState {
+            fallbacks: self
+                .info
+                .fallbacks
+                .iter()
+                .map(|info| info.to_state())
+                .collect(),
+            broadcasted: self.info.broadcasted.as_ref().clone(),
+            num_ops: self.num_ops,
+        }
+    }
+
+    pub fn from_state(device: &cubecl::Device, state: ReduceBroadcastedOptimizationState) -> Self {
+        Self {
+            info: Arc::new(ReduceBroadcastedOptimizationInfo {
+                fallbacks: state
+                    .fallbacks
+                    .into_iter()
+                    .map(|state| ReduceBlockOptimInfo::from_state(device, state))
+                    .collect(),
+                broadcasted: Arc::new(state.broadcasted),
+            }),
+            num_ops: state.num_ops,
+        }
+    }
+
+    /// Returns the number of output buffers added by fusion.
+    pub fn num_ops_fused(&self) -> usize {
+        self.num_ops
+    }
+}
+
+/// Name of the broadcasted-reduce fusion optimization.
+pub const NAME: &str = "ReduceBroadcasted";
+
+impl FusedOperation for ReduceBroadcastedOptimization {
+    fn max_relative_shape_id(&self) -> Option<usize> {
+        let fallbacks = self
+            .info
+            .fallbacks
+            .iter()
+            .filter_map(|fallback| match fallback {
+                ReduceBlockOptimInfo::Reduce(info) => info.max_relative_shape_id(),
+                ReduceBlockOptimInfo::Elemwise(opt) => {
+                    FusedOperation::max_relative_shape_id(opt.as_ref())
+                }
+            });
+
+        self.info
+            .broadcasted
+            .trace
+            .max_relative_shape_id()
+            .into_iter()
+            .chain(fallbacks)
+            .max()
+    }
+
+    const NAME: &'static str = self::NAME;
+    type State = ReduceBroadcastedOptimizationState;
+
+    fn num_ops_fused(&self) -> usize {
+        Self::num_ops_fused(self)
+    }
+
+    fn run(
+        &mut self,
+        context: &mut Context<CubeFusionHandle>,
+        fallback: &dyn Fn(usize) -> Box<dyn FallbackOperation>,
+    ) {
+        Self::execute(self, context, |index| fallback(index))
+    }
+
+    fn to_state(&self) -> Self::State {
+        Self::to_state(self)
+    }
+
+    fn from_state(device: &cubecl::Device, state: Self::State) -> Self {
+        Self::from_state(device, state)
+    }
+}

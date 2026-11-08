@@ -1,0 +1,377 @@
+use super::{
+    BatchDataLoader, BatchStrategy, DataLoader, FixBatchStrategy, MultiThreadDataLoader,
+    batcher::Batcher,
+};
+use cortex_dataset::Dataset;
+use cortex_tensor::Device;
+use rand::{SeedableRng, rngs::StdRng};
+use std::sync::Arc;
+
+/// A builder for data loaders.
+pub struct DataLoaderBuilder<I, O> {
+    batch_size: Option<usize>,
+    drop_last: bool,
+    batcher: Arc<dyn Batcher<I, O>>,
+    num_threads: Option<usize>,
+    prefetch: Option<usize>,
+    shuffle: Option<u64>,
+    device: Option<Device>,
+}
+
+impl<I, O> DataLoaderBuilder<I, O>
+where
+    I: Send + Sync + Clone + std::fmt::Debug + 'static,
+    O: Send + Clone + std::fmt::Debug + 'static,
+{
+    /// Creates a new data loader builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `batcher` - The batcher.
+    ///
+    /// # Returns
+    ///
+    /// The data loader builder.
+    pub fn new<Bt>(batcher: Bt) -> Self
+    where
+        Bt: Batcher<I, O> + 'static,
+    {
+        Self {
+            batcher: Arc::new(batcher),
+            batch_size: None,
+            drop_last: false,
+            num_threads: None,
+            prefetch: None,
+            shuffle: None,
+            device: None,
+        }
+    }
+
+    /// Sets the batch size to a fix number.
+    ///
+    /// The [fix batch strategy](FixBatchStrategy) will be used.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch_size` - The batch size.
+    ///
+    /// # Returns
+    ///
+    /// The data loader builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `batch_size` is zero.
+    pub fn batch_size(mut self, batch_size: usize) -> Self {
+        assert!(batch_size > 0, "Batch size must be greater than zero.");
+        self.batch_size = Some(batch_size);
+        self
+    }
+
+    /// Sets whether to drop the last batch when it is smaller than the batch size.
+    ///
+    /// By default, the last incomplete batch is kept. With multiple workers, only the
+    /// dataset's final incomplete batch is dropped, rather than a partial batch per worker.
+    ///
+    /// Dropped items are excluded from [`DataLoader::expected_num_items`] and iterator progress,
+    /// while [`DataLoader::num_items`] still reports the input dataset size.
+    pub fn drop_last(mut self, drop_last: bool) -> Self {
+        self.drop_last = drop_last;
+        self
+    }
+
+    /// Sets the seed for shuffling.
+    ///
+    /// Each time the dataloader starts a new iteration, the dataset will be shuffled.
+    ///
+    /// # Arguments
+    ///
+    /// * `seed` - The seed.
+    ///
+    /// # Returns
+    ///
+    /// The data loader builder.
+    pub fn shuffle(mut self, seed: u64) -> Self {
+        self.shuffle = Some(seed);
+        self
+    }
+
+    /// Sets the number of workers.
+    ///
+    /// - `Some(0)` or `None`: the dataloader will run without work threads.
+    /// - `Some(n); n > 0`: the dataloader will run with `n` background threads.
+    ///
+    /// A 1-worker threaded dataloader will run loads in a background thread,
+    /// while a 0-worker threaded dataloader will run loads in the main thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_workers` - The number of workers.
+    ///
+    /// # Returns
+    ///
+    /// The data loader builder.
+    pub fn num_workers(mut self, num_workers: usize) -> Self {
+        self.num_threads = Some(num_workers);
+        self
+    }
+
+    /// Sets the total number of finished batches the workers may queue ahead of the consumer,
+    /// shared by all workers. Lower it when device memory is tight, raise it when batches take
+    /// long to build. `0` hands each batch over directly, with nothing queued. Has no effect
+    /// without workers.
+    ///
+    /// Only the default scales with the number of workers: two batches per worker, so eight
+    /// with four workers. An explicit `prefetch(2)` queues two batches in total.
+    ///
+    /// # Arguments
+    ///
+    /// * `prefetch` - The total number of batches the workers may queue.
+    ///
+    /// # Returns
+    ///
+    /// The data loader builder.
+    pub fn prefetch(mut self, prefetch: usize) -> Self {
+        self.prefetch = Some(prefetch);
+        self
+    }
+
+    /// Sets the data loader device.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - The device to use when loading a batch.
+    ///
+    /// # Returns
+    ///
+    /// The data loader builder.
+    pub fn set_device(mut self, device: Device) -> Self {
+        self.device = Some(device);
+        self
+    }
+
+    /// Builds the data loader.
+    ///
+    /// # Arguments
+    ///
+    /// * `dataset` - The dataset.
+    ///
+    /// # Returns
+    ///
+    /// The data loader.
+    pub fn build<D>(self, dataset: D) -> Arc<dyn DataLoader<O>>
+    where
+        D: Dataset<I> + 'static,
+    {
+        let dataset = Arc::new(dataset);
+
+        let device = self.device.unwrap_or_default();
+        let rng = self.shuffle.map(StdRng::seed_from_u64);
+        let strategy: Box<dyn BatchStrategy<I>> = Box::new(
+            FixBatchStrategy::new(self.batch_size.unwrap_or(1)).with_drop_last(self.drop_last),
+        );
+
+        if let Some(num_threads) = self.num_threads
+            && num_threads > 0
+        {
+            let dataloader = MultiThreadDataLoader::new(
+                strategy,
+                dataset,
+                self.batcher,
+                num_threads,
+                device,
+                rng,
+            );
+            return Arc::new(match self.prefetch {
+                Some(prefetch) => dataloader.with_prefetch(prefetch),
+                None => dataloader,
+            });
+        }
+
+        Arc::new(BatchDataLoader::new(
+            strategy,
+            dataset,
+            self.batcher,
+            device,
+            rng,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(test)]
+    use cortex_tensor::Device;
+
+    use super::*;
+    use crate::data::dataset::FakeDataset;
+
+    #[derive(new, Clone)]
+    struct TestBatcherDevice;
+
+    #[cfg(test)]
+    impl<I> Batcher<I, Device> for TestBatcherDevice {
+        fn batch(&self, _items: Vec<I>, device: &Device) -> Device {
+            device.clone()
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestBatcherLen;
+
+    impl<I> Batcher<I, usize> for TestBatcherLen {
+        fn batch(&self, items: Vec<I>, _device: &Device) -> usize {
+            items.len()
+        }
+    }
+
+    #[test]
+    fn test_dataloader_no_workers() {
+        let default_device = Device::default();
+        let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
+            .batch_size(1)
+            .build(FakeDataset::<String>::new(9));
+
+        assert_eq!(dataloader.num_items(), 9);
+
+        for device in dataloader.iter().map(Result::unwrap) {
+            assert_eq!(device, default_device)
+        }
+    }
+
+    #[test]
+    fn test_dataloader_drop_last() {
+        for num_workers in [0, 1, 2, 3] {
+            let dataloader = DataLoaderBuilder::new(TestBatcherLen)
+                .batch_size(4)
+                .drop_last(true)
+                .num_workers(num_workers)
+                .build(FakeDataset::<String>::new(10));
+
+            assert_eq!(dataloader.num_items(), 10, "workers: {num_workers}");
+            assert_eq!(
+                dataloader.expected_num_items(),
+                Some(8),
+                "workers: {num_workers}"
+            );
+
+            let mut iterator = dataloader.iter();
+            assert_eq!(
+                iterator.progress().items_processed,
+                0,
+                "workers: {num_workers}"
+            );
+            assert_eq!(iterator.progress().total, Some(8), "workers: {num_workers}");
+
+            let mut processed = 0;
+            while let Some(batch) = iterator.next() {
+                let len = batch.unwrap();
+                assert_eq!(len, 4, "workers: {num_workers}");
+                processed += len;
+                assert_eq!(
+                    iterator.progress().items_processed,
+                    processed,
+                    "workers: {num_workers}"
+                );
+                assert_eq!(iterator.progress().total, Some(8), "workers: {num_workers}");
+            }
+
+            assert_eq!(processed, 8, "workers: {num_workers}");
+            assert_eq!(
+                iterator.progress().items_processed,
+                8,
+                "workers: {num_workers}"
+            );
+            assert_eq!(iterator.progress().total, Some(8), "workers: {num_workers}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Batch size must be greater than zero.")]
+    fn test_dataloader_rejects_zero_batch_size() {
+        DataLoaderBuilder::<String, _>::new(TestBatcherLen).batch_size(0);
+    }
+
+    #[test]
+    fn test_dataloader_keeps_last_batch_by_default() {
+        let dataloader = DataLoaderBuilder::new(TestBatcherLen)
+            .batch_size(4)
+            .build(FakeDataset::<String>::new(10));
+
+        let lengths: Vec<usize> = dataloader.iter().map(Result::unwrap).collect();
+
+        assert_eq!(lengths, vec![4, 4, 2]);
+    }
+
+    #[test]
+    fn test_dataloader_drop_last_is_independent_of_call_order() {
+        let dataloader = DataLoaderBuilder::new(TestBatcherLen)
+            .drop_last(true)
+            .batch_size(4)
+            .build(FakeDataset::<String>::new(10));
+
+        let lengths: Vec<usize> = dataloader.iter().map(Result::unwrap).collect();
+
+        assert_eq!(lengths, vec![4, 4]);
+    }
+
+    #[test]
+    fn test_dataloader_default_device() {
+        let default_device = Device::default();
+        let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
+            .batch_size(1)
+            .num_workers(1)
+            .build(FakeDataset::<String>::new(9));
+
+        assert_eq!(dataloader.num_items(), 9);
+
+        for device in dataloader.iter().map(Result::unwrap) {
+            assert_eq!(device, default_device)
+        }
+    }
+
+    #[test]
+    fn prefetch_yields_every_batch() {
+        let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
+            .batch_size(1)
+            .num_workers(2)
+            .prefetch(0)
+            .build(FakeDataset::<String>::new(9));
+
+        assert_eq!(dataloader.iter().map(Result::unwrap).count(), 9);
+    }
+
+    #[test]
+    fn test_dataloader_slice_multi_device() {
+        let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
+            .batch_size(1)
+            .num_workers(1)
+            .build(FakeDataset::<String>::new(11));
+
+        #[cfg(all(test, not(feature = "cuda")))]
+        // Only one device exists...
+        let (device1, device2) = (Device::flex(), Device::flex());
+
+        #[cfg(all(test, feature = "cuda"))]
+        let (device1, device2) = (Device::cuda(0), Device::cuda(1));
+
+        assert_eq!(dataloader.num_items(), 11);
+        let dataloader_1 = dataloader.slice(0, 5).to_device(&device1);
+        let dataloader_2 = dataloader.slice(5, 11).to_device(&device2);
+
+        assert_eq!(dataloader_1.num_items(), 5);
+        assert_eq!(dataloader_2.num_items(), 6);
+
+        let (mut iterator_1, mut iterator_2) = (dataloader_1.iter(), dataloader_2.iter());
+
+        for _ in 0..5 {
+            assert_eq!(iterator_1.next().unwrap().unwrap(), device1);
+            assert_eq!(iterator_2.next().unwrap().unwrap(), device2);
+        }
+
+        assert!(iterator_1.next().is_none());
+        // For uneven split, the last dataloader (partial dataset) will have the remaining item
+        assert_eq!(iterator_2.next().unwrap().unwrap(), device2);
+        assert!(iterator_2.next().is_none());
+    }
+}

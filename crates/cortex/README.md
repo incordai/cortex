@@ -1,0 +1,601 @@
+<div align="center">
+  <img src="assets/cortex-symbol-colour.svg" alt="The Cortex logo" height="200"/>
+  <br /><br />
+
+[![Rust 1.95 or later](https://img.shields.io/badge/Rust-1.95%2B-f15a24?style=flat-square&logo=rust&logoColor=white)](https://crates.io/crates/cortex)
+[![License](https://img.shields.io/badge/License-MIT%2FApache--2.0-f15a24?style=flat-square)](#license)
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex.svg?style=flat-square&color=f15a24)](https://crates.io/crates/cortex)
+[![Test Status](https://img.shields.io/github/actions/workflow/status/tracel-ai/burn/test.yml?branch=main&label=CI&style=flat-square)](https://github.com/tracel-ai/burn/actions/workflows/test.yml)
+<br />
+[![Discord](https://img.shields.io/discord/1038839012602941528.svg?label=Chat&style=flat-square&color=f15a24&logo=discord&logoColor=white)](https://discord.gg/uPEBbYYDB6)
+[![Documentation](https://img.shields.io/badge/docs-latest-f15a24?style=flat-square)](https://cortex.dev/docs/cortex)
+[![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-f15a24?style=flat-square)](https://deepwiki.com/tracel-ai/burn)
+[![Blaze: macOS CI](assets/ci-powered-by-blaze.svg)](https://runblaze.dev)
+
+  <p><b>A tensor library and deep learning framework for numerical computing, training and inference.</b></p>
+</div>
+
+---
+
+<div align="left">
+
+Training and inference usually live in separate worlds. Models are typically trained in Python then
+exported to an open format like ONNX or optimized for production engines like vLLM, ONNX Runtime, or
+TensorRT. This export step is often brittle and lossy, ruling out complex architectures and advanced
+deployment use cases.
+
+Cortex unifies the two. By executing multi-platform tensor operations via a single, unified API, the
+exact code used for training is the exact code that runs in production. This makes workloads like
+on-device personalization and federated learning straightforward, while enabling teams to go from
+prototype to deployment in a single codebase.
+
+Cortex preserves the intuitive ergonomics of PyTorch, with dynamic shapes and graphs, but JIT-compiles
+streams of tensor operations, performing automatic kernel fusion. You get the flexibility of dynamic
+graphs without the performance drop.
+
+## Rust for Research?
+
+Rust used to be a tough sell for research: long compilation times disrupted the fast
+edit-compile-run loop that draws researchers to Python. Cortex changes this paradigm. Designed around
+incremental compilation, modifying model code recompiles in under 5 seconds, even in release mode.
+This delivers a Python-like feedback loop with the speed and safety of Rust.
+
+## Ecosystem
+
+<div align="left">
+<img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-blazingly-fast.png" height="96px"/>
+
+Cortex is the core of a growing, fully open-source Rust AI ecosystem. You are not adopting a single
+library, you are joining a stack that spans GPU compute, model interop and domain toolkits, with
+plenty of room to help shape what comes next.
+
+</div>
+
+| Category      | Project                                               | Description                                                                                                                                                       |
+| ------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compute       | [CubeCL](https://github.com/tracel-ai/cubecl)         | GPU compute language and compiler behind Cortex's accelerated backends. Write kernels once in Rust, run on CUDA, ROCm, Metal, Vulkan and WebGPU. Usable standalone. |
+| Model interop | [cortex-onnx](https://github.com/tracel-ai/burn-onnx)   | Import ONNX models into Cortex as native Rust code                                                                                                                  |
+|               | `cortex-store`                                          | Save, load and import model weights, including PyTorch and Safetensors                                                                                            |
+| Domains       | `cortex-vision`                                         | Computer vision operators and building blocks                                                                                                                     |
+|               | `cortex-rl`                                             | Reinforcement learning building blocks                                                                                                                            |
+|               | `cortex-dataset`                                        | Dataset loading, transforms and ready-made sources                                                                                                                |
+| Models        | [models](https://github.com/tracel-ai/models)         | Curated pre-trained models and examples built with Cortex                                                                                                           |
+| Tooling       | [cortex-bench](https://github.com/tracel-ai/burn-bench) | Benchmark and compare backends, tracking performance over time                                                                                                    |
+
+Cortex's [CubeCL](https://github.com/tracel-ai/cubecl) backends (CUDA, ROCm, Metal, Vulkan, WebGPU,
+CPU) compose with autodiff, fusion and remote-execution decorators, while the pure-Rust Flex
+CPU/`no_std` backend composes with autodiff only. See
+[Supported Backends](#supported-backends) below for the full matrix.
+
+Every project here is open-source and actively developed. Want to help build the Rust AI ecosystem?
+The [good first issues](https://github.com/tracel-ai/burn/contribute) are a great place to start,
+and the [Contributing](#contributing) guide will get you set up.
+
+<details>
+<summary>
+<b>Community crates 🌱</b>
+</summary>
+<br />
+
+These crates are not maintained by Tracel, but they are part of the same Rust AI story. Anything
+that helps you load data, build environments, or ship models belongs here. Built something that
+fits? Open a PR to add it!
+
+| Category                   | Crate                                                           | Description                                                       |
+| -------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Data & loading             | [polars](https://github.com/pola-rs/polars)                     | Fast DataFrames for tabular data                                  |
+|                            | [arrow-rs](https://github.com/apache/arrow-rs)                  | Apache Arrow columnar memory format                               |
+|                            | [image](https://github.com/image-rs/image)                      | Image decoding, encoding and processing                           |
+|                            | [hf-hub](https://github.com/huggingface/hf-hub)                 | Download models and datasets from the Hugging Face Hub            |
+| Tokenization & NLP         | [tokenizers](https://github.com/huggingface/tokenizers)         | Fast, production-ready tokenizers                                 |
+|                            | [rust-bert](https://github.com/guillaume-be/rust-bert)          | Ready-to-use NLP pipelines and transformer models                 |
+| Numerical & linear algebra | [ndarray](https://github.com/rust-ndarray/ndarray)              | N-dimensional arrays                                              |
+|                            | [nalgebra](https://github.com/dimforge/nalgebra)                | Linear algebra                                                    |
+| Classical ML               | [linfa](https://github.com/rust-ml/linfa)                       | Classical ML toolkit, in the spirit of scikit-learn               |
+|                            | [smartcore](https://github.com/smartcorelib/smartcore)          | Classical ML algorithms, no BLAS/LAPACK required                  |
+| Inference & runtimes       | [candle](https://github.com/huggingface/candle)                 | Minimalist ML framework with a focus on LLM inference             |
+|                            | [mistral.rs](https://github.com/EricLBuehler/mistral.rs)        | Fast, multimodal LLM inference engine                             |
+|                            | [ort](https://github.com/pykeio/ort)                            | ONNX Runtime bindings for hardware-accelerated inference          |
+|                            | [tract](https://github.com/sonos/tract)                         | Pure-Rust inference for ONNX and NNEF models                      |
+|                            | [wonnx](https://github.com/webonnx/wonnx)                       | 100% Rust, WebGPU-accelerated ONNX runtime for native and the web |
+| LLM apps & RAG             | [rig](https://github.com/0xPlaygrounds/rig)                     | Build modular LLM applications and agents                         |
+|                            | [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | LangChain-style chain orchestration                               |
+| Embeddings & vector search | [fastembed](https://github.com/Anush008/fastembed-rs)           | Generate text embeddings and rerank locally                       |
+|                            | [qdrant](https://github.com/qdrant/qdrant)                      | Vector search engine, written in Rust                             |
+|                            | [lancedb](https://github.com/lancedb/lancedb)                   | Embedded, developer-friendly vector database                      |
+| Computer vision            | [kornia-rs](https://github.com/kornia/kornia-rs)                | Low-level 3D computer vision library                              |
+| Simulation & environments  | [rapier](https://github.com/dimforge/rapier)                    | Physics engine for robotics and RL environments                   |
+| Visualization              | [rerun](https://github.com/rerun-io/rerun)                      | Multimodal data and CV/robotics visualization                     |
+|                            | [plotters](https://github.com/plotters-rs/plotters)             | Plotting and charting                                             |
+
+</details>
+
+## Backend
+
+<div align="left">
+<img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/backend-chip.png" height="96px"/>
+
+Cortex strives to be as fast as possible on as many hardwares as possible, with robust
+implementations. We believe this flexibility is crucial for modern needs where you may train your
+models in the cloud, then deploy on customer hardwares, which vary from user to user.
+
+</div>
+
+### Supported Backends
+
+Most backends support all operating systems, so we don't mention them in the tables below.
+
+**GPU Backends:**
+
+|         | CUDA | ROCm | Metal | Vulkan | WebGPU |
+| ------- | ---- | ---- | ----- | ------ | ------ |
+| Nvidia  | ☑️   | -    | -     | ☑️     | ☑️     |
+| AMD     | -    | ☑️   | -     | ☑️     | ☑️     |
+| Apple   | -    | -    | ☑️    | -      | ☑️     |
+| Intel   | -    | -    | -     | ☑️     | ☑️     |
+| Qualcom | -    | -    | -     | ☑️     | ☑️     |
+| Wasm    | -    | -    | -     | -      | ☑️     |
+
+**CPU Backends:**
+
+|        | Cpu (CubeCL) | Flex |
+| ------ | ------------ | ---- |
+| X86    | ☑️           | ☑️   |
+| Arm    | ☑️           | ☑️   |
+| Wasm   | -            | ☑️   |
+| no-std | -            | ☑️   |
+
+The two native CPU backends are independent. [Cpu](https://github.com/tracel-ai/burn/tree/main/crates/burn-cpu) (`cpu` feature) is the CubeCL
+runtime for the CPU: it JIT-compiles the same kernels as the GPU backends through LLVM and supports
+fusion. [Flex](https://github.com/tracel-ai/burn/tree/main/crates/burn-flex) (`flex` feature) is a pure-Rust eager backend with no
+native dependencies that also runs on Wasm and `no_std`.
+
+> **Migration:** LibTorch was deprecated in `0.22.0` and has been removed from `main`.
+> For GPU acceleration, use a [CubeCL](https://github.com/tracel-ai/cubecl) backend (CUDA,
+> ROCm, Metal, Vulkan, WebGPU). For CPU execution, use the CubeCL CPU backend or `cortex-flex`.
+
+<br />
+
+Cortex's backend architecture lets you swap backends while keeping the same model code. You can enable
+multiple backends in the same application and choose the device for your tensors and modules at
+runtime through `Device`. This gives you the freedom to use different backends side by side and
+select the hardware best suited to each workload.
+
+Autodifferentiation and automatic kernel fusion integrate with the same tensor and module APIs, so
+models benefit from these capabilities on supported backends without changing their implementation.
+
+<details>
+<summary>
+Autodiff: Bringing backpropagation to any backend 🔄
+</summary>
+<br />
+
+In application code, autodiff is runtime context carried by tensors. Devices provide the default
+context for newly created tensors, and each tensor can later enable or remove autodiff
+independently. Enabling autodiff permits graph recording; it does not by itself make a tensor retain
+gradients.
+
+Internally, Cortex implements this by decorating a concrete backend, so autodiff cannot execute by
+itself. Enable it on a device before creating tensors or initializing a model. With the `autodiff`
+and `wgpu` features enabled:
+
+```rust
+use cortex::tensor::{Device, Distribution, Tensor};
+
+fn main() {
+    let device = Device::wgpu(Default::default()).autodiff();
+
+    let x: Tensor<2> = Tensor::random([32, 32], Distribution::Default, &device);
+    let y: Tensor<2> = Tensor::random([32, 32], Distribution::Default, &device).require_grad();
+
+    let tmp = x.clone() + y.clone();
+    let tmp = tmp.matmul(x);
+    let tmp = tmp.exp();
+
+    let grads = tmp.backward();
+    let y_grad = y.grad(&grads).unwrap();
+    println!("{y_grad}");
+}
+```
+
+`backward()` checks graph participation at runtime. Enable autodiff before the forward pass and call
+`require_grad()` on source leaves whose gradients you need. `is_autodiff()`, `is_tracked()`, and
+`is_require_grad()` inspect autodiff association, graph participation, and gradient retention
+respectively. See the [autodiff guide](https://github.com/tracel-ai/burn/blob/main/burn-book/src/building-blocks/autodiff.md).
+
+See the [Autodiff Backend README](https://github.com/tracel-ai/burn/blob/main/crates/burn-autodiff/README.md) for more details.
+
+</details>
+
+<details>
+<summary>
+Fusion: Backend decorator that brings kernel fusion to supported backends
+</summary>
+<br />
+
+This backend decorator enhances a backend with kernel fusion, provided that the inner backend
+supports it. Note that you can compose this backend with other backend decorators such as Autodiff.
+All first-party accelerated backends (like WGPU and CUDA) use Fusion by default (`cortex/fusion`
+feature flag), so you typically don't need to apply it manually.
+
+```rust
+#[cfg(not(feature = "fusion"))]
+pub type Cube = cortex_cubecl::CubeBackend;
+
+#[cfg(feature = "fusion")]
+pub type Cube = cortex_fusion::Fusion<cortex_cubecl::CubeBackend>;
+```
+
+`Device::autodiff().gradient_checkpointing()` enables the balanced gradient-checkpointing strategy,
+which trades recomputation for reduced activation storage during training.
+
+See the [Fusion Backend README](https://github.com/tracel-ai/burn/blob/main/crates/burn-fusion/README.md) for more details.
+
+</details>
+
+<details>
+<summary>
+Remote (Beta): Backend decorator for remote backend execution, useful for distributed computations
+</summary>
+<br />
+
+Remote execution has a client and a server. The server's devices select the compute backend;
+clients use a remote `Device` with the same tensor API. Iroh, the default transport, reaches a
+server across any network, authenticated and encrypted; see the [server example](https://github.com/tracel-ai/burn/tree/main/examples/server)
+and the [distributed computing guide](https://github.com/tracel-ai/burn/blob/main/burn-book/src/performance/distributed-computing.md). On a
+trusted network, WebSocket is the simplest setup: enable `remote-server`, `remote-websocket`, and
+`cuda` on the server, and `remote-websocket` plus `autodiff` on the client:
+
+```rust
+use cortex::remote::RemoteHost;
+use cortex::server::{RemoteServer, ServeError, WebSocketTransport};
+use cortex::tensor::{Device, Distribution, Tensor};
+
+fn main_server() -> Result<(), ServeError> {
+    RemoteServer::new([Device::cuda(0)]).serve(WebSocketTransport::new(3000))
+}
+
+fn main_client() -> Result<(), cortex::remote::ConnectError> {
+    let host = RemoteHost::websocket("ws://localhost:3000");
+    let device = Device::remote_options(&host).init()?.autodiff();
+    let tensor_gpu = Tensor::<2>::random([3, 3], Distribution::Default, &device);
+    Ok(())
+}
+```
+
+</details>
+
+<br />
+
+## Training & Inference
+
+<div align="left">
+<img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-wall.png" height="96px"/>
+
+The whole deep learning workflow is made easy with Cortex, as you can monitor your training progress
+with an ergonomic dashboard, and run inference everywhere from embedded devices to large GPU
+clusters.
+
+Cortex was built from the ground up with training and inference in mind. It's also worth noting how
+Cortex, in comparison to frameworks like PyTorch, simplifies the transition from training to
+deployment, eliminating the need for code changes.
+
+</div>
+
+<div align="center">
+
+<br />
+
+<a href="https://www.youtube.com/watch?v=N9RM5CQbNQc" target="_blank">
+    <img src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/burn-train-tui.png" alt="Cortex Train TUI" width="75%">
+  </a>
+</div>
+
+<br />
+
+**Click on the following sections to expand 👇**
+
+<details>
+<summary>
+Training Dashboard 📈
+</summary>
+<br />
+
+As you can see in the previous video (click on the picture!), a new terminal UI dashboard based on
+the [Ratatui](https://github.com/ratatui-org/ratatui) crate allows users to follow their training
+with ease without having to connect to any external application.
+
+You can visualize your training and validation metrics updating in real-time and analyze the
+lifelong progression or recent history of any registered metrics using only the arrow keys. Break
+from the training loop without crashing, allowing potential checkpoints to be fully written or
+important pieces of code to complete without interruption 🛡
+
+</details>
+
+<details>
+<summary>
+ONNX Support 🐫
+</summary>
+<br />
+
+Cortex supports importing ONNX (Open Neural Network Exchange) models through the
+[cortex-onnx](https://github.com/tracel-ai/burn-onnx) crate, allowing you to easily port models from
+TensorFlow or PyTorch to Cortex. The ONNX model is converted into Rust code that uses Cortex's native
+APIs, enabling the imported model to run on any Cortex backend (CPU, GPU, WebAssembly) and benefit
+from all of Cortex's optimizations like automatic kernel fusion.
+
+Our ONNX support is further described in
+[this section of the Cortex Book 🔥](https://cortex.dev/books/cortex/onnx-import.html).
+
+> **Note**: This crate is in active development and currently supports a
+> [limited set of ONNX operators](https://github.com/tracel-ai/burn-onnx/blob/main/SUPPORTED-ONNX-OPS.md).
+
+</details>
+
+<details>
+<summary>
+Importing PyTorch or Safetensors Models 🚚
+</summary>
+<br />
+
+You can load weights from PyTorch or Safetensors formats directly into your Cortex-defined models.
+This makes it easy to reuse existing models while benefiting from Cortex's performance and deployment
+features.
+
+Learn more in the [Saving & Loading Models](https://cortex.dev/books/cortex/saving-and-loading.html)
+section of the Cortex Book.
+
+</details>
+
+<details>
+<summary>
+Inference in the Browser 🌐
+</summary>
+<br />
+
+Several of our backends can run in WebAssembly environments: Flex for CPU execution, and WGPU for
+GPU acceleration via WebGPU. This means that you can run inference directly within a browser. We
+provide several examples of this:
+
+- [MNIST](https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web) where you can draw digits and a small convnet tries to
+  find which one it is! 2️⃣ 7️⃣ 😰
+- [Image Classification](https://github.com/tracel-ai/burn-onnx/tree/main/examples/image-classification-web)
+  where you can upload images and classify them! 🌄
+
+</details>
+
+<details>
+<summary>
+Embedded: <i>no_std</i> support ⚙️
+</summary>
+<br />
+
+Cortex's core components support [no_std](https://docs.rust-embedded.org/book/intro/no-std.html). This
+means it can run in bare metal environment such as embedded devices without an operating system.
+
+> As of now, only the Flex backend can be used in a _no_std_ environment.
+
+</details>
+
+<br />
+
+### Benchmarks
+
+To evaluate performance across different backends and track improvements over time, we provide a
+dedicated benchmarking suite.
+
+Run and compare benchmarks using [cortex-bench](https://github.com/tracel-ai/burn-bench).
+
+## Getting Started
+
+<div align="left">
+<img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-walking.png" height="96px"/>
+
+Just heard of Cortex? You are at the right place! Just continue reading this section and we hope you
+can get on board really quickly.
+
+</div>
+
+<details>
+<summary>
+The Cortex Book 🔥
+</summary>
+<br />
+
+To begin working effectively with Cortex, it is crucial to understand its key components and
+philosophy. This is why we highly recommend new users to read the first sections of
+[The Cortex Book 🔥](https://cortex.dev/books/cortex/). It provides detailed examples and explanations
+covering every facet of the framework, including building blocks like tensors, modules, and
+optimizers, all the way to advanced usage, like coding your own GPU kernels.
+
+> The project is constantly evolving, and we try as much as possible to keep the book up to date
+> with new additions. However, we might miss some details sometimes, so if you see something weird,
+> let us know! We also gladly accept Pull Requests 😄
+
+</details>
+
+<details>
+<summary>
+Examples 🙏
+</summary>
+<br />
+
+Let's start with a code snippet that shows how intuitive the framework is to use! In the following,
+we declare a neural network module with some parameters along with its forward pass.
+
+```rust
+use cortex::nn;
+use cortex::module::Module;
+use cortex::tensor::Tensor;
+
+#[derive(Module, Debug)]
+pub struct PositionWiseFeedForward {
+    linear_inner: nn::Linear,
+    linear_outer: nn::Linear,
+    dropout: nn::Dropout,
+    gelu: nn::Gelu,
+}
+
+impl PositionWiseFeedForward {
+    pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
+        let x = self.linear_inner.forward(input);
+        let x = self.gelu.forward(x);
+        let x = self.dropout.forward(x);
+
+        self.linear_outer.forward(x)
+    }
+}
+```
+
+We have a somewhat large amount of [examples](https://github.com/tracel-ai/burn/tree/main/examples) in the repository that shows how to use
+the framework in different scenarios.
+
+Following [the book](https://cortex.dev/books/cortex/):
+
+- [Basic Workflow](https://github.com/tracel-ai/burn/tree/main/examples/guide) : Creates a custom CNN `Module` to train on the MNIST dataset
+  and use for inference.
+- [Custom Training Loop](https://github.com/tracel-ai/burn/tree/main/examples/custom-training-loop) : Implements a basic training loop instead
+  of using the `Learner`.
+- [Custom WGPU Kernel](https://github.com/tracel-ai/burn/tree/main/examples/custom-wgpu-kernel) : Learn how to create your own custom
+  operation with the WGPU backend.
+
+Additional examples:
+
+- [Custom CSV Dataset](https://github.com/tracel-ai/burn/tree/main/examples/custom-csv-dataset) : Implements a dataset to parse CSV data for a
+  regression task.
+- [Regression](https://github.com/tracel-ai/burn/tree/main/examples/simple-regression) : Trains a simple MLP on the California Housing dataset
+  to predict the median house value for a district.
+- [Custom Image Dataset](https://github.com/tracel-ai/burn/tree/main/examples/custom-image-dataset) : Trains a simple CNN on custom image
+  dataset following a simple folder structure.
+- [Custom Renderer](https://github.com/tracel-ai/burn/tree/main/examples/custom-renderer) : Implements a custom renderer to display the
+  [`Learner`](https://cortex.dev/books/cortex/building-blocks/learner.html) progress.
+- [Image Classification Web](https://github.com/tracel-ai/burn-onnx/tree/main/examples/image-classification-web) : Image classification web browser
+  demo using Cortex, WGPU and WebAssembly.
+- [MNIST Inference on Web](https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web) : An interactive MNIST inference demo in
+  the browser.
+- [MNIST Training](https://github.com/tracel-ai/burn/tree/main/examples/mnist) : Demonstrates how to train a custom `Module` (MLP) with the
+  `Learner` configured to log metrics and keep training checkpoints.
+- [PyTorch Import Inference](https://github.com/tracel-ai/burn/tree/main/examples/import-model-weights) : Imports a PyTorch model pre-trained
+  on MNIST to perform inference on a sample image with Cortex.
+- [Text Classification](https://github.com/tracel-ai/burn/tree/main/examples/text-classification) : Trains a text classification transformer
+  model on the AG News or DbPedia dataset. The trained model can then be used to classify a text
+  sample.
+- [Text Generation](https://github.com/tracel-ai/burn/tree/main/examples/text-generation) : Trains a text generation transformer model on the
+  DbPedia dataset.
+- [Wasserstein GAN MNIST](https://github.com/tracel-ai/burn/tree/main/examples/wgan) : Trains a WGAN model to generate new handwritten digits
+  based on MNIST.
+
+For more practical insights, you can clone the repository and run any of them directly on your
+computer!
+
+</details>
+
+<details>
+<summary>
+Pre-trained Models 🤖
+</summary>
+<br />
+
+We keep an updated and curated list of models and examples built with Cortex, see the
+[tracel-ai/models repository](https://github.com/tracel-ai/models) for more details.
+
+Don't see the model you want? Don't hesitate to open an issue, and we may prioritize it. Built a
+model using Cortex and want to share it? You can also open a Pull Request and add your model under the
+community section!
+
+</details>
+
+<details>
+<summary>
+Why use Rust for AI? 🦀
+</summary>
+<br />
+
+Deep Learning is a special form of software where you need very high level abstractions as well as
+extremely fast execution time. Rust is the perfect candidate for that use case since it provides
+zero-cost abstractions to easily create neural network modules, and fine-grained control over memory
+to optimize every detail. To this day, the mainstream solution has been to offer APIs in Python but
+rely on bindings to low-level languages such as C/C++. This reduces portability, increases
+complexity and creates friction between researchers and engineers. Rust's approach to abstractions
+is versatile enough to tackle this two-language dichotomy, and Cargo makes it easy to build, test
+and deploy from any environment, which is usually a pain in Python.
+
+Rust's AI ecosystem is young, but it is real and growing quickly. Foundational pieces are already
+here: Cortex and [CubeCL](https://github.com/tracel-ai/cubecl) for training and compute,
+[candle](https://github.com/huggingface/candle) for inference, Hugging Face's `tokenizers` and
+`safetensors`, and `polars` and `ndarray` for data. Betting on Rust today means betting on a stack
+that is growing, and one where contributors still shape the direction. The pieces that don't exist
+yet are opportunities rather than dead-ends (see [Contributing](#contributing)).
+
+Rust is also what makes one-stack-everywhere possible: a single self-contained binary with no Python
+runtime to ship, running from servers down to `no_std` embedded targets.
+
+</details>
+
+<br />
+
+> **Deprecation Note**<br />Since `0.14.0`, the internal structure for tensor data has changed. The
+> previous `Data` struct was deprecated and officially removed since `0.17.0` in favor of the new
+> `TensorData` struct, which allows for more flexibility by storing the underlying data as bytes and
+> keeping the data type as a field. If you are using `Data` in your code, make sure to switch to
+> `TensorData`.
+
+<details id="deprecation">
+<summary>
+Loading Model Records From Previous Versions ⚠️
+</summary>
+<br />
+
+Cortex 0.22 uses cortexpack for native records and cannot directly read legacy `Recorder` formats such
+as `.mpk`, `.bin`, or JSON. Load the checkpoint in a compatible older Cortex project, export the model
+weights through `cortex-store`, and import them into your 0.22 model. See
+[Migrating checkpoints](https://github.com/tracel-ai/burn/blob/release/0.22/burn-book/src/migrating-to-0.22.md#migrating-checkpoints) for an example and
+the distinction between transferring weights and resuming training state.
+
+For records saved before `0.14.0`, an earlier migration step may also be needed: use Cortex `0.14`,
+`0.15`, or `0.16` with the `record-backward-compat` feature to load and re-save the record with the
+newer tensor-data representation. For legacy binary records, first use the version that wrote them
+to export a self-describing format such as `NamedMpkFileRecorder`. This historical migration does
+not convert records to the format required by 0.22; follow the checkpoint migration guide afterward.
+
+</details>
+
+## Community
+
+<div align="left">
+<img align="right" src="https://raw.githubusercontent.com/tracel-ai/burn/main/assets/ember-community.png" height="96px"/>
+
+If you are excited about the project, don't hesitate to join our
+[Discord](https://discord.gg/uPEBbYYDB6)! We try to be as welcoming as possible to everybody from
+any background. You can ask your questions and share what you built with the community!
+
+</div>
+
+<br/>
+
+### Contributing
+
+Before contributing, please read the [Contributing Guidelines](https://github.com/tracel-ai/burn/blob/main/CONTRIBUTING.md) and our
+[Code of Conduct](https://github.com/tracel-ai/burn/blob/main/CODE-OF-CONDUCT.md). The [Contributor Book](https://cortex.dev/books/contributor/)
+covers architecture, environment setup, and guides for common tasks.
+
+## Status
+
+Cortex is currently in active development, and there will be breaking changes. While any resulting
+issues are likely to be easy to fix, there are no guarantees at this stage.
+
+## License
+
+Cortex is distributed under the terms of either the
+[MIT License](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT) or the
+[Apache License, Version 2.0](https://github.com/tracel-ai/burn/blob/main/LICENSE-APACHE).
+Unless otherwise noted, this applies to all contents of this repository, including source code,
+examples, documentation, and code snippets in the Cortex Book and Contributor Book. See the licenses
+for details.
+
+Third-party materials and externally downloaded datasets or models remain subject to their respective
+licenses.
+
+Opening a pull request is assumed to signal agreement with these licensing terms.
+
+</div>

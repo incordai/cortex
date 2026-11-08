@@ -1,0 +1,276 @@
+use crate::{
+    checkpoint::strategy::{CheckpointStrategy, NoCheckpointing},
+    grads::Gradients,
+    tensor::AutodiffTensor,
+};
+use alloc::{format, string::String, vec::Vec};
+use cortex_backend::RandomKey;
+use core::marker::PhantomData;
+
+use cortex_backend::{
+    backend::{
+        AutodiffBackend, Backend, BackendTypes, DeviceDescription, DeviceTelemetry,
+        EnvironmentBundle, EnvironmentError, EnvironmentId, EnvironmentOrigin, ExecutionError,
+        ExecutionMode, ExecutionModeToken, ExecutionStatistics, MemoryReport, Peak, PeakError,
+        PeakKey, ProfileDuration, ProfileOptions, ProfileToken,
+    },
+    tensor::{BoolTensor, IntTensor, QuantizedTensor},
+};
+
+use cortex_backend::distributed::{DistributedParamId, DistributedParams};
+
+/// Enable auto-differentiation on a backend.
+///
+/// This works as a backend decorator, extending the functionality of any backend with
+/// backpropagation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Autodiff<B, C = NoCheckpointing> {
+    _b: PhantomData<B>,
+    _checkpoint_strategy: PhantomData<C>,
+}
+
+impl<B: BackendTypes, C: CheckpointStrategy> BackendTypes for Autodiff<B, C> {
+    type Device = B::Device;
+
+    type FloatTensorPrimitive = AutodiffTensor<B>;
+
+    type IntTensorPrimitive = B::IntTensorPrimitive;
+
+    type BoolTensorPrimitive = B::BoolTensorPrimitive;
+
+    type QuantizedTensorPrimitive = B::QuantizedTensorPrimitive;
+
+    // A replayed graph would skip re-recording the autodiff tape, so capture
+    // is not supported under autodiff.
+    type GraphPrimitive = cortex_backend::GraphUnsupported;
+}
+
+impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
+    fn ad_enabled(_device: &Self::Device) -> bool {
+        true
+    }
+
+    fn name(device: &Self::Device) -> String {
+        format!("autodiff<{}>", B::name(device))
+    }
+
+    fn seed(device: &B::Device, seed: u64) {
+        B::seed(device, seed)
+    }
+
+    fn next_random_key(device: &Self::Device) -> RandomKey {
+        B::next_random_key(device)
+    }
+
+    fn sync(device: &B::Device) -> Result<(), ExecutionError> {
+        B::sync(device)
+    }
+
+    fn profile<O: Send + 'static>(
+        device: &Self::Device,
+        options: ProfileOptions,
+        func: impl FnOnce() -> O + Send,
+    ) -> Result<(O, ProfileDuration), ExecutionError> {
+        B::profile(device, options, func)
+    }
+
+    fn profile_start(device: &Self::Device) -> Result<Option<ProfileToken>, ExecutionError> {
+        B::profile_start(device)
+    }
+
+    fn profile_end(
+        device: &Self::Device,
+        token: ProfileToken,
+        options: ProfileOptions,
+    ) -> Result<ProfileDuration, ExecutionError> {
+        B::profile_end(device, token, options)
+    }
+
+    fn profile_abandon(device: &Self::Device, token: ProfileToken) {
+        B::profile_abandon(device, token)
+    }
+
+    fn execution_mode_open(
+        device: &Self::Device,
+        mode: ExecutionMode,
+    ) -> Result<Option<ExecutionModeToken>, ExecutionError> {
+        B::execution_mode_open(device, mode)
+    }
+
+    fn execution_mode_statistics(
+        device: &Self::Device,
+        token: ExecutionModeToken,
+    ) -> Result<ExecutionStatistics, ExecutionError> {
+        B::execution_mode_statistics(device, token)
+    }
+
+    fn execution_mode_close(
+        device: &Self::Device,
+        token: ExecutionModeToken,
+    ) -> Result<ExecutionStatistics, ExecutionError> {
+        B::execution_mode_close(device, token)
+    }
+
+    fn environment_create(
+        device: &Self::Device,
+        name: String,
+        origin: EnvironmentOrigin,
+    ) -> Result<EnvironmentId, EnvironmentError> {
+        B::environment_create(device, name, origin)
+    }
+
+    fn environment_activate(
+        device: &Self::Device,
+        id: EnvironmentId,
+    ) -> Result<EnvironmentId, EnvironmentError> {
+        B::environment_activate(device, id)
+    }
+
+    fn environment_active(device: &Self::Device) -> Result<EnvironmentId, EnvironmentError> {
+        B::environment_active(device)
+    }
+
+    fn environment_save(
+        device: &Self::Device,
+        id: EnvironmentId,
+    ) -> Result<EnvironmentBundle, EnvironmentError> {
+        B::environment_save(device, id)
+    }
+
+    fn environment_merge(
+        device: &Self::Device,
+        id: EnvironmentId,
+        origin: EnvironmentOrigin,
+    ) -> Result<(), EnvironmentError> {
+        B::environment_merge(device, id, origin)
+    }
+
+    fn memory_persistent_allocations<
+        Output: Send,
+        Input: Send,
+        Func: Fn(Input) -> Output + Send,
+    >(
+        device: &Self::Device,
+        input: Input,
+        func: Func,
+    ) -> Output {
+        B::memory_persistent_allocations(device, input, func)
+    }
+
+    fn memory_cleanup(device: &Self::Device) {
+        B::memory_cleanup(device)
+    }
+
+    fn device_description(device: &Self::Device) -> Option<DeviceDescription> {
+        B::device_description(device)
+    }
+
+    fn measure_telemetry(device: &Self::Device) -> DeviceTelemetry {
+        B::measure_telemetry(device)
+    }
+
+    fn measure_memory(device: &Self::Device) -> Option<MemoryReport> {
+        B::measure_memory(device)
+    }
+
+    fn measure_peaks(device: &Self::Device, keys: &[PeakKey]) -> Vec<Result<Peak, PeakError>> {
+        B::measure_peaks(device, keys)
+    }
+
+    fn staging<'a, Iter>(data: Iter, device: &Self::Device)
+    where
+        Iter: Iterator<Item = &'a mut cortex_backend::TensorData>,
+    {
+        B::staging(data, device);
+    }
+
+    fn supports_dtype(device: &Self::Device, dtype: cortex_std::DType) -> bool {
+        B::supports_dtype(device, dtype)
+    }
+
+    fn dtype_usage(device: &Self::Device, dtype: cortex_std::DType) -> cortex_backend::DTypeUsageSet {
+        B::dtype_usage(device, dtype)
+    }
+
+    fn device_count(type_id: u16) -> usize {
+        B::device_count(type_id)
+    }
+
+    fn flush(device: &Self::Device) -> Result<(), ExecutionError> {
+        B::flush(device)
+    }
+}
+
+impl<B: Backend, C: CheckpointStrategy> AutodiffBackend for Autodiff<B, C> {
+    type InnerBackend = B;
+    type Gradients = Gradients;
+
+    fn backward(tensor: AutodiffTensor<B>) -> Gradients {
+        tensor.backward()
+    }
+
+    fn grad(tensor: &AutodiffTensor<B>, grads: &Gradients) -> Option<B::FloatTensorPrimitive> {
+        tensor.grad(grads)
+    }
+
+    fn grad_remove(
+        tensor: &AutodiffTensor<B>,
+        grads: &mut Gradients,
+    ) -> Option<B::FloatTensorPrimitive> {
+        tensor.grad_remove(grads)
+    }
+    fn inner(tensor: AutodiffTensor<B>) -> B::FloatTensorPrimitive {
+        tensor.primitive
+    }
+
+    fn from_inner(tensor: B::FloatTensorPrimitive) -> AutodiffTensor<B> {
+        AutodiffTensor::new(tensor)
+    }
+
+    fn grad_replace(
+        tensor: &AutodiffTensor<B>,
+        grads: &mut Self::Gradients,
+        grad: B::FloatTensorPrimitive,
+    ) {
+        tensor.grad_replace(grads, grad);
+    }
+
+    fn int_inner(tensor: IntTensor<Self>) -> IntTensor<Self::InnerBackend> {
+        tensor
+    }
+
+    fn bool_inner(tensor: BoolTensor<Self>) -> BoolTensor<Self::InnerBackend> {
+        tensor
+    }
+
+    fn int_from_inner(tensor: IntTensor<Self::InnerBackend>) -> IntTensor<Self> {
+        tensor
+    }
+
+    fn bool_from_inner(tensor: BoolTensor<Self::InnerBackend>) -> BoolTensor<Self> {
+        tensor
+    }
+
+    fn q_inner(tensor: QuantizedTensor<Self>) -> QuantizedTensor<Self::InnerBackend> {
+        tensor
+    }
+
+    fn q_from_inner(tensor: QuantizedTensor<Self::InnerBackend>) -> QuantizedTensor<Self> {
+        tensor
+    }
+
+    fn set_distributed_params(
+        tensor: AutodiffTensor<B>,
+        param_id: DistributedParamId,
+    ) -> AutodiffTensor<B> {
+        tensor.grad_distributed(param_id)
+    }
+
+    fn distributed_params(tensor: &AutodiffTensor<B>) -> Option<DistributedParams> {
+        tensor.node.distributed_params.clone()
+    }
+
+    fn is_distributed(tensor: &AutodiffTensor<B>) -> bool {
+        tensor.node.distributed_params.is_some()
+    }
+}

@@ -1,0 +1,122 @@
+// The Cortex Book includes sections of this file using mdBook's ANCHOR / ANCHOR_END
+// markers. Keep each pair around the code it documents, and update the includes in
+// `burn-book/src/custom-training-loop.md` if you rename or remove a marker.
+
+// ANCHOR: imports
+use cortex::{
+    data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
+    module::Module,
+    nn::loss::CrossEntropyLoss,
+    optim::{AdamConfig, GradientsParams},
+    prelude::*,
+};
+// ANCHOR_END: imports
+use guide::{data::MnistBatcher, model::ModelConfig};
+
+// ANCHOR: config
+#[derive(Config, Debug)]
+pub struct MnistTrainingConfig {
+    #[config(default = 10)]
+    pub num_epochs: usize,
+    #[config(default = 64)]
+    pub batch_size: usize,
+    #[config(default = 4)]
+    pub num_workers: usize,
+    #[config(default = 42)]
+    pub seed: u64,
+    #[config(default = 1e-4)]
+    pub lr: f64,
+    pub model: ModelConfig,
+    pub optimizer: AdamConfig,
+}
+
+// ANCHOR_END: config
+pub fn run(device: Device) {
+    // ANCHOR: setup
+    // Create the configuration.
+    let config_model = ModelConfig::new(10, 1024);
+    let config_optimizer = AdamConfig::new();
+    let config = MnistTrainingConfig::new(config_model, config_optimizer);
+
+    let device = device.autodiff();
+    device.seed(config.seed);
+
+    // Create the model and optimizer.
+    let mut model = config.model.init(&device);
+    let mut optim = config.optimizer.init();
+
+    // Create the batcher.
+    let batcher = MnistBatcher::default();
+
+    // Create the dataloaders.
+    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(MnistDataset::train());
+
+    let dataloader_test = DataLoaderBuilder::new(batcher)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(MnistDataset::test());
+
+    // ANCHOR_END: setup
+    // ANCHOR: training_loop
+    // Iterate over our training and validation loop for X epochs.
+    for epoch in 1..config.num_epochs + 1 {
+        // Implement our training loop.
+        for (iteration, batch) in dataloader_train.iter().map(Result::unwrap).enumerate() {
+            let output = model.forward(batch.images);
+            let loss = CrossEntropyLoss::new(None, &output.device())
+                .forward(output.clone(), batch.targets.clone());
+            let accuracy = accuracy(output, batch.targets);
+
+            println!(
+                "[Train - Epoch {} - Iteration {}] Loss {:.3} | Accuracy {:.3} %",
+                epoch,
+                iteration,
+                loss.clone().into_scalar::<f32>(),
+                accuracy,
+            );
+
+            // Gradients for the current backward pass
+            let grads = loss.backward();
+            // Gradients linked to each parameter of the model.
+            let grads = GradientsParams::from_grads(grads, &model);
+            // Update the model using the optimizer.
+            model = optim.step(config.lr, model, grads);
+        }
+
+        // Get the model without autodiff.
+        let model_valid = model.valid();
+
+        // Implement our validation loop.
+        for (iteration, batch) in dataloader_test.iter().map(Result::unwrap).enumerate() {
+            let output = model_valid.forward(batch.images);
+            let loss = CrossEntropyLoss::new(None, &output.device())
+                .forward(output.clone(), batch.targets.clone());
+            let accuracy = accuracy(output, batch.targets);
+
+            println!(
+                "[Valid - Epoch {} - Iteration {}] Loss {} | Accuracy {}",
+                epoch,
+                iteration,
+                loss.clone().into_scalar::<f32>(),
+                accuracy,
+            );
+        }
+    }
+    // ANCHOR_END: training_loop
+}
+
+// ANCHOR: accuracy
+/// Create out own accuracy metric calculation.
+fn accuracy(output: Tensor<2>, targets: Tensor<1, Int>) -> f32 {
+    let predictions = output.argmax(1).squeeze_dim(1);
+    let num_predictions = targets.dims().iter().product::<usize>() as f32;
+    let num_corrects = predictions.equal(targets).int().sum().into_scalar::<i64>() as f32;
+
+    num_corrects / num_predictions * 100.0
+}
+// ANCHOR_END: accuracy

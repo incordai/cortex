@@ -1,0 +1,158 @@
+use super::*;
+use cortex_tensor::{Shape, TensorData};
+
+#[test]
+fn expand_2d() {
+    let tensor = TestTensor::<1>::from_data([1.0, 2.0, 3.0], &Default::default());
+    let output = tensor.expand([3, 3]);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        false,
+    );
+
+    let tensor = TestTensor::<1>::from_data([4.0, 7.0, 2.0, 3.0], &Default::default());
+    let output = tensor.expand([2, 4]);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[4.0, 7.0, 2.0, 3.0], [4.0, 7.0, 2.0, 3.0]]),
+        false,
+    );
+}
+
+#[test]
+fn expand_3d() {
+    let tensor = TestTensor::<2>::from_data([[1.0, 2.0], [3.0, 4.0]], &Default::default());
+    let output = tensor.expand([3, 2, 2]);
+    let expected = TensorData::from([
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[1.0, 2.0], [3.0, 4.0]],
+    ]);
+
+    output.into_data().assert_eq(&expected, false);
+}
+
+#[test]
+fn expand_higher_dimensions() {
+    let tensor = TestTensor::<2>::from_data([[1.0, 2.0, 3.0, 4.0]], &Default::default());
+    let output = tensor.expand([2, 3, 4]);
+    let expected = TensorData::from([
+        [
+            [1.0, 2.0, 3.0, 4.0],
+            [1.0, 2.0, 3.0, 4.0],
+            [1.0, 2.0, 3.0, 4.0],
+        ],
+        [
+            [1.0, 2.0, 3.0, 4.0],
+            [1.0, 2.0, 3.0, 4.0],
+            [1.0, 2.0, 3.0, 4.0],
+        ],
+    ]);
+
+    output.into_data().assert_eq(&expected, false);
+}
+
+#[test]
+fn expand_sum_3d() {
+    let tensor = TestTensor::<2>::from_data([[1.0, 2.0], [3.0, 4.0]], &Default::default());
+    let output = tensor.expand([3, 2, 2]).sum_dim(0);
+    let expected = TensorData::from([[[3.0, 6.0], [9.0, 12.0]]]);
+
+    output.into_data().assert_eq(&expected, false);
+}
+
+#[test]
+fn broadcast_single() {
+    let tensor = TestTensor::<1>::from_data([1.0], &Default::default());
+    let output = tensor.expand([2, 3]);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]), false);
+}
+
+#[test]
+#[should_panic(expected = "can't be broadcasted to the target shape")]
+fn should_fail_expand_incompatible_shapes() {
+    let tensor = TestTensor::<1>::from_data([1.0, 2.0, 3.0], &Default::default());
+    let _expanded_tensor = tensor.expand([2, 2]);
+}
+
+#[test]
+fn expand_after_transpose() {
+    // [[1, 2], [3, 4]] transposed -> [[1, 3], [2, 4]] then expanded to [3, 2, 2].
+    let tensor = TestTensor::<2>::from([[1.0, 2.0], [3.0, 4.0]]).transpose();
+
+    let output = tensor.expand([3, 2, 2]);
+
+    output.into_data().assert_eq(
+        &TensorData::from([
+            [[1.0, 3.0], [2.0, 4.0]],
+            [[1.0, 3.0], [2.0, 4.0]],
+            [[1.0, 3.0], [2.0, 4.0]],
+        ]),
+        false,
+    );
+}
+
+#[test]
+fn expand_after_flip_1d() {
+    // [1,2,3] flipped -> [3,2,1] then expanded to [2, 3].
+    let tensor = TestTensor::<1>::from([1.0, 2.0, 3.0]).flip([0]);
+
+    let output = tensor.expand([2, 3]);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[3.0, 2.0, 1.0], [3.0, 2.0, 1.0]]), false);
+}
+
+#[test]
+fn expand_after_flip_2d() {
+    // [[1,2],[3,4]] axis-0 flipped -> [[3,4],[1,2]] then expanded to [3,2,2].
+    let tensor = TestTensor::<2>::from([[1.0, 2.0], [3.0, 4.0]]).flip([0]);
+
+    let output = tensor.expand([3, 2, 2]);
+
+    output.into_data().assert_eq(
+        &TensorData::from([
+            [[3.0, 4.0], [1.0, 2.0]],
+            [[3.0, 4.0], [1.0, 2.0]],
+            [[3.0, 4.0], [1.0, 2.0]],
+        ]),
+        false,
+    );
+}
+
+#[test]
+fn expand_after_narrow() {
+    // [0,1,2,3,4] narrowed to [1,2,3] then expanded to [2, 3].
+    let tensor = TestTensor::<1>::from([0.0, 1.0, 2.0, 3.0, 4.0]).narrow(0, 1, 3);
+
+    let output = tensor.expand([2, 3]);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]), false);
+}
+
+#[test]
+#[should_panic(
+    expected = "The given shape doesn't have the same number of dimensions as the target tensor."
+)]
+fn should_fail_expand_shape_rank_mismatch_shorter() {
+    let tensor = TestTensor::<1>::from([1.0, 2.0, 3.0]);
+    // Passing a Shape with rank 2 to expand targeting rank 3 must be rejected.
+    let _: TestTensor<3> = tensor.expand(Shape::from([2, 3]));
+}
+
+#[test]
+#[should_panic(
+    expected = "The given shape doesn't have the same number of dimensions as the target tensor."
+)]
+fn should_fail_expand_shape_rank_mismatch_longer() {
+    let tensor = TestTensor::<1>::from([1.0, 2.0, 3.0]);
+    // Passing a Shape with rank 3 to expand targeting rank 2 must be rejected.
+    let _: TestTensor<2> = tensor.expand(Shape::from([1, 2, 3]));
+}

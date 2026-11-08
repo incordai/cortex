@@ -1,0 +1,16 @@
+[package]
+name = "wgan"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+flex = ["cortex/flex"]
+wgpu = ["cortex/wgpu"]
+cuda = ["cortex/cuda"]
+
+[dependencies]
+cortex = { workspace = true, features=["default", "train", "vision"] }
+image = { workspace = true }

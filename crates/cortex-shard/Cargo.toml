@@ -1,0 +1,33 @@
+[package]
+name = "cortex-shard"
+description = "Tensors split over several devices, with the sharding rule of each op"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-shard"
+documentation = "https://docs.rs/cortex-shard"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+# Test-only: the `Tensor` tests put their members on the CUDA devices in turn, so shards cross
+# devices.
+test-cuda = ["cortex-tensor/cuda"]
+test-fusion = ["cortex-tensor/fusion"]
+# Test-only: the members are one CUDA and one Vulkan device, so a sharded compute device spans two runtimes.
+test-mixed-runtimes = ["cortex-tensor/cuda", "cortex-tensor/vulkan"]
+
+[dependencies]
+cortex-backend = { workspace = true, features = ["std"] }
+cortex-ir = { workspace = true, features = ["std"] }
+cortex-router = { workspace = true, features = ["std"] }
+cortex-std = { workspace = true, features = ["std"] }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+cortex-flex = { workspace = true, features = ["default"] }
+# A path, not the workspace version: cortex-tensor depends on this crate through cortex-dispatch.
+# Keep autotuning enabled and select fusion only through test-fusion.
+cortex-tensor = { path = "../cortex-tensor", default-features = false, features = ["std", "flex", "autodiff", "shard", "autotune"] }

@@ -1,0 +1,388 @@
+//! Tests that fused kernels actually write in-place (`HandleOutput::Alias`) when they can.
+//!
+//! Aliasing produces identical values to allocating a fresh output, so value-based tests
+//! cannot catch a regression — the whole mechanism silently died for over a year without a
+//! single test failing. These tests assert on the alias counter from
+//! [`cortex_cubecl_fusion::inspect`].
+//!
+//! The counter is process-global, so assertions are deltas (`>=`): concurrent tests can
+//! only inflate it. "Does NOT alias" is asserted through values instead (a wrong alias
+//! corrupts the still-referenced input).
+
+use super::*;
+use cortex_cubecl_fusion::inspect::inplace_alias_count;
+use cortex_fusion::inspect::{BlockKind, FusionInspector};
+use cortex_tensor::{TensorData, Tolerance};
+
+fn assert_all_fused(reports: &[cortex_fusion::inspect::FusionReport], what: &str) {
+    let tables = reports
+        .iter()
+        .map(|report| report.format_table())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    assert!(
+        !reports.is_empty()
+            && reports
+                .iter()
+                .flat_map(|report| report.blocks.iter())
+                .all(|block| matches!(block.kind, BlockKind::Fused { .. })),
+        "{what}: every block should be fused, otherwise the aliasing assertion is \
+         meaningless\n\n{tables}",
+    );
+}
+
+/// A consuming element-wise chain must reuse the input buffer for its output.
+///
+/// This covers the two launch-side regressions that killed aliasing: the `can_mut()`
+/// reference miscount (container clone kept during planning) and the reference-layout
+/// gate that rejected the first output of every block.
+#[test]
+fn consuming_elemwise_chain_writes_inplace() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device = Default::default();
+
+        let mut tensor = TestTensor::<2>::from_data([[1.0, 2.0], [3.0, 4.0]], &device);
+        // Warmup with the same (relative) graph: first execution may go through autotune,
+        // where benchmark trials run on forked contexts that (correctly) never alias.
+        tensor = tensor.add_scalar(0.0).mul_scalar(1.0);
+        let _ = tensor.clone().into_data();
+        device.sync().unwrap();
+
+        let inspector = FusionInspector::install(stream);
+        let before = inplace_alias_count();
+        for _ in 0..4 {
+            tensor = tensor.add_scalar(1.0).mul_scalar(2.0);
+            // Sync so every iteration is its own execution (own launch plan).
+            let _ = tensor.clone().into_data();
+        }
+        device.sync().unwrap();
+        let after = inplace_alias_count();
+
+        tensor.into_data().assert_approx_eq::<FloatElem>(
+            &TensorData::from([[46.0, 62.0], [78.0, 94.0]]),
+            Tolerance::default(),
+        );
+        assert_all_fused(&inspector.drain(), "consuming elemwise chain");
+        assert!(
+            after - before >= 4,
+            "each consuming iteration should alias its input buffer \
+             (got {} aliases over 4 iterations)",
+            after - before,
+        );
+    });
+}
+
+/// The consumed input keeps its buffer even when another input is broadcast: the output
+/// (same shape as the consumed input) must alias it, and values must stay correct. This
+/// is the shape that regressed with an invalid vector-size declaration on the alias.
+#[test]
+fn broadcast_elemwise_writes_inplace_and_computes_correctly() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device = Default::default();
+
+        let bias = TestTensor::<2>::from_data([[10.0, 20.0, 30.0, 40.0]], &device);
+        let mut tensor =
+            TestTensor::<2>::from_data([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], &device);
+        tensor = tensor.add_scalar(0.0).mul_scalar(1.0);
+        let _ = tensor.clone().into_data();
+        device.sync().unwrap();
+
+        let inspector = FusionInspector::install(stream);
+        let before = inplace_alias_count();
+        let out = (tensor + bias).mul_scalar(2.0);
+        out.into_data().assert_approx_eq::<FloatElem>(
+            &TensorData::from([[22.0, 44.0, 66.0, 88.0], [30.0, 52.0, 74.0, 96.0]]),
+            Tolerance::default(),
+        );
+        device.sync().unwrap();
+        let after = inplace_alias_count();
+
+        assert_all_fused(&inspector.drain(), "broadcast elemwise");
+        assert!(
+            after > before,
+            "the broadcast chain should alias the consumed input buffer",
+        );
+    });
+}
+
+/// A zero stride on an extent-one dimension must not make generic fused offset
+/// calculation divide by zero.
+///
+/// On CubeCL, repeating a singleton dimension once is a metadata-only operation that
+/// leaves the shape unchanged and gives that dimension stride zero. Consuming the view
+/// makes it a candidate for in-place output reuse; adding the differently shaped bias
+/// then exercises generic (`LayoutInfo::Unknown`) offset calculation.
+#[test]
+fn zero_stride_singleton_with_broadcast_computes_correctly() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device = Default::default();
+
+        let bias = TestTensor::<3>::from_data(
+            TensorData::from([[[10.0], [20.0], [30.0], [40.0]]]),
+            &device,
+        );
+        let tensor = TestTensor::<3>::from_data(
+            TensorData::from([[[1.0], [2.0], [3.0], [4.0]], [[5.0], [6.0], [7.0], [8.0]]]),
+            &device,
+        )
+        .repeat_dim(2, 1);
+        device.sync().unwrap();
+
+        let inspector = FusionInspector::install(stream);
+        let out = (tensor + bias).mul_scalar(2.0);
+        out.into_data().assert_approx_eq::<FloatElem>(
+            &TensorData::from([
+                [[22.0], [44.0], [66.0], [88.0]],
+                [[30.0], [52.0], [74.0], [96.0]],
+            ]),
+            Tolerance::default(),
+        );
+        device.sync().unwrap();
+
+        assert_all_fused(&inspector.drain(), "zero-stride broadcast elemwise");
+    });
+}
+
+/// A tensor that stays alive (read-only use) must NOT be written in-place: its values
+/// must survive the op. Asserted through values — the alias counter is process-global,
+/// so "did not move" can't be checked under parallel tests, but a wrong alias would
+/// corrupt the still-referenced input.
+#[test]
+fn read_only_input_is_not_written_inplace() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device = Default::default();
+
+        let mut tensor = TestTensor::<2>::from_data([[1.0, 2.0], [3.0, 4.0]], &device);
+        tensor = tensor.add_scalar(0.0).mul_scalar(1.0);
+        let _ = tensor.clone().into_data();
+        device.sync().unwrap();
+
+        // `tensor` stays alive across the chain: its buffer must not be reused.
+        let out = tensor.clone().add_scalar(1.0).mul_scalar(2.0);
+        out.into_data().assert_approx_eq::<FloatElem>(
+            &TensorData::from([[4.0, 6.0], [8.0, 10.0]]),
+            Tolerance::default(),
+        );
+        device.sync().unwrap();
+
+        // The original tensor must be untouched.
+        tensor.into_data().assert_approx_eq::<FloatElem>(
+            &TensorData::from([[1.0, 2.0], [3.0, 4.0]]),
+            Tolerance::default(),
+        );
+    });
+}
+
+/// A consumed, contiguous elemwise input feeding a fused reduce must alias the elemwise output.
+///
+/// The aliased output becomes the read block's reference layout, so the reduce runner
+/// resolves the reference against an aliased output argument: this covers the
+/// output-arg reference form and the `TensorArg::Alias` arms of
+/// `GlobalArgsLaunch::shape/strides`, which elemwise-only chains don't exercise.
+#[test]
+fn reduce_fusion_elemwise_output_writes_inplace() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device = Default::default();
+
+        let make_input = || {
+            // Eight elements keep each row aligned to CUDA's 16-byte minimum even
+            // for f16. Four f16 elements would produce padded rows, which are not
+            // dense and therefore cannot be aliased by the fused reduce.
+            let tensor = TestTensor::<2>::from_data(
+                [
+                    [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                    [9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0],
+                ],
+                &device,
+            );
+            // Materialize the init op before the fused chain, so the chain starts from
+            // an existing buffer and the init doesn't show up in the inspected reports.
+            let _ = tensor.clone().into_data();
+            device.sync().unwrap();
+            tensor
+        };
+
+        // `out` stays alive across the reduce, so it is a global output of the fused
+        // read block, while `tensor` is consumed and can be aliased. The elemwise ops
+        // on both sides of the reduce each eliminate an intermediate, giving the reduce
+        // fuser an I/O saving over a plain elemwise fusion (which must stop at
+        // `sum_dim`) so the reduce optimization wins the block.
+        let run = |tensor: TestTensor<2>, offset: f32| {
+            let out = tensor.add_scalar(offset).mul_scalar(2.0);
+            let sum = out.clone().sum_dim(1);
+            let res = sum.mul_scalar(3.0).add_scalar(offset);
+            (out.into_data(), res.into_data())
+        };
+
+        // Warmup with the same (relative) graph: first execution may go through autotune,
+        // where benchmark trials run on forked contexts that (correctly) never alias.
+        let _ = run(make_input(), 0.0);
+        device.sync().unwrap();
+
+        let input = make_input();
+        let inspector = FusionInspector::install(stream);
+        let before = inplace_alias_count();
+        let (out, res) = run(input, 1.0);
+        device.sync().unwrap();
+        let after = inplace_alias_count();
+
+        out.assert_approx_eq::<FloatElem>(
+            &TensorData::from([
+                [4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0],
+                [20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0],
+            ]),
+            Tolerance::default(),
+        );
+        res.assert_approx_eq::<FloatElem>(
+            &TensorData::from([[265.0], [649.0]]),
+            Tolerance::default(),
+        );
+        assert_all_fused(&inspector.drain(), "reduce with consumed elemwise input");
+        assert!(
+            after > before,
+            "the elemwise output feeding the fused reduce should alias the consumed input buffer",
+        );
+    });
+}
+
+/// Repeated consuming updates (the KV-cache pattern) must alias on every iteration while
+/// the cached execution plan is reused, and values must stay correct throughout.
+#[test]
+fn repeated_consuming_updates_alias_with_cached_plan() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device = Default::default();
+
+        let mut acc = TestTensor::<1>::zeros([32], &device);
+        acc = acc.add_scalar(0.0).mul_scalar(1.0);
+        let _ = acc.clone().into_data();
+        device.sync().unwrap();
+
+        let inspector = FusionInspector::install(stream);
+        let before = inplace_alias_count();
+        for step in 1..=3 {
+            let values = TestTensor::<1>::full([32], step as f32, &device);
+            acc = (acc + values).add_scalar(1.0);
+            let _ = acc.clone().into_data();
+        }
+        device.sync().unwrap();
+        let after = inplace_alias_count();
+
+        acc.into_data()
+            .assert_approx_eq::<FloatElem>(&TensorData::from([9.0; 32]), Tolerance::default());
+        assert_all_fused(&inspector.drain(), "repeated consuming updates");
+        assert!(
+            after - before >= 3,
+            "each accumulation step should alias (got {} aliases over 3 steps)",
+            after - before,
+        );
+    });
+}
+
+/// An in-place output keeps its input's vector size, which can be narrower than the fused
+/// block's width: the kernel must still stop at the output's last element.
+///
+/// A single-channel NHWC tensor permuted to NCHW has a stride-one extent-one axis, so it is
+/// launched with vector size one, while the contiguous `rhs` vectorizes the block. The
+/// element count leaves the last cube partially idle; an idle unit that passes the bound
+/// writes into the slice allocated after the output, so `canary` must keep its values.
+#[test]
+fn inplace_output_narrower_than_width_stays_in_bounds() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device: cortex_tensor::Device = Default::default();
+        let nhwc = [4, 52, 52, 1];
+
+        let materialize = |tensor: TestTensor<4>| {
+            let _ = tensor.clone().into_data();
+            device.sync().unwrap();
+            tensor
+        };
+        let nchw = |nhwc: TestTensor<4>| nhwc.permute([0, 3, 1, 2]);
+        let run = |lhs: TestTensor<4>, rhs: TestTensor<4>| (lhs.mul_scalar(2.0) + rhs).into_data();
+
+        // Warmup with the same graph: autotune trials run on forked contexts that never alias.
+        let _ = run(
+            materialize(nchw(TestTensor::full(nhwc, 1.0, &device))),
+            materialize(TestTensor::full([4, 1, 52, 52], 2.0, &device)),
+        );
+        device.sync().unwrap();
+
+        let lhs = materialize(nchw(TestTensor::full(nhwc, 1.0, &device)));
+        let canary = materialize(TestTensor::full(nhwc, 7.0, &device));
+        let rhs = materialize(TestTensor::full([4, 1, 52, 52], 2.0, &device));
+
+        let inspector = FusionInspector::install(stream);
+        let before = inplace_alias_count();
+        let out = run(lhs, rhs);
+        device.sync().unwrap();
+        let after = inplace_alias_count();
+
+        out.assert_approx_eq::<FloatElem>(
+            &TensorData::full([4, 1, 52, 52], 4.0),
+            Tolerance::default(),
+        );
+        assert_all_fused(&inspector.drain(), "permuted in-place elemwise");
+        assert!(
+            after > before,
+            "the output should alias the consumed `lhs` buffer"
+        );
+        canary
+            .into_data()
+            .assert_approx_eq::<FloatElem>(&TensorData::full(nhwc, 7.0), Tolerance::default());
+    });
+}
+
+/// An in-place output narrower than the fused block's width becomes the block's reference: every
+/// unit must still be placed at the block's width, not at the output's own vector size.
+///
+/// A column narrowed out of `source` and transposed is launched with vector size one, while the
+/// contiguous `row` vectorizes the block. Once `source` is dropped the column is the only owner
+/// of its buffer, so the output aliases it and becomes the reference.
+#[test]
+fn inplace_reference_narrower_than_width_indexes_every_unit() {
+    let stream = test_stream();
+    stream.executes(|| {
+        let device: cortex_tensor::Device = Default::default();
+        let source = || {
+            TestTensorInt::<1>::arange(0..128, &device)
+                .float()
+                .reshape([1, 16, 8])
+        };
+        let row = || TestTensor::<3>::ones([1, 1, 16], &device);
+        let column_plus_row = |source: &TestTensor<3>, row: TestTensor<3>| {
+            source.clone().narrow(2, 4, 1).swap_dims(1, 2) + row
+        };
+        let expected = TensorData::new(
+            (0..16).map(|c| (c * 8 + 4 + 1) as f32).collect(),
+            [1, 1, 16],
+        );
+
+        // Warmup with `source` kept alive: autotune trials run on forked contexts that never alias.
+        let (kept, row_kept) = (source(), row());
+        device.sync().unwrap();
+        column_plus_row(&kept, row_kept)
+            .into_data()
+            .assert_approx_eq::<FloatElem>(&expected, Tolerance::default());
+
+        let (dropped, row) = (source(), row());
+        device.sync().unwrap();
+        let out = column_plus_row(&dropped, row);
+        drop(dropped);
+        let before = inplace_alias_count();
+        let out = out.into_data();
+        let after = inplace_alias_count();
+
+        out.assert_approx_eq::<FloatElem>(&expected, Tolerance::default());
+        assert!(
+            after > before,
+            "the output should alias the transposed column"
+        );
+    });
+}

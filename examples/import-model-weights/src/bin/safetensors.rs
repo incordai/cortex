@@ -1,0 +1,23 @@
+use cortex_store::{ModuleSnapshot, PyTorchToCortexAdapter, SafetensorsStore};
+
+use import_model_weights::{Model, infer};
+
+const WEIGHTS_FILE: &str = "weights/mnist.safetensors";
+
+pub fn main() {
+    println!("Loading Safetensors model weights from file: {WEIGHTS_FILE}");
+
+    // Initialize a model with default weights
+    let device = Default::default();
+    let mut model = Model::init(&device);
+
+    // Load Safetensors weights into the model (using PyTorch adapter since weights were exported from PyTorch)
+    let mut store =
+        SafetensorsStore::from_file(WEIGHTS_FILE).with_from_adapter(PyTorchToCortexAdapter);
+    model
+        .load_from(&mut store)
+        .expect("Failed to load Safetensors model weights");
+
+    // Infer using the loaded model
+    infer(model);
+}

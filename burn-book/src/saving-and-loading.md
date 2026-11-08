@@ -1,0 +1,520 @@
+# Saving and Loading Models
+
+Saving your trained machine learning model is quite easy. As mentioned in the
+[Record](./building-blocks/record.md) section, a module's parameters are captured in a
+`ModuleRecord` and serialized to the [cortexpack](./building-blocks/record.md) format (`.bpk`).
+
+For checkpoints saved before Cortex 0.22, see
+[Migrating checkpoints](https://github.com/tracel-ai/burn/blob/release/0.22/burn-book/src/migrating-to-0.22.md#migrating-checkpoints).
+
+```rust, ignore
+use cortex::store::ModuleRecord;
+
+// Take a record of the model's parameters and save it to disk.
+model
+    .into_record()
+    .save(model_path)
+    .expect("Should be able to save the model");
+```
+
+Note that the `.bpk` file extension is appended automatically when the path has none, so only the
+file path and base name need to be provided.
+
+Now that you have a trained model saved to your disk, you can just as easily load it back.
+
+```rust, ignore
+// Load the record from the cortexpack file.
+let record = ModuleRecord::load(model_path)
+    .expect("Should be able to load the model weights from the provided file");
+
+// Apply the loaded weights to a model.
+model = model.load_record(record);
+```
+
+The record is backend-independent: weights saved with one backend can be loaded on another. If you
+need to convert precision, call `model.cast(dtype)` before taking the record, or use
+`record.cast_to_module_dtype()` when loading.
+
+## Initialization from Recorded Weights
+
+The most straightforward way to load weights for a module is simply by using
+[load_record](https://cortex.dev/docs/cortex/module/trait.Module.html#method.load_record). Note that
+parameter initialization is lazy, therefore no actual tensor allocation and GPU/CPU kernels are
+executed before the module is used. This means that you can use `init(device)` followed by
+`load_record(record)` without any meaningful performance cost.
+
+```rust, ignore
+use cortex::store::ModuleRecord;
+
+// Create a dummy initialized model to save.
+let device = Default::default();
+let model = Model::init(&device);
+
+// Save its parameters to a cortexpack file.
+model
+    .into_record()
+    .save(model_path)
+    .expect("Should be able to save the model");
+```
+
+Afterwards, the model can just as easily be loaded from the record saved on disk.
+
+```rust, ignore
+// Load the model record from the cortexpack file.
+let record = ModuleRecord::load(model_path)
+    .expect("Could not load model weights");
+
+// Initialize a new model with the loaded record/weights.
+let model = Model::init(&device).load_record(record);
+```
+
+For partial loading (only some parameters present in the record), use `record.allow_partial(true)`
+before applying it, or `model.try_load_record(record)` for fallible loading.
+
+## Model Weight Store
+
+While the `ModuleRecord` API above works well for basic saving and loading, the `cortex-store` crate
+adds memory efficiency and flexibility on top of the same cortexpack format. It provides zero-copy
+memory-mapped loading, cross-framework interoperability (PyTorch and SafeTensors), key remapping,
+partial loading, and filtering.
+
+### Supported Formats
+
+| Format          | Extension      | Description                                                                               |
+| --------------- | -------------- | ----------------------------------------------------------------------------------------- |
+| **Cortexpack**    | `.bpk`         | Cortex's native format with fast loading, zero-copy support, and training state persistence |
+| **SafeTensors** | `.safetensors` | Industry-standard format from Hugging Face for secure tensor serialization                |
+| **PyTorch**     | `.pt`, `.pth`  | Direct loading of PyTorch model weights (read-only)                                       |
+
+### Saving a Model
+
+```rust, ignore
+use cortex_store::{ModuleSnapshot, CortexpackStore};
+
+// Save to Cortexpack (recommended)
+let mut store = CortexpackStore::from_file("model.bpk");
+model.save_into(&mut store)?;
+
+// Or save to SafeTensors
+use cortex_store::SafetensorsStore;
+let mut store = SafetensorsStore::from_file("model.safetensors");
+model.save_into(&mut store)?;
+```
+
+### Loading a Model
+
+```rust, ignore
+use cortex_store::{ModuleSnapshot, CortexpackStore};
+
+let device = Default::default();
+let mut model = MyModel::init(&device);
+
+// Load from Cortexpack
+let mut store = CortexpackStore::from_file("model.bpk");
+model.load_from(&mut store)?;
+```
+
+### Loading from PyTorch
+
+You can load weights directly from PyTorch `.pt` files:
+
+```rust, ignore
+use cortex_store::{ModuleSnapshot, PytorchStore};
+
+let mut model = MyModel::init(&device);
+let mut store = PytorchStore::from_file("pytorch_model.pt");
+model.load_from(&mut store)?;
+```
+
+#### Exporting from PyTorch
+
+Save the model weights (state_dict):
+
+```python
+import torch
+import torch.nn as nn
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(2, 2, (2, 2))
+        self.conv2 = nn.Conv2d(2, 2, (2, 2), bias=False)
+
+    def forward(self, x):
+        return self.conv2(self.conv1(x))
+
+model = Net()
+torch.save(model.state_dict(), "model.pt")
+```
+
+A file saved with `torch.save(model)` (the whole module rather than its `state_dict()`) loads
+too: its parameters and buffers are read under the names `state_dict()` gives them, so the
+tensor names are the same either way. Non-persistent buffers and tensors assigned as plain
+attributes are not part of it, exactly as `state_dict()` leaves them out. A module that
+customizes its state dict (`get_extra_state()`, state dict hooks) is read from its stored
+parameters and buffers only, so entries those would add are absent.
+
+#### Accessing Nested State Dicts
+
+Some PyTorch checkpoints nest the state_dict under a key:
+
+```rust, ignore
+let mut store = PytorchStore::from_file("checkpoint.pt")
+    .with_top_level_key("state_dict");
+model.load_from(&mut store)?;
+```
+
+#### Reading Checkpoints Without Cortex
+
+The parser behind `PytorchStore` is its own crate,
+[`pytorch-reader`](https://crates.io/crates/pytorch-reader), with no dependency on Cortex. Use it
+directly for tools that only need to list or convert a checkpoint's tensors. It is re-exported as
+`cortex_store::pytorch_reader`.
+
+### Loading from SafeTensors
+
+For SafeTensors files exported from PyTorch, use the adapter for proper weight transformation:
+
+```rust, ignore
+use cortex_store::{ModuleSnapshot, PyTorchToCortexAdapter, SafetensorsStore};
+
+let mut model = MyModel::init(&device);
+let mut store = SafetensorsStore::from_file("model.safetensors")
+    .with_from_adapter(PyTorchToCortexAdapter);
+model.load_from(&mut store)?;
+```
+
+For SafeTensors files created by Cortex, no adapter is needed:
+
+```rust, ignore
+let mut store = SafetensorsStore::from_file("model.safetensors");
+model.load_from(&mut store)?;
+```
+
+#### Exporting from PyTorch to SafeTensors
+
+```python
+from safetensors.torch import save_file
+
+model = Net()
+save_file(model.state_dict(), "model.safetensors")
+```
+
+### Saving for PyTorch Compatibility
+
+Use the adapter when saving for PyTorch consumption:
+
+```rust, ignore
+use cortex_store::{CortexToPyTorchAdapter, SafetensorsStore};
+
+let mut store = SafetensorsStore::from_file("for_pytorch.safetensors")
+    .with_to_adapter(CortexToPyTorchAdapter)
+    .skip_enum_variants(true);
+model.save_into(&mut store)?;
+```
+
+### Handling Load Results
+
+The `load_from` method returns detailed information about the loading process.
+
+> **Note:** Inspecting `result.missing`, `result.errors`, etc. requires the store to be configured
+> with [`.allow_partial(true)`](#partial-loading). Without it, a missing tensor causes a hard `Err`
+> before you ever receive an `ApplyResult`.
+
+```rust, ignore
+// Use .allow_partial(true) to get an ApplyResult with structured info
+let mut store = PytorchStore::from_file("pretrained.pt")
+    .allow_partial(true);
+
+let result = model.load_from(&mut store)?;
+
+// Print a formatted summary with suggestions
+println!("{}", result);
+
+// Or inspect individual fields
+println!("Applied: {} tensors", result.applied.len());
+println!("Missing: {:?}", result.missing);
+println!("Errors: {:?}", result.errors);
+
+if result.is_success() {
+    println!("All tensors loaded successfully");
+}
+```
+
+If you don't use `.allow_partial(true)`, use normal error handling:
+
+```rust, ignore
+match model.load_from(&mut store) {
+    Ok(result) => println!("Loaded successfully: {} tensors", result.applied.len()),
+    Err(e) => eprintln!("Failed to load: {e}"),
+}
+```
+
+### Adding Metadata
+
+Cortexpack and SafeTensors support custom metadata:
+
+```rust, ignore
+let mut store = CortexpackStore::from_file("model.bpk")
+    .metadata("version", "1.0")
+    .metadata("description", "My trained model")
+    .metadata("epochs", "100");
+model.save_into(&mut store)?;
+```
+
+### Advanced Features
+
+#### Key Remapping
+
+Remap parameter names using regex patterns when model structures don't match:
+
+```rust, ignore
+let mut store = PytorchStore::from_file("model.pt")
+    // Remove prefix: "model.conv1.weight" -> "conv1.weight"
+    .with_key_remapping(r"^model\.", "")
+    // Rename: "layer1" -> "encoder.layer1"
+    .with_key_remapping(r"^layer", "encoder.layer");
+model.load_from(&mut store)?;
+```
+
+For complex remapping:
+
+```rust, ignore
+use cortex_store::KeyRemapper;
+
+let remapper = KeyRemapper::new()
+    .add_pattern(r"^transformer\.h\.(\d+)\.", "transformer.layer$1.")?
+    .add_pattern(r"\.attn\.", ".attention.")?;
+
+let mut store = SafetensorsStore::from_file("model.safetensors")
+    .remap(remapper);
+```
+
+#### Partial Loading
+
+Load weights even when some tensors are missing:
+
+```rust, ignore
+let mut store = PytorchStore::from_file("pretrained.pt")
+    .allow_partial(true);
+
+let result = model.load_from(&mut store)?;
+println!("Missing (initialized randomly): {:?}", result.missing);
+```
+
+#### Filtering Tensors
+
+Load or save only specific layers:
+
+```rust, ignore
+// Load only encoder layers
+let mut store = SafetensorsStore::from_file("model.safetensors")
+    .with_regex(r"^encoder\..*")
+    .allow_partial(true);
+
+// Save only encoder layers
+let mut store = SafetensorsStore::from_file("encoder.safetensors")
+    .with_regex(r"^encoder\..*");
+model.save_into(&mut store)?;
+
+// Multiple patterns (OR logic)
+let mut store = SafetensorsStore::from_file("model.safetensors")
+    .with_regex(r"^encoder\..*")      // encoder tensors
+    .with_regex(r".*\.bias$")          // OR any bias tensors
+    .with_full_path("decoder.scale"); // OR specific tensor
+```
+
+#### Non-Contiguous Layer Indices
+
+PyTorch `nn.Sequential` with mixed layers creates non-contiguous indices. `PytorchStore`
+automatically remaps these:
+
+```
+PyTorch: fc.0.weight, fc.2.weight, fc.4.weight  (gaps from ReLU layers)
+Cortex:    fc.0.weight, fc.1.weight, fc.2.weight  (contiguous)
+```
+
+This is enabled by default. Disable if needed:
+
+```rust, ignore
+let mut store = PytorchStore::from_file("model.pt")
+    .map_indices_contiguous(false);
+```
+
+Some lists mirror their indices on the Cortex side, for example a `Vec` whose odd entries are
+parameter-free flips, while other lists in the same file still have gaps to collapse. Exclude
+those prefixes instead of turning the mapping off:
+
+```rust, ignore
+// flows.{0,2,4} stay as-is, fc.{0,2} still become fc.{0,1}
+let mut store = PytorchStore::from_file("model.pt")
+    .map_indices_contiguous_except(r"^model_g\.flow\.flows$");
+```
+
+The regex is matched against the path up to the numeric segment (`model_g.flow.flows`, not the
+full tensor name), so anchor it to keep exactly one list; a nested list such as
+`model_g.flow.flows.2.enc.in_layers` is matched separately.
+
+#### Zero-Copy Loading
+
+For embedded models, `from_static` slices tensor data straight out of the binary without copying.
+File loads are lazy: only the header is read up front, and each tensor is read from disk when it is
+accessed.
+
+```rust, ignore
+// Embedded model (compile-time)
+static MODEL_DATA: &[u8] = include_bytes!("model.bpk");
+let mut store = CortexpackStore::from_static(MODEL_DATA);
+model.load_from(&mut store)?;
+
+// Large file (tensors read on access)
+let mut store = CortexpackStore::from_file("large_model.bpk");
+model.load_from(&mut store)?;
+```
+
+#### Saving Large Models
+
+Saving to a Cortexpack **file** streams one tensor at a time: each parameter is read back from the
+device only when the writer reaches it, and released before the next one is read. Peak host memory
+is bounded by the largest single tensor rather than by the size of the model, so a model whose
+weights live on an accelerator can exceed host RAM and still save.
+
+```rust, ignore
+// Streams to disk; only one tensor is held in host memory at a time.
+let mut store = CortexpackStore::from_file("large_model.bpk").overwrite(true);
+model.save_into(&mut store)?;
+```
+
+This applies to file saves. `CortexpackStore::from_bytes` has to build the whole container in memory
+by definition, so prefer a file path for large models.
+
+Cortexpack file saves are also all-or-nothing: the container is written beside the destination and
+renamed into place once complete, so a save that fails (a parameter readback erroring mid-write, a
+full disk), panics, or has its process killed leaves any existing file untouched rather than
+replacing it with a truncated one. Surviving power loss is a stronger guarantee and holds on Unix
+only; see `Writer::write_to_file` for the details.
+
+#### Half-Precision Storage
+
+Save models at half precision (F16) to reduce file size by ~50%, then load back at full precision:
+
+```rust, ignore
+use cortex_store::{ModuleSnapshot, CortexpackStore, HalfPrecisionAdapter};
+
+let adapter = HalfPrecisionAdapter::new();
+
+// Save: F32 -> F16 (same adapter for both directions)
+let mut store = CortexpackStore::from_file("model_f16.bpk")
+    .with_to_adapter(adapter.clone());
+model.save_into(&mut store)?;
+
+// Load: F16 -> F32
+let mut store = CortexpackStore::from_file("model_f16.bpk")
+    .with_from_adapter(adapter);
+model.load_from(&mut store)?;
+```
+
+By default, weights in Linear, Embedding, Conv\*, LayerNorm, GroupNorm, InstanceNorm, RmsNorm, and
+PRelu modules are converted. BatchNorm is excluded because its running variance can underflow in
+F16. Customize with `with_module()` and `without_module()`:
+
+```rust, ignore
+// Keep LayerNorm at full precision
+let adapter = HalfPrecisionAdapter::new()
+    .without_module("LayerNorm");
+
+// Add a custom module to the conversion set
+let adapter = HalfPrecisionAdapter::new()
+    .with_module("CustomLayer");
+```
+
+#### Direct Tensor Access
+
+Inspect tensors without loading into a model:
+
+```rust, ignore
+use cortex_store::ModuleStore;
+
+let mut store = PytorchStore::from_file("model.pt");
+
+// List all tensor names
+let names = store.keys()?;
+
+// Get specific tensor
+if let Some(tensor) = store.get_tensor("encoder.layer0.weight")? {
+    println!("Shape: {:?}, DType: {:?}", tensor.shape(), tensor.dtype());
+
+    // Reads the tensor's data from the file
+    let data = tensor.to_data()?;
+}
+```
+
+#### Model Surgery
+
+Transfer weights between models:
+
+```rust, ignore
+use cortex_store::{ModuleSnapshot, PathFilter};
+
+// Transfer all weights
+let snapshots = model1.collect(None, None, false);
+model2.apply(snapshots, None, None, false);
+
+// Transfer only encoder weights
+let filter = PathFilter::new().with_regex(r"^encoder\..*");
+let snapshots = model1.collect(Some(filter.clone()), None, false);
+model2.apply(snapshots, Some(filter), None, false);
+```
+
+### API Reference
+
+#### Builder Methods
+
+| Category      | Method                                 | Description                          |
+| ------------- | -------------------------------------- | ------------------------------------ |
+| **Filtering** | `with_regex(pattern)`                  | Filter by regex pattern              |
+|               | `with_full_path(path)`                 | Include specific tensor              |
+|               | `with_predicate(fn)`                   | Custom filter logic                  |
+| **Remapping** | `with_key_remapping(from, to)`         | Regex-based renaming                 |
+|               | `remap(KeyRemapper)`                   | Complex remapping rules              |
+| **Adapters**  | `with_from_adapter(adapter)`           | Loading transformations              |
+|               | `with_to_adapter(adapter)`             | Saving transformations               |
+|               | `HalfPrecisionAdapter::new()`          | F32/F16 mixed-precision              |
+| **Config**    | `allow_partial(bool)`                  | Continue on missing tensors          |
+|               | `with_top_level_key(key)`              | Access nested dict (PyTorch)         |
+|               | `skip_enum_variants(bool)`             | Skip enum variants in paths          |
+|               | `map_indices_contiguous(bool)`         | Remap non-contiguous indices         |
+|               | `map_indices_contiguous_except(regex)` | Keep indices under matching prefixes |
+|               | `metadata(key, value)`                 | Add custom metadata                  |
+
+#### Direct Access Methods
+
+| Method              | Description                      |
+| ------------------- | -------------------------------- |
+| `keys()`            | Get ordered list of tensor names |
+| `get_all_tensors()` | Get all tensors as BTreeMap      |
+| `get_tensor(name)`  | Get specific tensor by name      |
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Shape mismatch**: Your Cortex model doesn't match the source architecture. Verify layer
+   configurations (channels, kernel sizes, bias settings).
+
+2. **Key not found**: Parameter names don't match. Use `with_key_remapping()` or inspect keys:
+
+   ```rust, ignore
+   let store = PytorchStore::from_file("model.pt");
+   println!("Available keys: {:?}", store.keys()?);
+   ```
+
+#### Inspecting Files
+
+Use [Netron](https://github.com/lutzroeder/netron) to visualize `.pt` and `.safetensors` files.
+
+For Cortexpack files:
+
+```bash
+cargo run -p cortex-store --example cortexpack_inspect -- model.bpk
+```

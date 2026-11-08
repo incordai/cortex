@@ -1,0 +1,140 @@
+use crate::{ItemLazy, renderer::MetricsRenderer};
+use cortex_core::{module::Module, tensor::Gradients};
+use cortex_optim::{
+    GradientsParams, ModuleOptimizer, MultiGradientsParams,
+    lr_scheduler::module_lr_scheduler::ModuleLearningRate,
+};
+
+/// A training output.
+pub struct TrainOutput<TO> {
+    /// The gradients.
+    pub grads: GradientsParams,
+
+    /// The item.
+    pub item: TO,
+}
+
+impl<TO> TrainOutput<TO> {
+    /// Creates a new training output.
+    ///
+    /// # Arguments
+    ///
+    /// * `module` - The module.
+    /// * `grads` - The gradients.
+    /// * `item` - The item.
+    ///
+    /// # Returns
+    ///
+    /// A new training output.
+    pub fn new<M: Module>(module: &M, grads: Gradients, item: TO) -> Self {
+        let grads = GradientsParams::from_grads(grads, module);
+        Self { grads, item }
+    }
+}
+
+/// Trait to be implemented for models to be able to be trained.
+///
+/// The [step](TrainStep::step) method needs to be manually implemented for all structs.
+///
+/// The [optimize](TrainStep::optimize) method can be overridden if you want to control how the
+/// optimizer is used to update the model. This can be useful if you want to call custom mutable
+/// functions on your model (e.g., clipping the weights) before or after the optimizer is used.
+///
+/// # Notes
+///
+/// To be used with the [Learner](crate::Learner) struct, the struct which implements this trait must
+/// also implement the [Module] trait, which is done automatically with its derive.
+pub trait TrainStep {
+    /// Type of input for a step of the training stage.
+    type Input: Send + 'static;
+    /// Type of output for a step of the training stage.
+    type Output: ItemLazy + 'static;
+    /// Runs a step for training, which executes the forward and backward passes.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The input for the model.
+    ///
+    /// # Returns
+    ///
+    /// The output containing the model output and the gradients.
+    fn step(&self, item: Self::Input) -> TrainOutput<Self::Output>;
+    /// Optimize the current module with the provided gradients and learning rate.
+    ///
+    /// # Arguments
+    ///
+    /// * `optim`: Optimizer used for learning.
+    /// * `lr`: The learning rate used for this step.
+    /// * `grads`: The gradients of each parameter in the current model.
+    ///
+    /// # Returns
+    ///
+    /// The updated model.
+    fn optimize(
+        self,
+        optim: &mut ModuleOptimizer,
+        lr_module: ModuleLearningRate,
+        grads: GradientsParams,
+    ) -> Self
+    where
+        Self: Module + Sized,
+    {
+        optim.step(lr_module, self, grads)
+    }
+    /// Optimize the current module with the provided gradients and learning rate.
+    ///
+    /// # Arguments
+    ///
+    /// * `optim`: Optimizer used for learning.
+    /// * `lr`: The learning rate used for this step.
+    /// * `grads`: Multiple gradients associated to each parameter in the current model.
+    ///
+    /// # Returns
+    ///
+    /// The updated model.
+    fn optimize_multi(
+        self,
+        optim: &mut ModuleOptimizer,
+        lr_module: ModuleLearningRate,
+        grads: MultiGradientsParams,
+    ) -> Self
+    where
+        Self: Module + Sized,
+    {
+        optim.step_multi(lr_module, self, grads)
+    }
+}
+
+/// Trait to be implemented for validating models.
+pub trait InferenceStep {
+    /// Type of input for an inference step.
+    type Input: Send + 'static;
+    /// Type of output for an inference step.
+    type Output: ItemLazy + 'static;
+    /// Runs a validation step.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The item to validate on.
+    ///
+    /// # Returns
+    ///
+    /// The validation output.
+    fn step(&self, item: Self::Input) -> Self::Output;
+}
+
+/// The result of a training, containing the model along with the [renderer](MetricsRenderer).
+pub struct LearningResult<M> {
+    /// The model with the learned weights, converted to validation mode.
+    ///
+    /// Call [`Module::train`](cortex_core::module::Module::train) before using it for follow-up
+    /// training. To continue on another device, use `model.train().fork(device)`.
+    pub model: M,
+    /// The renderer that can be used for follow up training and evaluation.
+    pub renderer: Box<dyn MetricsRenderer>,
+    /// The stop that ended training before its last epoch, if
+    /// [`Interrupter::stop`](crate::Interrupter::stop) was called and no error happened.
+    pub interrupted: Option<crate::Interruption>,
+    /// The error that ended training before its last epoch, if it hit one.
+    pub error: Option<std::sync::Arc<crate::TrainingError>>,
+}

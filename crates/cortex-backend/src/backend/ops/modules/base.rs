@@ -1,0 +1,1282 @@
+pub use super::attention::AttentionCache;
+use super::{attention, conv, ctc, linear, pool};
+use crate::ops::unfold::{create_unfolding_weight, unfold4d_using_conv2d};
+use crate::tensor::{BoolTensor, FloatTensor, IntTensor};
+use crate::{Backend, Scalar, TensorMetadata};
+#[allow(deprecated)]
+pub use cortex_std::ops::{
+    AttentionModuleOptions, AvgPoolOptions, CausalAlignment, ConvOptions, ConvTransposeOptions,
+    CoordinateTransformMode, DeformConvOptions, GridSampleMode, GridSampleOptions,
+    GridSamplePaddingMode, InterpolateMode, InterpolateOptions, MaxPoolOptions, PadMode,
+    PaddedConvOptions, UnfoldOptions,
+};
+use cortex_std::{IndexingUpdateOp, IntDType, Shape};
+
+/// Gradients computed during the backward pass for each input of
+/// [attention_with_logsumexp](ModuleOps::attention_with_logsumexp).
+#[derive(new)]
+pub struct AttentionBackward<B: Backend> {
+    /// Query gradient, `[batch_size, num_heads, seq_len_q, head_dim]`.
+    pub query_grad: FloatTensor<B>,
+
+    /// Key gradient, `[batch_size, num_kv_heads, seq_len_k, head_dim]`: every query head of a
+    /// group summed into its key head.
+    pub key_grad: FloatTensor<B>,
+
+    /// Value gradient, `[batch_size, num_kv_heads, seq_len_k, val_dim]`.
+    pub value_grad: FloatTensor<B>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [conv2d](ModuleOps::conv2d).
+#[derive(new)]
+pub struct Conv2dBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+
+    /// Weights gradient.
+    pub weights_grad: FloatTensor<B>,
+
+    /// Bias gradient.
+    pub bias_grad: Option<FloatTensor<B>>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [deform_conv2d](ModuleOps::deform_conv2d).
+#[derive(new)]
+pub struct DeformConv2dBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+
+    /// Offset gradient.
+    pub offset_grad: FloatTensor<B>,
+
+    /// Weights gradient.
+    pub weight_grad: FloatTensor<B>,
+
+    /// Mask gradient.
+    pub mask_grad: Option<FloatTensor<B>>,
+
+    /// Bias gradient.
+    pub bias_grad: Option<FloatTensor<B>>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [conv3d](ModuleOps::conv3d).
+#[derive(new)]
+pub struct Conv3dBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+
+    /// Weights gradient.
+    pub weights_grad: FloatTensor<B>,
+
+    /// Bias gradient.
+    pub bias_grad: Option<FloatTensor<B>>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [max_pool1d](ModuleOps::max_pool1d).
+#[derive(new)]
+pub struct MaxPool1dBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+}
+
+/// Results from [max_pool1d](ModuleOps::max_pool1d_with_indices).
+#[derive(new)]
+pub struct MaxPool1dWithIndices<B: Backend> {
+    /// The output tensor.
+    pub output: FloatTensor<B>,
+
+    /// The indices tensor.
+    pub indices: IntTensor<B>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [max_pool2d](ModuleOps::max_pool2d).
+#[derive(new)]
+pub struct MaxPool2dBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+}
+
+/// Results from [batch_norm_train](ModuleOps::batch_norm_train).
+#[derive(new)]
+pub struct BatchNormTrain<B: Backend> {
+    /// The normalized input.
+    pub output: FloatTensor<B>,
+
+    /// The batch mean per channel, `[channels]`.
+    pub mean: FloatTensor<B>,
+
+    /// The biased batch variance per channel, `[channels]`.
+    pub variance: FloatTensor<B>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by
+/// [batch_norm_train](ModuleOps::batch_norm_train).
+#[derive(new)]
+pub struct BatchNormTrainBackward<B: Backend> {
+    /// Gradient of the input.
+    pub x_grad: FloatTensor<B>,
+
+    /// Gradient of `gamma`, `[channels]`.
+    pub gamma_grad: FloatTensor<B>,
+
+    /// Gradient of `beta`, `[channels]`.
+    pub beta_grad: FloatTensor<B>,
+}
+
+/// Results from [max_pool2d](ModuleOps::max_pool2d_with_indices).
+#[derive(new)]
+pub struct MaxPool2dWithIndices<B: Backend> {
+    /// The output tensor.
+    pub output: FloatTensor<B>,
+
+    /// The indices tensor.
+    pub indices: IntTensor<B>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [max_pool3d](ModuleOps::max_pool3d).
+#[derive(new, Debug, Clone)]
+pub struct MaxPool3dBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+}
+
+/// Results from [max_pool3d](ModuleOps::max_pool3d_with_indices).
+#[derive(new, Debug, Clone)]
+pub struct MaxPool3dWithIndices<B: Backend> {
+    /// The output tensor.
+    pub output: FloatTensor<B>,
+
+    /// The indices tensor.
+    pub indices: IntTensor<B>,
+}
+
+/// Gradient computed during the backward pass for each tensor used by [interpolate](ModuleOps::interpolate).
+#[derive(new)]
+pub struct InterpolateBackward<B: Backend> {
+    /// Gradient.
+    pub x_grad: FloatTensor<B>,
+}
+
+/// Module operations trait.
+pub trait ModuleOps<B: Backend> {
+    /// Applies batch normalization using explicitly supplied channel statistics.
+    ///
+    /// The input has shape `[batch, channels, ...]`; all other tensors have
+    /// shape `[channels]`.
+    ///
+    /// This operation doesn't calculate or update statistics. Callers may
+    /// supply running statistics for inference or batch statistics calculated
+    /// by a training path.
+    fn batch_norm(
+        x: FloatTensor<B>,
+        gamma: FloatTensor<B>,
+        beta: FloatTensor<B>,
+        mean: FloatTensor<B>,
+        variance: FloatTensor<B>,
+        epsilon: f64,
+    ) -> FloatTensor<B> {
+        let rank = x.shape().num_dims();
+        let channels = x.shape()[1];
+        let mut dimensions = alloc::vec![1; rank];
+        dimensions[1] = channels;
+        let shape = Shape::from(dimensions);
+        let gamma = B::float_reshape(gamma, shape.clone());
+        let beta = B::float_reshape(beta, shape.clone());
+        let mean = B::float_reshape(mean, shape.clone());
+        let variance = B::float_reshape(variance, shape);
+        let std = B::float_sqrt(B::float_add_scalar(variance, Scalar::Float(epsilon)));
+        let normalized = B::float_div(B::float_sub(x, mean), std);
+        B::float_add(B::float_mul(normalized, gamma), beta)
+    }
+
+    /// Applies batch normalization with the statistics of the batch itself,
+    /// and returns them.
+    ///
+    /// The input has shape `[batch, channels, ...]`; `gamma` and `beta` have
+    /// shape `[channels]`, as do the returned mean and biased variance — what
+    /// a training path feeds its running statistics.
+    ///
+    /// An autodiff backend differentiates this as one operation, through
+    /// [batch_norm_train_backward](ModuleOps::batch_norm_train_backward),
+    /// rather than through the reductions and broadcasts that computing the
+    /// statistics out of tensor operations would record.
+    fn batch_norm_train(
+        x: FloatTensor<B>,
+        gamma: FloatTensor<B>,
+        beta: FloatTensor<B>,
+        epsilon: f64,
+    ) -> BatchNormTrain<B> {
+        let shape = x.shape();
+        let channels = shape[1];
+        let samples_per_channel = shape.num_elements() / channels;
+        let flattened = Shape::new([channels, samples_per_channel]);
+        let mut per_channel = alloc::vec![1; shape.num_dims()];
+        per_channel[1] = channels;
+
+        // Use mean directly to avoid overflowing intermediate sums in f16.
+        let mean = B::float_mean_dim(
+            B::float_reshape(B::float_swap_dims(x.clone(), 0, 1), flattened.clone()),
+            1,
+        );
+        let mean = B::float_reshape(mean, Shape::from(per_channel));
+        let centered = B::float_sub(x.clone(), mean.clone());
+        let variance = B::float_mean_dim(
+            B::float_reshape(
+                B::float_swap_dims(B::float_mul(centered.clone(), centered), 0, 1),
+                flattened,
+            ),
+            1,
+        );
+        let mean = B::float_reshape(mean, Shape::new([channels]));
+        let variance = B::float_reshape(variance, Shape::new([channels]));
+        let output = B::batch_norm(x, gamma, beta, mean.clone(), variance.clone(), epsilon);
+
+        BatchNormTrain::new(output, mean, variance)
+    }
+
+    /// Gradients of [batch_norm_train](ModuleOps::batch_norm_train) with
+    /// respect to its input, `gamma` and `beta`, given the gradient of its
+    /// output. `mean` and `variance` are the statistics it returned.
+    fn batch_norm_train_backward(
+        x: FloatTensor<B>,
+        gamma: FloatTensor<B>,
+        mean: FloatTensor<B>,
+        variance: FloatTensor<B>,
+        epsilon: f64,
+        output_grad: FloatTensor<B>,
+    ) -> BatchNormTrainBackward<B> {
+        let shape = x.shape();
+        let rank = shape.num_dims();
+        let channels = shape[1];
+        let flattened = Shape::new([channels, shape.num_elements() / channels]);
+        let mut per_channel = alloc::vec![1; rank];
+        per_channel[1] = channels;
+        let per_channel = Shape::from(per_channel);
+
+        let inv_std = B::float_reshape(
+            B::float_recip(B::float_sqrt(B::float_add_scalar(
+                variance,
+                Scalar::Float(epsilon),
+            ))),
+            per_channel.clone(),
+        );
+        let normalized = B::float_mul(
+            B::float_sub(x, B::float_reshape(mean, per_channel.clone())),
+            inv_std.clone(),
+        );
+
+        let output_grad_flat = B::float_reshape(
+            B::float_swap_dims(output_grad.clone(), 0, 1),
+            flattened.clone(),
+        );
+        let normalized_grad_flat = B::float_reshape(
+            B::float_swap_dims(B::float_mul(output_grad.clone(), normalized.clone()), 0, 1),
+            flattened,
+        );
+        let beta_grad = B::float_sum_dim(output_grad_flat.clone(), 1);
+        let gamma_grad = B::float_sum_dim(normalized_grad_flat.clone(), 1);
+
+        // Compute means independently: parameter-gradient sums can overflow in f16.
+        let mean_grad =
+            B::float_reshape(B::float_mean_dim(output_grad_flat, 1), per_channel.clone());
+        let mean_normalized_grad = B::float_reshape(
+            B::float_mean_dim(normalized_grad_flat, 1),
+            per_channel.clone(),
+        );
+        let centred_grad = B::float_sub(output_grad, mean_grad);
+        let projected = B::float_mul(normalized, mean_normalized_grad);
+        let scale = B::float_mul(B::float_reshape(gamma, per_channel), inv_std);
+        let x_grad = B::float_mul(scale, B::float_sub(centred_grad, projected));
+
+        BatchNormTrainBackward::new(
+            x_grad,
+            B::float_reshape(gamma_grad, Shape::new([channels])),
+            B::float_reshape(beta_grad, Shape::new([channels])),
+        )
+    }
+
+    /// Embedding operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `weights` - The embedding weights.
+    /// * `indices` - The indices tensor.
+    ///
+    /// # Returns
+    ///
+    /// The output tensor.
+    fn embedding(weights: FloatTensor<B>, indices: IntTensor<B>) -> FloatTensor<B> {
+        let [batch_size, seq_length] = indices.shape().dims();
+        let [_, d_model] = weights.shape().dims();
+
+        let indices = B::int_reshape(indices, Shape::new([batch_size * seq_length]));
+        let output = B::float_select(weights, 0, indices);
+
+        B::float_reshape(output, Shape::new([batch_size, seq_length, d_model]))
+    }
+
+    /// Embedding backward operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `weights` - The embedding weights.
+    /// * `output_grad` - The output gradient.
+    /// * `indices` - The indices tensor.
+    ///
+    /// # Returns
+    ///
+    /// The gradient.
+    fn embedding_backward(
+        weights: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        indices: IntTensor<B>,
+    ) -> FloatTensor<B> {
+        let [batch_size, seq_length] = indices.shape().dims();
+        let [n_embeddings, d_model] = weights.shape().dims();
+        let device = weights.device();
+        let dtype = output_grad.dtype();
+
+        let indices = B::int_reshape(indices, Shape::new([batch_size * seq_length]));
+        let output_grad =
+            B::float_reshape(output_grad, Shape::new([batch_size * seq_length, d_model]));
+        let grad = B::float_zeros(Shape::new([n_embeddings, d_model]), &device, dtype.into());
+
+        B::float_select_assign(grad, 0, indices, output_grad, IndexingUpdateOp::Add)
+    }
+
+    /// Linear transformation.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[..., d_input]`,
+    /// weight: `[d_input, d_output]`,
+    /// bias:   `[d_output]`,
+    fn linear(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+    ) -> FloatTensor<B> {
+        linear::linear::<B>(x, weight, bias)
+    }
+    /// Backward pass for [linear](ModuleOps::linear), returning the gradient for `x`.
+    fn linear_x_backward(weight: FloatTensor<B>, output_grad: FloatTensor<B>) -> FloatTensor<B> {
+        linear::linear_x_backward::<B>(weight, output_grad)
+    }
+    /// Backward pass for [linear](ModuleOps::linear), returning the gradient for `weight`.
+    fn linear_weight_backward(x: FloatTensor<B>, output_grad: FloatTensor<B>) -> FloatTensor<B> {
+        linear::linear_weight_backward::<B>(x, output_grad)
+    }
+    /// Backward pass for [linear](ModuleOps::linear), returning the gradient for `bias`.
+    fn linear_bias_backward(output_grad: FloatTensor<B>) -> FloatTensor<B> {
+        linear::linear_bias_backward::<B>(output_grad)
+    }
+
+    /// One dimensional convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, length]`,
+    /// weight: `[channels_out, channels_in, kernel_size]`,
+    /// bias:   `[channels_out]`,
+    fn conv1d(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<B> {
+        conv::conv1d_from_conv2d::<B>(x, weight, bias, options)
+    }
+    /// Backward pass for the [conv1d](ModuleOps::conv1d) operation, returning the gradient for `x`.
+    fn conv1d_x_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<B> {
+        conv::conv1d_x_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv1d](ModuleOps::conv1d) operation, returning the gradient for `weight`.
+    fn conv1d_weight_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<B> {
+        conv::conv1d_weight_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv1d](ModuleOps::conv1d) operation, returning the gradient for `bias`.
+    fn conv1d_bias_backward(
+        x: FloatTensor<B>,
+        bias: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+    ) -> FloatTensor<B> {
+        conv::conv1d_bias_backward::<B>(x, bias, output_grad)
+    }
+    /// Two dimensional convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, height, width]`,
+    /// weight: `[channels_out, channels_in, kernel_size_1, kernel_size_2]`,
+    /// bias:   `[channels_out]`,
+    fn conv2d(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [conv2d](ModuleOps::conv2d) operation, returning the gradient for `x`.
+    fn conv2d_x_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<B> {
+        conv::conv2d_x_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv2d](ModuleOps::conv2d) operation, returning the gradient for `weight`.
+    fn conv2d_weight_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<B> {
+        conv::conv2d_weight_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv2d](ModuleOps::conv2d) operation, returning the gradient for `bias`.
+    fn conv2d_bias_backward(
+        x: FloatTensor<B>,
+        bias: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+    ) -> FloatTensor<B> {
+        conv::conv2d_bias_backward::<B>(x, bias, output_grad)
+    }
+
+    /// Two dimensional deformable convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, height, width]`,
+    /// weight: `[channels_out, channels_in, kernel_size_1, kernel_size_2]`,
+    /// bias:   `[channels_out]`,
+    fn deform_conv2d(
+        x: FloatTensor<B>,
+        offset: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        mask: Option<FloatTensor<B>>,
+        bias: Option<FloatTensor<B>>,
+        options: DeformConvOptions<2>,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [deform_conv2d](ModuleOps::deform_conv2d) operation.
+    fn deform_conv2d_backward(
+        x: FloatTensor<B>,
+        offset: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        mask: Option<FloatTensor<B>>,
+        bias: Option<FloatTensor<B>>,
+        output_grad: FloatTensor<B>,
+        options: DeformConvOptions<2>,
+    ) -> DeformConv2dBackward<B>;
+
+    /// Three dimensional convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, depth, height, width]`,
+    /// weight: `[channels_out, channels_in, kernel_size_1, kernel_size_2, kernel_size_3]`,
+    /// bias:   `[channels_out]`,
+    fn conv3d(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [conv3d](ModuleOps::conv3d) operation, returning the gradient for `x`.
+    fn conv3d_x_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<B> {
+        conv::conv3d_x_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv3d](ModuleOps::conv3d) operation, returning the gradient for `weight`.
+    fn conv3d_weight_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<B> {
+        conv::conv3d_weight_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv3d](ModuleOps::conv3d) operation, returning the gradient for `bias`.
+    fn conv3d_bias_backward(
+        x: FloatTensor<B>,
+        bias: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+    ) -> FloatTensor<B> {
+        conv::conv3d_bias_backward::<B>(x, bias, output_grad)
+    }
+    /// One dimensional transposed convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, length]`,
+    /// weight: `[channels_in, channels_out, length]`,
+    /// bias:   `[channels_out]`,
+    fn conv_transpose1d(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+        options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose1d_from_conv_transpose2d::<B>(x, weight, bias, options)
+    }
+    /// Backward pass for the [conv transpose 1d](ModuleOps::conv_transpose1d) operation, returning the gradient for `x`.
+    fn conv_transpose1d_x_backward(
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose1d_x_backward::<B>(weight, output_grad, options)
+    }
+    /// Backward pass for the [conv transpose 1d](ModuleOps::conv_transpose1d) operation, returning the gradient for `weight`.
+    fn conv_transpose1d_weight_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose1d_weight_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv transpose 1d](ModuleOps::conv_transpose1d) operation, returning the gradient for `bias`.
+    fn conv_transpose1d_bias_backward(
+        x: FloatTensor<B>,
+        bias: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose1d_bias_backward::<B>(x, bias, output_grad)
+    }
+
+    /// Two dimensional transposed convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, height, width]`,
+    /// weight: `[channels_in, channels_out, kernel_size_1, kernel_size_2]`,
+    /// bias:   `[channels_out]`,
+    fn conv_transpose2d(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+        options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [conv transpose 2d](ModuleOps::conv_transpose2d) operation, returning the gradient for `x`.
+    fn conv_transpose2d_x_backward(
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose2d_x_backward::<B>(weight, output_grad, options)
+    }
+    /// Backward pass for the [conv transpose 2d](ModuleOps::conv_transpose2d) operation, returning the gradient for `weight`.
+    fn conv_transpose2d_weight_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose2d_weight_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv transpose 2d](ModuleOps::conv_transpose2d) operation, returning the gradient for `bias`.
+    fn conv_transpose2d_bias_backward(
+        x: FloatTensor<B>,
+        bias: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose2d_bias_backward::<B>(x, bias, output_grad)
+    }
+
+    /// Three dimensional transposed convolution.
+    ///
+    /// # Shapes
+    ///
+    /// x:      `[batch_size, channels_in, height, width]`,
+    /// weight: `[channels_in, channels_out, kernel_size_1, kernel_size_2, kernel_size_3]`,
+    /// bias:   `[channels_out]`,
+    fn conv_transpose3d(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        bias: Option<FloatTensor<B>>,
+        options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [conv transpose 3d](ModuleOps::conv_transpose3d) operation, returning the gradient for `x`.
+    fn conv_transpose3d_x_backward(
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose3d_x_backward::<B>(weight, output_grad, options)
+    }
+    /// Backward pass for the [conv transpose 3d](ModuleOps::conv_transpose3d) operation, returning the gradient for `weight`.
+    fn conv_transpose3d_weight_backward(
+        x: FloatTensor<B>,
+        weight: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+        options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose3d_weight_backward::<B>(x, weight, output_grad, options)
+    }
+    /// Backward pass for the [conv transpose 3d](ModuleOps::conv_transpose3d) operation, returning the gradient for `bias`.
+    fn conv_transpose3d_bias_backward(
+        x: FloatTensor<B>,
+        bias: FloatTensor<B>,
+        output_grad: FloatTensor<B>,
+    ) -> FloatTensor<B> {
+        conv::conv_transpose3d_bias_backward::<B>(x, bias, output_grad)
+    }
+
+    /// Four-dimensional unfolding.
+    ///
+    /// # Shapes
+    ///
+    /// * x:      ``[batch_size, channels_in, height, width]``,
+    /// * returns: ``[batch_size, channels_in * kernel_size_1 * kernel_size_2, number of blocks]``,
+    fn unfold4d(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 2],
+        options: UnfoldOptions,
+    ) -> FloatTensor<B> {
+        if options.padding == [0, 0] && options.dilation == [1, 1] {
+            let blocks = B::float_unfold(x, 2, kernel_size[0], options.stride[0]);
+            let blocks = B::float_unfold(blocks, 3, kernel_size[1], options.stride[1]);
+
+            // batch, channels, h_blocks, w_blocks, h_kern, w_kern
+
+            let blocks = B::float_permute(blocks, &[0, 1, 4, 5, 2, 3]);
+            let shape = blocks.shape();
+
+            // batch, channels, h_kern, w_kern, h_blocks, w_blocks
+
+            B::float_reshape(
+                blocks,
+                [
+                    shape[0],
+                    shape[1] * shape[2] * shape[3],
+                    shape[4] * shape[5],
+                ]
+                .into(),
+            )
+        } else {
+            unfold4d_using_conv2d::<B>(x, kernel_size, options)
+        }
+    }
+
+    /// Four dimensional fold (`col2im`), the adjoint of [unfold4d](ModuleOps::unfold4d).
+    ///
+    /// Composes [conv_transpose2d](ModuleOps::conv_transpose2d) with the same one-hot channel mapping
+    /// [unfold4d](ModuleOps::unfold4d) uses, so backends inherit a correct (and differentiable)
+    /// implementation for free and may override it with a custom one.
+    ///
+    /// # Shapes
+    ///
+    /// x: `[batch_size, channels * kernel_size_0 * kernel_size_1, num_blocks]`,
+    /// output: `[batch_size, channels, output_size_0, output_size_1]`
+    fn fold4d(
+        x: FloatTensor<B>,
+        output_size: [usize; 2],
+        kernel_size: [usize; 2],
+        options: UnfoldOptions,
+    ) -> FloatTensor<B> {
+        let [batch_size, channels_col, num_blocks] = x.shape().dims();
+        let [kernel_height, kernel_width] = kernel_size;
+        let [output_height, output_width] = output_size;
+        let [stride_height, stride_width] = options.stride;
+        let [padding_height, padding_width] = options.padding;
+        let [dilation_height, dilation_width] = options.dilation;
+
+        let kernel_elems = kernel_height * kernel_width;
+        assert_eq!(
+            channels_col % kernel_elems,
+            0,
+            "fold4d: input channels ({channels_col}) must be divisible by the kernel size product ({kernel_elems})"
+        );
+        let channels = channels_col / kernel_elems;
+
+        // Number of sliding blocks along each spatial dimension (the unfold output grid).
+        let blocks_height =
+            (output_height + 2 * padding_height - dilation_height * (kernel_height - 1) - 1)
+                / stride_height
+                + 1;
+        let blocks_width =
+            (output_width + 2 * padding_width - dilation_width * (kernel_width - 1) - 1)
+                / stride_width
+                + 1;
+        assert_eq!(
+            num_blocks,
+            blocks_height * blocks_width,
+            "fold4d: number of blocks ({num_blocks}) does not match the expected grid ({blocks_height} x {blocks_width}) for the given output size and options"
+        );
+
+        // Fold is the adjoint of unfold and uses the same one-hot channel mapping. Grouping by
+        // channel removes the otherwise unused cross-channel weights.
+        let groups = channels.max(1);
+        let weight =
+            create_unfolding_weight::<B>(channels, kernel_size, groups, &x.device(), x.dtype());
+
+        // Reshape the columns into the spatial grid of blocks, then scatter-add them back.
+        let x = B::float_reshape(
+            x,
+            Shape::new([batch_size, channels_col, blocks_height, blocks_width]),
+        );
+
+        // `padding_out` recovers the exact requested output size (always `< stride`).
+        let padding_out = [
+            (output_height + 2 * padding_height - dilation_height * (kernel_height - 1) - 1)
+                % stride_height,
+            (output_width + 2 * padding_width - dilation_width * (kernel_width - 1) - 1)
+                % stride_width,
+        ];
+
+        B::conv_transpose2d(
+            x,
+            weight,
+            None,
+            ConvTransposeOptions::new(
+                options.stride,
+                options.padding,
+                padding_out,
+                options.dilation,
+                groups,
+            ),
+        )
+    }
+
+    /// One dimensional avg pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, length],
+    fn avg_pool1d(
+        x: FloatTensor<B>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<B> {
+        pool::avg_pool1d_from_2d::<B>(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+        )
+    }
+    /// Backward pass for the [avg pooling 1d](ModuleOps::avg_pool1d) operation.
+    #[allow(clippy::too_many_arguments)]
+    fn avg_pool1d_backward(
+        x: FloatTensor<B>,
+        grad: FloatTensor<B>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<B> {
+        pool::avg_pool1d_backward_from_2d::<B>(
+            x,
+            grad,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+        )
+    }
+    /// Two dimensional avg pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, height, width],
+    fn avg_pool2d(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [avg pooling 2d](ModuleOps::avg_pool2d) operation.
+    #[allow(clippy::too_many_arguments)]
+    fn avg_pool2d_backward(
+        x: FloatTensor<B>,
+        grad: FloatTensor<B>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<B>;
+    /// Three dimensional avg pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, depth, height, width],
+    fn avg_pool3d(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<B>;
+    /// Backward pass for the [avg pooling 3d](ModuleOps::avg_pool3d) operation.
+    #[allow(clippy::too_many_arguments)]
+    fn avg_pool3d_backward(
+        x: FloatTensor<B>,
+        grad: FloatTensor<B>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<B>;
+    /// Two dimensional adaptive avg pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, height, width],
+    fn adaptive_avg_pool2d(x: FloatTensor<B>, output_size: [usize; 2]) -> FloatTensor<B>;
+    /// Backward pass for the [adaptive avg pooling 2d](ModuleOps::adaptive_avg_pool2d) operation.
+    fn adaptive_avg_pool2d_backward(x: FloatTensor<B>, grad: FloatTensor<B>) -> FloatTensor<B>;
+    /// Three dimensional adaptive avg pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, depth, height, width],
+    fn adaptive_avg_pool3d(x: FloatTensor<B>, output_size: [usize; 3]) -> FloatTensor<B>;
+    /// Backward pass for the [adaptive avg pooling 3d](ModuleOps::adaptive_avg_pool3d) operation.
+    fn adaptive_avg_pool3d_backward(x: FloatTensor<B>, grad: FloatTensor<B>) -> FloatTensor<B>;
+    /// One dimensional adaptive avg pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, length],
+    fn adaptive_avg_pool1d(x: FloatTensor<B>, output_size: usize) -> FloatTensor<B> {
+        pool::adaptive_avg_pool1d_from_2d::<B>(x, output_size)
+    }
+    /// Backward pass for the [adaptive avg pooling 1d](ModuleOps::adaptive_avg_pool1d) operation.
+    fn adaptive_avg_pool1d_backward(x: FloatTensor<B>, grad: FloatTensor<B>) -> FloatTensor<B> {
+        pool::adaptive_avg_pool1d_backward_from_2d::<B>(x, grad)
+    }
+    /// One dimensional max pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, length],
+    fn max_pool1d(
+        x: FloatTensor<B>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        ceil_mode: bool,
+    ) -> FloatTensor<B> {
+        pool::max_pool1d_from_2d::<B>(x, kernel_size, stride, padding, dilation, ceil_mode)
+    }
+
+    /// One dimensional max pooling with indices.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, height, width],
+    fn max_pool1d_with_indices(
+        x: FloatTensor<B>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool1dWithIndices<B> {
+        pool::max_pool1d_with_indices_from_2d::<B>(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            indices_dtype,
+        )
+    }
+    /// Backward pass for the [max pooling 1d](ModuleOps::max_pool1d_with_indices) operation.
+    #[allow(clippy::too_many_arguments)]
+    fn max_pool1d_with_indices_backward(
+        x: FloatTensor<B>,
+        kernel_size: usize,
+        stride: usize,
+        padding: usize,
+        dilation: usize,
+        ceil_mode: bool,
+        output_grad: FloatTensor<B>,
+        indices: IntTensor<B>,
+    ) -> MaxPool1dBackward<B> {
+        pool::max_pool1d_with_indices_backward_from_2d::<B>(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            output_grad,
+            indices,
+        )
+    }
+
+    /// Two dimensional max pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, height, width],
+    fn max_pool2d(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+    ) -> FloatTensor<B>;
+
+    /// Two dimensional max pooling with indices.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, height, width],
+    fn max_pool2d_with_indices(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool2dWithIndices<B>;
+    /// Backward pass for the [max pooling 2d](ModuleOps::max_pool2d_with_indices) operation.
+    #[allow(clippy::too_many_arguments)]
+    fn max_pool2d_with_indices_backward(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+        output_grad: FloatTensor<B>,
+        indices: IntTensor<B>,
+    ) -> MaxPool2dBackward<B>;
+
+    /// Three dimensional max pooling.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, depth, height, width],
+    fn max_pool3d(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+    ) -> FloatTensor<B>;
+
+    /// Three dimensional max pooling with indices.
+    ///
+    /// # Shapes
+    ///
+    /// x: [batch_size, channels, depth, height, width],
+    fn max_pool3d_with_indices(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool3dWithIndices<B>;
+    /// Backward pass for the [max pooling 3d](ModuleOps::max_pool3d_with_indices) operation.
+    #[allow(clippy::too_many_arguments)]
+    fn max_pool3d_with_indices_backward(
+        x: FloatTensor<B>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+        output_grad: FloatTensor<B>,
+        indices: IntTensor<B>,
+    ) -> MaxPool3dBackward<B>;
+
+    /// Down/up samples the input.
+    ///
+    /// # Shapes
+    ///
+    /// x: `[batch_size, channels, height, width]`,
+    fn interpolate(
+        x: FloatTensor<B>,
+        output_size: [usize; 2],
+        options: InterpolateOptions,
+    ) -> FloatTensor<B>;
+
+    /// Backward pass for the [interpolate](ModuleOps::interpolate) operation.
+    fn interpolate_backward(
+        x: FloatTensor<B>,
+        grad: FloatTensor<B>,
+        output_size: [usize; 2],
+        options: InterpolateOptions,
+    ) -> FloatTensor<B>;
+
+    /// Computes scaled dot-product attention: softmax(QKᵗ * scale) · V,
+    /// where scale defaults to 1/sqrt(head_dim). Optionally applies masking,
+    /// additive bias, causal and sliding-window masking, and softcap to the attention scores.
+    ///
+    /// The scores are computed in this order, which every backend must follow:
+    /// 1. `s = Q·Kᵗ · scale`
+    /// 2. `s = softcap · tanh(s / softcap)` if `options.softcap` is set
+    /// 3. `s = -inf` where `mask` is `true` or the causal or sliding-window mask hides the key
+    /// 4. `s = s + attn_bias`
+    /// 5. `p = softmax(s)` over keys; a row with every key hidden yields `p = 0`
+    /// 6. `out = p · V`
+    ///
+    /// Softcap comes before the masks so that hidden keys stay at `-inf`.
+    ///
+    /// # Arguments
+    /// - `query`: Query tensor of shape `[batch_size, num_heads, seq_len_q, head_dim]`
+    /// - `key`: Key tensor of shape `[batch_size, num_kv_heads, seq_len_k, head_dim]`
+    /// - `value`: Value tensor of shape `[batch_size, num_kv_heads, seq_len_k, val_dim]`
+    ///
+    ///   `num_heads` must be a multiple of `num_kv_heads` (grouped-query attention;
+    ///   `num_kv_heads == 1` is multi-query attention). Query head `h` attends with K/V
+    ///   head `h / (num_heads / num_kv_heads)`, the PyTorch and ONNX convention.
+    /// - `mask`: Optional boolean mask of shape `[batch_size, num_heads, seq_len_q, seq_len_k]`,
+    ///   where `true` indicates positions to mask (i.e. set to -inf before softmax).
+    /// - `attn_bias`: Optional float tensor of shape `[batch_size, num_heads, seq_len_q, seq_len_k]`
+    ///   added to the attention scores before softmax (e.g. ALiBi, relative position biases).
+    /// - `cache`: Optional key/value [cache](AttentionCache) that `key` and `value` hold: each
+    ///   sequence then attends only its first `lengths[b]` positions, and, with `pages`, `key` and
+    ///   `value` are pools of pages. `seq_len_k` is then the cache's capacity, which `mask` and
+    ///   `attn_bias` span, and `causal_alignment` must be
+    ///   [`BottomRight`](crate::ops::CausalAlignment::BottomRight): the queries are the last
+    ///   attended positions of their sequence, the causal edge and the window at each one's own.
+    /// - `options`: Additional attention options (custom scale, softcap, causal masking
+    ///   and its [alignment](crate::ops::CausalAlignment), and sliding-window masking). A
+    ///   sliding window must span at least one key when set.
+    ///
+    /// # Returns
+    /// A tensor of shape `[batch_size, num_heads, seq_len_q, val_dim]`
+    /// representing the attended context per head.
+    ///
+    /// # Note
+    /// This implementation does not support dropout and is intended for inference or
+    /// use cases where dropout is not needed.
+    fn attention(
+        query: FloatTensor<B>,
+        key: FloatTensor<B>,
+        value: FloatTensor<B>,
+        mask: Option<BoolTensor<B>>,
+        attn_bias: Option<FloatTensor<B>>,
+        cache: Option<AttentionCache<B>>,
+        options: AttentionModuleOptions,
+    ) -> FloatTensor<B>;
+
+    /// Returns `true` if this backend implements
+    /// [attention_backward](ModuleOps::attention_backward) natively.
+    ///
+    /// Autodiff queries this flag, for an attention with no mask and no additive bias, to decide
+    /// between two paths:
+    /// - `true`: the forward pass is [attention_with_logsumexp](ModuleOps::attention_with_logsumexp)
+    ///   and the backward pass `attention_backward`, which reads the probabilities back from the
+    ///   logsumexp instead of keeping the scores.
+    /// - `false`: autodiff differentiates the decomposed
+    ///   [attention_fallback](attention::attention_fallback).
+    ///
+    /// Backends that override `attention_backward` must also override this to return `true`.
+    fn has_attention_backward() -> bool {
+        false
+    }
+
+    /// [attention](ModuleOps::attention) with no mask and no additive bias, and each query's
+    /// logsumexp of its scores, `[batch_size, num_heads, seq_len_q]` in `f32` whatever the
+    /// operands' dtype: the forward pass [attention_backward](ModuleOps::attention_backward) reads
+    /// back, where `exp(score − logsumexp)` is where its precision is lost.
+    ///
+    /// The default composes it from tensor operations
+    /// ([attention::attention_with_logsumexp_default]).
+    fn attention_with_logsumexp(
+        query: FloatTensor<B>,
+        key: FloatTensor<B>,
+        value: FloatTensor<B>,
+        options: AttentionModuleOptions,
+    ) -> (FloatTensor<B>, FloatTensor<B>) {
+        attention::attention_with_logsumexp_default::<B>(query, key, value, options)
+    }
+
+    /// Backward pass for [attention_with_logsumexp](ModuleOps::attention_with_logsumexp): the
+    /// gradients against the query, the key and the value, from `out_grad`, the loss's gradient
+    /// against the output, and the forward's `out` and `logsumexp`.
+    ///
+    /// Autodiff only calls it when [has_attention_backward](ModuleOps::has_attention_backward)
+    /// returns `true`. The default composes the gradients from tensor operations
+    /// ([attention::attention_backward_default]).
+    fn attention_backward(
+        query: FloatTensor<B>,
+        key: FloatTensor<B>,
+        value: FloatTensor<B>,
+        out: FloatTensor<B>,
+        logsumexp: FloatTensor<B>,
+        out_grad: FloatTensor<B>,
+        options: AttentionModuleOptions,
+    ) -> AttentionBackward<B> {
+        attention::attention_backward_default::<B>(
+            query, key, value, out, logsumexp, out_grad, options,
+        )
+    }
+
+    /// Applies Layer Normalization over the last dimension of the input tensor.
+    ///
+    /// Computes `(x - mean) / sqrt(var + epsilon) * gamma + beta`, where `mean` and
+    /// (biased) `var` are reduced over the last axis.
+    ///
+    /// # Arguments
+    ///
+    /// * `tensor` - Input tensor of shape `[..., d_model]`.
+    /// * `gamma` - Scale tensor of shape `[d_model]`.
+    /// * `beta` - Optional bias tensor of shape `[d_model]`.
+    /// * `epsilon` - Numerical stability term added to the variance before the square root.
+    ///
+    /// # Returns
+    ///
+    /// A tensor with the same shape as `tensor`.
+    fn layer_norm(
+        tensor: FloatTensor<B>,
+        gamma: FloatTensor<B>,
+        beta: Option<FloatTensor<B>>,
+        epsilon: f64,
+    ) -> FloatTensor<B> {
+        let shape = tensor.shape();
+        let rank = shape.num_dims();
+        let last_dim = rank - 1;
+        let d_model = shape[last_dim];
+
+        let mean = B::float_mean_dim(tensor.clone(), last_dim);
+        let centered = B::float_sub(tensor, mean);
+        let var = B::float_mean_dim(B::float_mul(centered.clone(), centered.clone()), last_dim);
+        let denom = B::float_sqrt(B::float_add_scalar(var, epsilon.into()));
+        let normalized = B::float_div(centered, denom);
+
+        let broadcast_dims: alloc::vec::Vec<usize> = (0..rank)
+            .map(|i| if i == last_dim { d_model } else { 1 })
+            .collect();
+        let gamma_b = B::float_reshape(gamma, Shape::from(broadcast_dims.clone()));
+        let scaled = B::float_mul(normalized, gamma_b);
+
+        match beta {
+            Some(beta) => {
+                let beta_b = B::float_reshape(beta, Shape::from(broadcast_dims));
+                B::float_add(scaled, beta_b)
+            }
+            None => scaled,
+        }
+    }
+
+    /// Computes the Connectionist Temporal Classification (CTC) loss.
+    ///
+    /// Sums over all valid alignments between the input and target sequences
+    /// using the forward (alpha) algorithm.
+    ///
+    /// # Arguments
+    ///
+    /// * `log_probs` - Log-probabilities of shape `[T, N, C]`
+    /// * `targets` - Target label indices of shape `[N, S]`
+    /// * `input_lengths` - Actual input sequence lengths per batch element `[N]`
+    /// * `target_lengths` - Actual target lengths per batch element `[N]`
+    /// * `blank` - Index of the blank label
+    ///
+    /// # Returns
+    ///
+    /// Per-sample loss of shape `[N]`
+    fn ctc_loss(
+        log_probs: FloatTensor<B>,
+        targets: IntTensor<B>,
+        input_lengths: IntTensor<B>,
+        target_lengths: IntTensor<B>,
+        blank: usize,
+    ) -> FloatTensor<B> {
+        ctc::ctc_loss_default::<B>(log_probs, targets, input_lengths, target_lengths, blank)
+    }
+
+    /// Returns `true` if this backend implements [ctc_loss_backward](ModuleOps::ctc_loss_backward)
+    /// natively.
+    ///
+    /// Autodiff queries this flag to decide between two paths:
+    /// - `true`: use the backend's [ctc_loss](ModuleOps::ctc_loss) and
+    ///   [ctc_loss_backward](ModuleOps::ctc_loss_backward) directly.
+    /// - `false`: call [ctc::ctc_loss_default] for the forward pass; autodiff
+    ///   then differentiates through the decomposed tensor ops.
+    ///
+    /// Backends that override `ctc_loss_backward` must also override this to
+    /// return `true`.
+    fn has_ctc_loss_backward() -> bool {
+        false
+    }
+
+    /// Backward pass for [ctc_loss](ModuleOps::ctc_loss): gradient w.r.t. `log_probs`.
+    ///
+    /// Autodiff only calls it when [has_ctc_loss_backward](ModuleOps::has_ctc_loss_backward)
+    /// returns `true`. Backends without a native implementation should leave
+    /// both methods at their defaults; the gradient is computed automatically by
+    /// autodiff against the decomposed [ctc::ctc_loss_default] forward.
+    ///
+    /// The default composes the gradient from tensor operations
+    /// ([ctc::ctc_loss_backward_default]). It serves callers that hold no autodiff
+    /// graph for this backend, such as the interpreter behind a router, whose
+    /// client asked for the gradient as one operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `log_probs` - Log-probabilities of shape `[T, N, C]`
+    /// * `targets` - Target label indices of shape `[N, S]`
+    /// * `input_lengths` - Actual input sequence lengths per batch element `[N]`
+    /// * `target_lengths` - Actual target lengths per batch element `[N]`
+    /// * `grad_loss` - Upstream gradient w.r.t. the per-sample loss `[N]`
+    /// * `blank` - Index of the blank label
+    ///
+    /// # Returns
+    ///
+    /// Gradient w.r.t. `log_probs` of shape `[T, N, C]`
+    fn ctc_loss_backward(
+        log_probs: FloatTensor<B>,
+        targets: IntTensor<B>,
+        input_lengths: IntTensor<B>,
+        target_lengths: IntTensor<B>,
+        grad_loss: FloatTensor<B>,
+        blank: usize,
+    ) -> FloatTensor<B> {
+        ctc::ctc_loss_backward_default::<B>(
+            log_probs,
+            targets,
+            input_lengths,
+            target_lengths,
+            grad_loss,
+            blank,
+        )
+    }
+}

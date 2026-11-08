@@ -1,0 +1,30 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+edition.workspace = true
+license.workspace = true
+name = "custom-wgpu-kernel"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cortex = { workspace = true, features = [
+    "autodiff",
+    "fusion",
+    "wgpu",
+    "autotune",
+    "template",
+    "extension"
+] }
+cubecl = { workspace = true, features = ["wgpu"] }
+
+cortex-cubecl = { workspace = true, features = ["fusion"] }
+
+# Serialization
+serde = { workspace = true, features = ["std", "derive"] }
+
+# Wgpu internal dependencies
+derive-new = { workspace = true }
+bytemuck = { workspace = true }

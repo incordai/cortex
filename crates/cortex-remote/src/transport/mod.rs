@@ -1,0 +1,24 @@
+//! Transport layer for Cortex Remote.
+//!
+//! `cortex-remote` owns the transport seam: identity (`PeerId`/`PeerAddr`) is transport-agnostic and
+//! lives here, and each concrete transport (iroh, websocket) is a self-contained submodule that
+//! plugs into the session and transfer layers. The rest of the crate is written against these
+//! abstractions and stays `cfg`-free; the `cfg(feature = ...)` selection between transports is
+//! contained to this module.
+
+mod identity;
+pub(crate) use identity::{PeerAddr, PeerId};
+
+pub(crate) mod link;
+pub(crate) mod message;
+
+#[cfg(any(feature = "iroh", all(feature = "client", feature = "websocket")))]
+mod error;
+#[cfg(any(feature = "iroh", all(feature = "client", feature = "websocket")))]
+pub(crate) use error::OpenError;
+
+#[cfg(feature = "iroh")]
+pub mod iroh;
+
+#[cfg(feature = "websocket")]
+pub(crate) mod websocket;

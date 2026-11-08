@@ -1,0 +1,74 @@
+# Cortex Pack
+
+> The **cortexpack** binary serialization format for the Cortex deep learning framework
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-pack.svg)](https://crates.io/crates/cortex-pack)
+[![Documentation](https://docs.rs/cortex-pack/badge.svg)](https://docs.rs/cortex-pack)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+`cortex-pack` reads and writes the cortexpack container format. It is tensor-library-agnostic and
+dependency-light: it depends only on [`cortex-std`](https://crates.io/crates/cortex-std) (for `DType`
+/ `Bytes`), `serde`, and a CBOR codec — it knows the on-disk format but has no notion of Cortex
+modules. Tensor data is `Bytes`-native and read lazily from files (256-byte aligned for
+zero-copy mmap and efficient GPU transfers), and the reader is hardened against malformed input.
+
+If you just want to save and load Cortex models, use the higher-level
+[`cortex-core`](https://crates.io/crates/cortex-core) record API or
+[`cortex-store`](https://crates.io/crates/cortex-store) (which adds PyTorch/SafeTensors interop).
+Reach for `cortex-pack` directly only to produce or consume the raw format.
+
+## Usage
+
+```rust
+use cortex_pack::{Bytes, DType, Reader, Tensor, Writer};
+
+let raw: Vec<u8> = [1.0f32, 2.0, 3.0, 4.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+let tensor = Tensor::new("weight".to_string(), DType::F32, vec![2, 2], None, Bytes::from_bytes_vec(raw));
+
+let packed = Writer::new(vec![tensor]).into_bytes().unwrap();
+let reader = Reader::from_bytes(packed).unwrap();
+assert_eq!(reader.into_tensors().unwrap()[0].shape.to_vec(), vec![2, 2]);
+```
+
+Use `Writer::write_to_file` / `Reader::from_file` for disk I/O (the default `std` feature; disable
+it for no-std targets). `write_to_file` builds the container beside the destination and renames it
+into place once complete, so the old file survives a save that fails partway, whether from a full
+disk or a deferred tensor whose provider errors mid-write. `write_to_file_in_place` truncates and
+rewrites the destination instead: no fsync and no transient second copy, but a failed save leaves
+it truncated. `Writer::overwrite(false)` makes both refuse an existing destination, checked when
+the file is created or published rather than beforehand. See the API docs for how far each
+guarantee reaches.
+
+## Writing models larger than memory
+
+A tensor's bytes need not exist yet. `Tensor::deferred` describes one by its length plus a provider
+that yields the data on demand, so the writer can lay out the whole container before any I/O and
+then draw the bytes one tensor at a time, dropping each before asking for the next:
+
+```rust,ignore
+let tensor = Tensor::deferred(
+    name,
+    DType::F32,
+    shape,
+    None,
+    rows * cols * 4,              // length, without the data
+    move || weight.read_from_device(),  // called once, when the writer reaches it
+);
+```
+
+Paired with `write_to_file`, peak host memory is bounded by the largest single tensor rather than
+by the whole model. `cortex-store` collects a module's parameters directly as these, so saving a
+`Module` gets it for free.
+
+See the [docs](https://docs.rs/cortex-pack) for the format layout and the full API.
+
+## License
+
+This project is dual-licensed under MIT and Apache-2.0.
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

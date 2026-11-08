@@ -1,0 +1,341 @@
+use cortex_backend::cubecl::dtype_to_storage_type;
+use cortex_backend::ops::ConvOptions;
+use cortex_std::Shape;
+use cubecl::{
+    ir::ElemType,
+    tune::{LocalTuner, Tunable, TunableSet, anchor, local_tuner},
+};
+use cubek::convolution::{
+    AcceleratedTileKind, UnitStrategy, UnitTiling, backward_weight::split::PartialColumnOrder,
+};
+use cubek::matmul::multi_level::routines::TileSizeSelection;
+
+use crate::{
+    CubeAutotuneKey, CubeTuneId,
+    kernel::conv::{
+        ConvAutotuneKey,
+        backward_weight::{
+            depthwise::wgrad_depthwise, fallback::conv_weight_backward_fallback, implicit_gemm::*,
+            split_implicit::wgrad_split_implicit,
+        },
+        im2col::{wgrad_im2col, wgrad_im2col_1x1, wgrad_im2col_1x1_split},
+        unit::wgrad_unit,
+    },
+    tensor::CubeTensor,
+};
+
+/// Executes autotune on the weight gradients pass for convolution
+pub fn wgrad_autotune<const N: usize>(
+    input: CubeTensor,
+    out_grad: CubeTensor,
+    weight_shape: Shape,
+    options: ConvOptions<N>,
+) -> CubeTensor {
+    let client = input.client.clone();
+
+    static TUNER: LocalTuner<CubeAutotuneKey, CubeTuneId> = local_tuner!();
+
+    let tune_id = CubeTuneId::new(&input.client, &input.device);
+    let tunables = TUNER.init(&tune_id, || {
+        TunableSet::new(create_key::<N>, create_wgrad_input::<N>)
+            .with(Tunable::new(
+                "wgrad_fallback",
+                |(input, grad, shape, options)| {
+                    conv_weight_backward_fallback::<N>(input, grad, shape, options)
+                },
+            ))
+            .with(Tunable::new(
+                "wgrad_depthwise_tiled",
+                |(input, grad, shape, options)| wgrad_depthwise::<N>(input, grad, shape, options),
+            ))
+            // The dense case, which the two pointwise candidates decline and
+            // the fallback computes as a convolution by the gradient.
+            .with(Tunable::new(
+                "wgrad_im2col_gather",
+                |(input, grad, shape, options)| wgrad_im2col::<N>(input, grad, shape, options),
+            ))
+            .with(Tunable::new(
+                "wgrad_split_implicit",
+                |(input, grad, shape, options)| {
+                    wgrad_split_implicit::<N>(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        PartialColumnOrder::ChannelsLast,
+                    )
+                },
+            ))
+            .with(Tunable::new(
+                "wgrad_split_implicit_spatial_last",
+                |(input, grad, shape, options)| {
+                    wgrad_split_implicit::<N>(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        PartialColumnOrder::SpatialLast,
+                    )
+                },
+            ))
+            // The same matmul with its contraction cut into pieces, which is
+            // what a weight gradient's shape asks for — see `split_count`.
+            .with(Tunable::new(
+                "wgrad_im2col_1x1_split",
+                |(input, grad, shape, options)| {
+                    wgrad_im2col_1x1_split::<N>(input, grad, shape, options)
+                },
+            ))
+            // Declines every shape but the pointwise one. It earns its place
+            // because a device with no accelerated matmul for the dtype
+            // declines every candidate below, leaving the fallback unopposed.
+            .with(Tunable::new(
+                "wgrad_im2col_1x1",
+                |(input, grad, shape, options)| wgrad_im2col_1x1::<N>(input, grad, shape, options),
+            ))
+            // The weight gradient's matmul has `M = C_out`, `N = taps * C_in`
+            // and `K = batch * output spatial` (split into intervals by
+            // `split_count`). A wide channel count makes `N` large and a large
+            // feature map makes each split's `K` long, so the wide/deep tilings
+            // matter here as much as narrow/balanced; `wgrad_unit_small` keeps
+            // the inferred minimum tiling, the default when nothing is tuned.
+            .with(Tunable::new(
+                "wgrad_unit_narrow",
+                |(input, grad, shape, options)| {
+                    wgrad_unit(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        UnitStrategy::Fixed(UnitTiling::NARROW),
+                    )
+                },
+            ))
+            .with(Tunable::new(
+                "wgrad_unit_balanced",
+                |(input, grad, shape, options)| {
+                    wgrad_unit(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        UnitStrategy::Fixed(UnitTiling::BALANCED),
+                    )
+                },
+            ))
+            .with(Tunable::new(
+                "wgrad_unit_wide",
+                |(input, grad, shape, options)| {
+                    wgrad_unit(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        UnitStrategy::Fixed(UnitTiling::WIDE),
+                    )
+                },
+            ))
+            .with(Tunable::new(
+                "wgrad_unit_deep",
+                |(input, grad, shape, options)| {
+                    wgrad_unit(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        UnitStrategy::Fixed(UnitTiling::DEEP),
+                    )
+                },
+            ))
+            .with(Tunable::new(
+                "wgrad_unit_small",
+                |(input, grad, shape, options)| {
+                    wgrad_unit(
+                        input,
+                        grad,
+                        shape,
+                        options,
+                        UnitStrategy::Inferred(TileSizeSelection::MinTileSize),
+                    )
+                },
+            ))
+            .with(Tunable::new(
+                "simple_sync_cmma",
+                |(input, grad, shape, options)| {
+                    wgrad_gemm_simple_sync(input, grad, shape, options, AcceleratedTileKind::Cmma)
+                },
+            ))
+            .with(Tunable::new(
+                "simple_sync_mma",
+                |(input, grad, shape, options)| {
+                    wgrad_gemm_simple_sync(input, grad, shape, options, AcceleratedTileKind::Mma)
+                },
+            ))
+            .with(Tunable::new(
+                "simple_async_cmma",
+                |(input, grad, shape, options)| {
+                    wgrad_gemm_simple_async(input, grad, shape, options, AcceleratedTileKind::Cmma)
+                },
+            ))
+            .with(Tunable::new(
+                "simple_async_mma",
+                |(input, grad, shape, options)| {
+                    wgrad_gemm_simple_async(input, grad, shape, options, AcceleratedTileKind::Mma)
+                },
+            ))
+            .with(Tunable::new(
+                "simple_tma_cmma",
+                |(input, grad, shape, options)| {
+                    wgrad_gemm_simple_tma(input, grad, shape, options, AcceleratedTileKind::Cmma)
+                },
+            ))
+            .with(Tunable::new(
+                "simple_tma_mma",
+                |(input, grad, shape, options)| {
+                    wgrad_gemm_simple_tma(input, grad, shape, options, AcceleratedTileKind::Mma)
+                },
+            ))
+    });
+
+    TUNER.execute(
+        &tune_id,
+        &client,
+        tunables,
+        (input, out_grad, weight_shape, options),
+    )
+}
+
+pub fn create_wgrad_input<const N: usize>(
+    _key: &CubeAutotuneKey,
+    (input, out_grad, weight_shape, options): &(CubeTensor, CubeTensor, Shape, ConvOptions<N>),
+) -> (CubeTensor, CubeTensor, Shape, ConvOptions<N>) {
+    (
+        input.clone(),
+        out_grad.clone(),
+        weight_shape.clone(),
+        options.clone(),
+    )
+}
+
+fn create_key<const N: usize>(
+    (input, out_grad, weight_shape, options): &(CubeTensor, CubeTensor, Shape, ConvOptions<N>),
+) -> CubeAutotuneKey {
+    let dtype = input.dtype;
+    let rank = input.meta.num_dims();
+    let dim_c = rank - 1;
+
+    let batch_size = input.meta.shape()[0];
+    let in_channels = input.meta.shape()[dim_c];
+    let out_channels = weight_shape[0];
+
+    let kernel_size = weight_shape[1..dim_c].to_vec();
+    let in_shape = input.meta.shape()[1..dim_c]
+        .iter()
+        .map(|shape| anchor(*shape, None, None, None))
+        .collect();
+
+    let ConvOptions {
+        stride,
+        padding,
+        dilation,
+        groups,
+    } = options.clone();
+
+    let lhs_stride_align = if out_grad.meta.strides()[dim_c] == 1 {
+        stride_align(
+            out_grad.meta.strides(),
+            dtype_to_storage_type(out_grad.dtype),
+        )
+    } else {
+        0
+    };
+    let lhs_shape_align = pow2_factor(out_channels).min(lhs_stride_align);
+    let rhs_stride_align = if input.meta.strides()[dim_c] == 1 {
+        stride_align(input.meta.strides(), dtype_to_storage_type(input.dtype))
+    } else {
+        0
+    };
+    let rhs_shape_align = pow2_factor(in_channels).min(rhs_stride_align);
+
+    let mut key = ConvAutotuneKey::new(
+        kernel_size,
+        stride.to_vec(),
+        padding.to_vec(),
+        dilation.to_vec(),
+        groups,
+        in_channels,
+        out_channels,
+        in_shape,
+        batch_size,
+        false,
+        dtype,
+        lhs_shape_align,
+        lhs_stride_align,
+        rhs_shape_align,
+        rhs_stride_align,
+    );
+    // Depthwise eligibility depends on groups == input channels. At the
+    // minimal tune level, anchoring can put C and 2*C in the same bucket,
+    // even though the latter is a grouped convolution with two inputs per
+    // group. A cached depthwise selection must not serve that problem.
+    key.in_channels = in_channels;
+    CubeAutotuneKey::Conv(key)
+}
+
+/// Maximum factor relevant for strides. Currently set to 2^10 because that's 128-byte swizzle's
+/// repeat number, so it's the largest align that can have performance impacts.
+const MAX_STRIDE_FACTOR: u32 = 10;
+
+/// Defines the non-contiguous stride alignment in terms of powers of two
+fn stride_align(strides: &[usize], elem: ElemType) -> u8 {
+    let max = MAX_STRIDE_FACTOR;
+    let dim_c = strides.len() - 1;
+    let factor = strides[..dim_c]
+        .iter()
+        .map(|it| (*it * elem.size_bits()) / 8)
+        .map(|it| it.trailing_zeros())
+        .min()
+        .unwrap_or(max);
+    factor.min(max) as u8
+}
+
+/// Defines the potential vectorization.
+fn pow2_factor(axis: usize) -> u8 {
+    axis.trailing_zeros().min(4) as u8
+}
+
+#[cfg(all(test, any(feature = "cuda", feature = "vulkan", feature = "metal")))]
+mod tests {
+    use super::*;
+    use crate::{CubeDevice, ops::numeric::empty_device_dtype};
+    use cortex_backend::DType;
+
+    // Minimal anchoring maps both channel counts to 16. Keeping the exact
+    // count prevents a depthwise candidate from serving the grouped problem.
+    #[test]
+    fn weight_gradient_key_preserves_depthwise_channels() {
+        assert_eq!(weight_gradient_key(7).in_channels, 7);
+    }
+
+    #[test]
+    fn weight_gradient_key_preserves_grouped_channels() {
+        assert_eq!(weight_gradient_key(14).in_channels, 14);
+    }
+
+    fn weight_gradient_key(channels: usize) -> ConvAutotuneKey {
+        let device = CubeDevice::default();
+        let empty = |shape: [usize; 4]| {
+            empty_device_dtype(device.client(), device.clone(), shape.into(), DType::F32)
+        };
+        let options = ConvOptions::new([1, 1], [0, 0], [1, 1], 7);
+        let CubeAutotuneKey::Conv(key) = create_key(&(
+            empty([1, 3, 3, channels]),
+            empty([1, 1, 1, 14]),
+            Shape::new([14, 3, 3, channels / options.groups]),
+            options,
+        )) else {
+            panic!("expected convolution key");
+        };
+        key
+    }
+}

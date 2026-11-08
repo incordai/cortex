@@ -1,0 +1,402 @@
+use super::classification::{ClassReduction, ClassificationMetricConfig, DecisionRule};
+use cortex_core::{
+    prelude::{Bool, Int, Tensor},
+    tensor::{IndexingUpdateOp, IntDType},
+};
+use std::fmt::{self, Debug};
+
+/// Input for confusion statistics error types.
+#[derive(new, Debug, Clone)]
+pub struct ConfusionStatsInput {
+    /// Sample x Class Non thresholded normalized predictions.
+    pub predictions: Tensor<2>,
+    /// Sample x Class one-hot encoded target.
+    pub targets: Tensor<2, Bool>,
+}
+
+impl From<ConfusionStatsInput> for (Tensor<2>, Tensor<2, Bool>) {
+    fn from(input: ConfusionStatsInput) -> Self {
+        (input.predictions, input.targets)
+    }
+}
+
+impl From<(Tensor<2>, Tensor<2, Bool>)> for ConfusionStatsInput {
+    fn from(value: (Tensor<2>, Tensor<2, Bool>)) -> Self {
+        Self::new(value.0, value.1)
+    }
+}
+
+#[derive(Clone)]
+pub struct ConfusionStats {
+    confusion_classes: Tensor<2, Int>,
+    class_reduction: ClassReduction,
+}
+
+impl Debug for ConfusionStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let to_vec = |tensor_data: Tensor<1>| {
+            tensor_data
+                .try_into_vec_as::<f32>()
+                .expect("A vector representation of the input Tensor is expected")
+        };
+        let ratio_of_support_vec =
+            |metric: Tensor<1>| to_vec(self.clone().ratio_of_support(metric));
+        f.debug_struct("ConfusionStats")
+            .field("tp", &ratio_of_support_vec(self.clone().true_positive()))
+            .field("fp", &ratio_of_support_vec(self.clone().false_positive()))
+            .field("tn", &ratio_of_support_vec(self.clone().true_negative()))
+            .field("fn", &ratio_of_support_vec(self.clone().false_negative()))
+            .field("support", &to_vec(self.clone().support()))
+            .finish()
+    }
+}
+
+impl ConfusionStats {
+    /// Expects `predictions` to be normalized.
+    pub fn new(input: &ConfusionStatsInput, config: &ClassificationMetricConfig) -> Self {
+        let prediction_mask = match config.decision_rule {
+            DecisionRule::Threshold(threshold) => {
+                input.predictions.clone().greater_scalar(threshold)
+            }
+            DecisionRule::TopK(top_k) => {
+                let mask = input.predictions.zeros_like();
+                let indexes =
+                    input
+                        .predictions
+                        .clone()
+                        .argsort_descending(1)
+                        .narrow(1, 0, top_k.get());
+                let values = indexes.ones_like().float();
+                mask.scatter(1, indexes, values, IndexingUpdateOp::Add)
+                    .bool()
+            }
+        };
+        // Each prediction/target pair is encoded as a value in 0..=3.
+        let confusion_classes = if input.predictions.device().supports_dtype(IntDType::U8) {
+            prediction_mask.cast(IntDType::U8) + input.targets.clone().cast(IntDType::U8) * 2
+        } else {
+            prediction_mask.int() + input.targets.clone().int() * 2
+        };
+        Self {
+            confusion_classes,
+            class_reduction: config.class_reduction,
+        }
+    }
+
+    /// sum over samples
+    fn aggregate(sample_class_mask: Tensor<2, Bool>, class_reduction: ClassReduction) -> Tensor<1> {
+        use ClassReduction::{Macro, Micro};
+        match class_reduction {
+            Micro => sample_class_mask.float().sum(),
+            Macro => sample_class_mask.float().sum_dim(0).squeeze_dim(0),
+        }
+    }
+
+    pub fn true_positive(self) -> Tensor<1> {
+        Self::aggregate(self.confusion_classes.equal_scalar(3), self.class_reduction)
+    }
+
+    pub fn true_negative(self) -> Tensor<1> {
+        Self::aggregate(self.confusion_classes.equal_scalar(0), self.class_reduction)
+    }
+
+    pub fn false_positive(self) -> Tensor<1> {
+        Self::aggregate(self.confusion_classes.equal_scalar(1), self.class_reduction)
+    }
+
+    pub fn false_negative(self) -> Tensor<1> {
+        Self::aggregate(self.confusion_classes.equal_scalar(2), self.class_reduction)
+    }
+
+    pub fn positive(self) -> Tensor<1> {
+        self.clone().true_positive() + self.false_negative()
+    }
+
+    pub fn negative(self) -> Tensor<1> {
+        self.clone().true_negative() + self.false_positive()
+    }
+
+    #[allow(unused)]
+    pub fn predicted_positive(self) -> Tensor<1> {
+        self.clone().true_positive() + self.false_positive()
+    }
+
+    pub fn support(self) -> Tensor<1> {
+        self.clone().positive() + self.negative()
+    }
+
+    pub fn ratio_of_support(self, metric: Tensor<1>) -> Tensor<1> {
+        metric / self.clone().support()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfusionStats, ConfusionStatsInput};
+    use crate::{
+        metric::classification::{ClassReduction, ClassificationMetricConfig, DecisionRule},
+        tests::{ClassificationType, THRESHOLD, dummy_classification_input},
+    };
+    use cortex_core::{
+        prelude::{Bool, Tensor, TensorData},
+        tensor::{BoolDType, Device, IntDType},
+    };
+    use cortex_flex::{Flex, FlexTensor};
+    use rstest::{fixture, rstest};
+    use std::num::NonZeroUsize;
+
+    fn top_k_config(
+        top_k: NonZeroUsize,
+        class_reduction: ClassReduction,
+    ) -> ClassificationMetricConfig {
+        ClassificationMetricConfig {
+            decision_rule: DecisionRule::TopK(top_k),
+            class_reduction,
+        }
+    }
+    #[fixture]
+    #[once]
+    fn top_k_config_k1_micro() -> ClassificationMetricConfig {
+        top_k_config(NonZeroUsize::new(1).unwrap(), ClassReduction::Micro)
+    }
+
+    #[fixture]
+    #[once]
+    fn top_k_config_k1_macro() -> ClassificationMetricConfig {
+        top_k_config(NonZeroUsize::new(1).unwrap(), ClassReduction::Macro)
+    }
+    #[fixture]
+    #[once]
+    fn top_k_config_k2_micro() -> ClassificationMetricConfig {
+        top_k_config(NonZeroUsize::new(2).unwrap(), ClassReduction::Micro)
+    }
+    #[fixture]
+    #[once]
+    fn top_k_config_k2_macro() -> ClassificationMetricConfig {
+        top_k_config(NonZeroUsize::new(2).unwrap(), ClassReduction::Macro)
+    }
+
+    fn threshold_config(
+        threshold: f64,
+        class_reduction: ClassReduction,
+    ) -> ClassificationMetricConfig {
+        ClassificationMetricConfig {
+            decision_rule: DecisionRule::Threshold(threshold),
+            class_reduction,
+        }
+    }
+    #[fixture]
+    #[once]
+    fn threshold_config_micro() -> ClassificationMetricConfig {
+        threshold_config(THRESHOLD, ClassReduction::Micro)
+    }
+    #[fixture]
+    #[once]
+    fn threshold_config_macro() -> ClassificationMetricConfig {
+        threshold_config(THRESHOLD, ClassReduction::Macro)
+    }
+
+    #[rstest]
+    #[case::threshold(DecisionRule::Threshold(THRESHOLD))]
+    #[case::top_k(DecisionRule::TopK(NonZeroUsize::new(2).unwrap()))]
+    fn test_compact_confusion_codes(#[case] decision_rule: DecisionRule) {
+        let device = Device::flex();
+        let input = ConfusionStatsInput::new(
+            Tensor::from_data([[0.1, 0.9, 0.2, 0.8]], &device),
+            Tensor::from_bool([[false, false, true, true]], &device),
+        );
+        let config = ClassificationMetricConfig {
+            decision_rule,
+            class_reduction: ClassReduction::Micro,
+        };
+
+        let stats = ConfusionStats::new(&input, &config);
+
+        assert_eq!(stats.confusion_classes.dtype(), IntDType::U8.into());
+        stats
+            .confusion_classes
+            .into_data()
+            .assert_eq(&TensorData::from([[0u8, 1, 2, 3]]), true);
+    }
+
+    #[test]
+    fn test_noncanonical_boolean_targets() {
+        let device = Device::flex();
+        let targets = Tensor::<2, Bool>::from_primitive::<Flex>(FlexTensor::from_data(
+            TensorData::from_bytes_vec(vec![0, 0, 2, 255], [1, 4], BoolDType::U8.into()),
+        ));
+        let input =
+            ConfusionStatsInput::new(Tensor::from_data([[0.1, 0.9, 0.2, 0.8]], &device), targets);
+
+        ConfusionStats::new(&input, &threshold_config_micro())
+            .confusion_classes
+            .into_data()
+            .assert_eq(&TensorData::from([[0u8, 1, 2, 3]]), true);
+    }
+
+    #[test]
+    fn test_counts_exceed_u8_range() {
+        let device = Device::flex();
+        let predictions = Tensor::<2>::ones([300, 1], &device);
+        let input = ConfusionStatsInput::new(predictions.clone(), predictions.bool());
+
+        ConfusionStats::new(&input, &threshold_config_micro())
+            .true_positive()
+            .into_data()
+            .assert_eq(&TensorData::from([300.0f32]), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [1].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [1].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [3].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [1, 1, 1].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [4].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [2, 1, 1].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [5].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [2, 2, 1].into())]
+    fn test_true_positive(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .true_positive()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [2].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [2].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [8].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [2, 3, 3].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [4].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [1, 1, 2].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [3].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [0, 2, 1].into())]
+    fn test_true_negative(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .true_negative()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [1].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [1].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [2].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [1, 1, 0].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [6].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [2, 3, 1].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [3].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [1, 1, 1].into())]
+    fn test_false_positive(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .false_positive()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [1].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [1].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [2].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [1, 0, 1].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [1].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [0, 0, 1].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [4].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [2, 0, 2].into())]
+    fn test_false_negatives(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .false_negative()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [2].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [2].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [5].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [2, 1, 2].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [5].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [2, 1, 2].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [9].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [4, 2, 3].into())]
+    fn test_positive(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .positive()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [3].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [3].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [10].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [3, 4, 3].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [10].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [3, 4, 3].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [6].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [1, 3, 2].into())]
+    fn test_negative(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .negative()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+
+    #[rstest]
+    #[case::binary_micro(ClassificationType::Binary, threshold_config_micro(), [2].into())]
+    #[case::binary_macro(ClassificationType::Binary, threshold_config_macro(), [2].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k1_micro(), [5].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k1_macro(), [2, 2, 1].into())]
+    #[case::multiclass_micro(ClassificationType::Multiclass, top_k_config_k2_micro(), [10].into())]
+    #[case::multiclass_macro(ClassificationType::Multiclass, top_k_config_k2_macro(), [4, 4, 2].into())]
+    #[case::multilabel_micro(ClassificationType::Multilabel, threshold_config_micro(), [8].into())]
+    #[case::multilabel_macro(ClassificationType::Multilabel, threshold_config_macro(), [3, 3, 2].into())]
+    fn test_predicted_positive(
+        #[case] classification_type: ClassificationType,
+        #[case] config: ClassificationMetricConfig,
+        #[case] expected: Vec<i32>,
+    ) {
+        let input: ConfusionStatsInput = dummy_classification_input(&classification_type).into();
+        ConfusionStats::new(&input, &config)
+            .predicted_positive()
+            .int()
+            .into_data()
+            .assert_eq(&TensorData::from(expected.as_slice()), false);
+    }
+}

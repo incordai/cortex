@@ -1,0 +1,16 @@
+[book]
+authors = [
+    "Wouter Doppenberg",
+    "Nathaniel Simard",
+    "Louis Fortier-Dubois",
+    "Dilshod Tadjibaev",
+    "Guillaume Lagrange",
+    "Sylvain Benner",
+    "Bjorn Beishline"
+]
+language = "en"
+src = "src"
+title = "The Cortex Book 🔥"
+
+[output.html]
+mathjax-support = true

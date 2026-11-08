@@ -1,0 +1,369 @@
+use crate::Initializer;
+use alloc::format;
+use cortex::tensor::ops::DeformConvOptions;
+
+use cortex::instrument::compute;
+use cortex_core as cortex;
+
+use crate::PaddingConfig2d;
+use cortex::config::Config;
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay, Param};
+use cortex::tensor::Device;
+use cortex::tensor::Tensor;
+use cortex::tensor::module::deform_conv2d;
+
+use crate::conv::checks;
+
+/// Configuration to create a [deformable 2D convolution](DeformConv2d) layer, using the [init function](DeformConv2dConfig::init).
+#[derive(Config, Debug)]
+pub struct DeformConv2dConfig {
+    /// The number of channels.
+    pub channels: [usize; 2],
+    /// The size of the kernel.
+    pub kernel_size: [usize; 2],
+    /// The stride of the convolution.
+    #[config(default = "[1, 1]")]
+    pub stride: [usize; 2],
+    /// Spacing between kernel elements.
+    #[config(default = "[1, 1]")]
+    pub dilation: [usize; 2],
+    /// Controls the connections between input and output channels.
+    #[config(default = "1")]
+    pub weight_groups: usize,
+    /// Offset groups.
+    #[config(default = "1")]
+    pub offset_groups: usize,
+    /// The padding configuration.
+    ///
+    /// ### Warning
+    /// Only symmetric padding is currently supported. As such, using `Same` padding with an even kernel
+    /// size or explicit padding with different values on opposite sides is not supported.
+    #[config(default = "PaddingConfig2d::Valid")]
+    pub padding: PaddingConfig2d,
+    /// If bias should be added to the output.
+    #[config(default = true)]
+    pub bias: bool,
+    /// The type of function used to initialize neural network parameters
+    #[config(
+        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0),fan_out_only:false}"
+    )]
+    pub initializer: Initializer,
+}
+
+/// Applies a deformable 2D convolution over input tensors.
+///
+/// Should be created with [DeformConv2dConfig].
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct DeformConv2d {
+    /// Tensor of shape `[channels_out, channels_in / groups, kernel_size_1, kernel_size_2]`
+    pub weight: Param<Tensor<4>>,
+    /// Tensor of shape `[channels_out]`
+    pub bias: Option<Param<Tensor<1>>>,
+    /// Stride of the convolution.
+    pub stride: [usize; 2],
+    /// Size of the kernel.
+    pub kernel_size: [usize; 2],
+    /// Spacing between kernel elements.
+    pub dilation: [usize; 2],
+    /// Controls the connections between input and output channels.
+    pub weight_groups: usize,
+    /// Offset groups.
+    pub offset_groups: usize,
+    /// The padding configuration.
+    #[module(skip)]
+    pub padding: PaddingConfig2d,
+}
+
+impl DeformConv2dConfig {
+    /// Initialize a new [DeformConv2d](DeformConv2d) module.
+    pub fn init(&self, device: &Device) -> DeformConv2d {
+        checks::checks_channels_div_groups(self.channels[0], self.channels[1], self.weight_groups);
+        match &self.padding {
+            PaddingConfig2d::Same => checks::check_same_padding_support(&self.kernel_size),
+            PaddingConfig2d::Explicit(top, left, bottom, right)
+                if top != bottom || left != right =>
+            {
+                panic!(
+                    "Asymmetric explicit padding is not supported by DeformConv2d. \
+                     Got top={top}, left={left}, bottom={bottom}, right={right}."
+                );
+            }
+            _ => {}
+        }
+        if !self.channels[0].is_multiple_of(self.offset_groups) {
+            panic!(
+                "Channels must be divisible by the number of groups. Got \
+                 channels_in={}, offset_groups={}",
+                self.channels[0], self.offset_groups
+            );
+        }
+
+        let shape = [
+            self.channels[1],
+            self.channels[0] / self.weight_groups,
+            self.kernel_size[0],
+            self.kernel_size[1],
+        ];
+
+        let k = self.kernel_size.iter().product::<usize>();
+        let fan_in = self.channels[0] / self.weight_groups * k;
+        let fan_out = self.channels[1] / self.weight_groups * k;
+
+        let weight = self
+            .initializer
+            .init_with(shape, Some(fan_in), Some(fan_out), device);
+        let mut bias = None;
+
+        if self.bias {
+            bias = Some(self.initializer.init_with(
+                [self.channels[1]],
+                Some(fan_in),
+                Some(fan_out),
+                device,
+            ));
+        }
+
+        DeformConv2d {
+            weight,
+            bias,
+            stride: self.stride,
+            kernel_size: self.kernel_size,
+            dilation: self.dilation,
+            padding: self.padding.clone(),
+            weight_groups: self.weight_groups,
+            offset_groups: self.offset_groups,
+        }
+    }
+}
+
+impl ModuleDisplay for DeformConv2d {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        // Format the stride, kernel_size and dilation as strings, formatted as arrays instead of indexed.
+        let stride = format!("{:?}", self.stride);
+        let kernel_size = format!("{:?}", self.kernel_size);
+        let dilation = format!("{:?}", self.dilation);
+
+        content
+            .add("stride", &stride)
+            .add("kernel_size", &kernel_size)
+            .add("dilation", &dilation)
+            .add("weight_groups", &self.weight_groups)
+            .add("offset_groups", &self.offset_groups)
+            .add_debug_attribute("padding", &self.padding)
+            .optional()
+    }
+}
+
+impl DeformConv2d {
+    /// Applies the forward pass on the input tensor.
+    ///
+    /// See [deform_conv2d](cortex::tensor::module::deform_conv2d) for more information.
+    ///
+    /// # Shapes
+    ///
+    /// - input: `[batch_size, channels_in, height_in, width_in]`
+    /// - offset: `[batch_size, 2 * offset_groups * kernel_height * kernel_width, height_out, width_out]`
+    /// - mask: `[batch_size, offset_groups * kernel_height * kernel_width, height_out, width_out]`
+    /// - output: `[batch_size, channels_out, height_out, width_out]`
+    ///
+    /// Timed without bounds: the input positions it samples depend on the offsets' values.
+    #[compute]
+    pub fn forward(
+        &self,
+        input: Tensor<4>,
+        offset: Tensor<4>,
+        mask: Option<Tensor<4>>,
+    ) -> Tensor<4> {
+        let [_batch_size, _channels_in, height_in, width_in] = input.dims();
+        let padding = self.padding.calculate_padding_2d(
+            height_in,
+            width_in,
+            &self.kernel_size,
+            &self.stride,
+            "DeformConv2d",
+        );
+        deform_conv2d(
+            input,
+            offset,
+            self.weight.val(),
+            mask,
+            self.bias.as_ref().map(|bias| bias.val()),
+            DeformConvOptions::new(
+                self.stride,
+                padding,
+                self.dilation,
+                self.weight_groups,
+                self.offset_groups,
+            ),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cortex::tensor::{ElementConversion, Tolerance};
+    type FT = f32;
+
+    use super::*;
+    use cortex::tensor::TensorData;
+
+    /// A deformable convolution is timed but declares no bounds.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_deformable_convolution_declares_no_bounds() {
+        let device = Default::default();
+        let conv = DeformConv2dConfig::new([2, 4], [3, 3]).init(&device);
+        let input = Tensor::<4>::zeros([1, 2, 5, 5], &device);
+        let offset = Tensor::<4>::zeros([1, 2 * 3 * 3, 3, 3], &device);
+
+        let recorded = crate::recording::recorded(|| {
+            conv.forward(input, offset, None);
+        });
+
+        assert_eq!(recorded.lines(), ["deform conv2d (unpriced)"]);
+    }
+
+    #[test]
+    fn initializer_default() {
+        let device = Device::default();
+        device.seed(0);
+
+        let config = DeformConv2dConfig::new([5, 1], [5, 5]);
+        let k = (config.channels[0] * config.kernel_size[0] * config.kernel_size[1]) as f64;
+        let k = (config.offset_groups as f64 / k).sqrt().elem::<FT>();
+        let conv = config.init(&device);
+
+        conv.weight.to_data().assert_within_range(-k..k);
+    }
+
+    #[test]
+    fn initializer_zeros() {
+        let device = Device::default();
+        device.seed(0);
+
+        let config = DeformConv2dConfig::new([5, 2], [5, 5]).with_initializer(Initializer::Zeros);
+        let conv = config.init(&device);
+
+        assert_eq!(config.initializer, Initializer::Zeros);
+        conv.weight.to_data().assert_approx_eq::<FT>(
+            &TensorData::zeros::<f32, _>(conv.weight.shape()),
+            Tolerance::default(),
+        );
+    }
+
+    #[test]
+    fn initializer_fan_out() {
+        let device = Device::default();
+        device.seed(0);
+
+        let init = Initializer::KaimingUniform {
+            gain: 1.0 / 3.0f64.sqrt(),
+            fan_out_only: true, // test that fan_out is passed to `init_with()`
+        };
+
+        let config = DeformConv2dConfig::new([5, 1], [5, 5]).with_initializer(init.clone());
+        let c = config.init(&device);
+        let _ = c.weight.val(); // initializes param
+
+        assert_eq!(config.initializer, init);
+    }
+
+    #[test]
+    fn initializer_fan_with_groups_is_valid() {
+        let device = Device::default();
+        device.seed(0);
+
+        let init = Initializer::KaimingUniform {
+            gain: 1.0 / 3.0f64.sqrt(),
+            fan_out_only: true,
+        };
+
+        let config = DeformConv2dConfig::new([4, 4], [1, 1])
+            .with_initializer(init.clone())
+            .with_weight_groups(4);
+        let _ = config.init(&device);
+
+        assert_eq!(config.initializer, init);
+    }
+
+    #[test]
+    #[should_panic = "Both channels must be divisible by the number of groups."]
+    fn channels_with_groups_is_invalid() {
+        let device = Default::default();
+        let config = DeformConv2dConfig::new([1, 4], [1, 1]).with_weight_groups(4);
+        let _ = config.init(&device);
+    }
+
+    #[test]
+    #[should_panic = "Same padding with an even kernel size is not supported"]
+    fn same_with_even_kernel_is_invalid() {
+        let device = Default::default();
+        let config = DeformConv2dConfig::new([4, 4], [2, 2]).with_padding(PaddingConfig2d::Same);
+        let _ = config.init(&device);
+    }
+
+    #[test]
+    #[should_panic(expected = "Asymmetric calculated padding is not supported for DeformConv2d")]
+    fn same_with_asymmetric_calculated_padding_is_invalid() {
+        let config = DeformConv2dConfig::new([1, 1], [3, 3])
+            .with_stride([2, 2])
+            .with_padding(PaddingConfig2d::Same);
+        let conv = config.init(&Default::default());
+
+        let input = Tensor::<4>::zeros([1, 1, 4, 5], &Default::default());
+        let offset = Tensor::<4>::zeros([1, 18, 2, 3], &Default::default());
+        let _ = conv.forward(input, offset, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Asymmetric explicit padding is not supported by DeformConv2d")]
+    fn explicit_padding_with_asymmetric_height_is_invalid() {
+        let config = DeformConv2dConfig::new([1, 1], [3, 3])
+            .with_padding(PaddingConfig2d::Explicit(1, 1, 2, 1));
+        let _ = config.init(&Default::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "Asymmetric explicit padding is not supported by DeformConv2d")]
+    fn explicit_padding_with_asymmetric_width_is_invalid() {
+        let config = DeformConv2dConfig::new([1, 1], [3, 3])
+            .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 2));
+        let _ = config.init(&Default::default());
+    }
+
+    #[test]
+    fn explicit_padding_with_symmetric_sides_is_valid() {
+        let config = DeformConv2dConfig::new([1, 1], [3, 3])
+            .with_padding(PaddingConfig2d::Explicit(1, 2, 1, 2));
+        let _ = config.init(&Default::default());
+    }
+
+    #[test]
+    fn display() {
+        let config = DeformConv2dConfig::new([5, 1], [5, 5]);
+        let conv = config.init(&Default::default());
+
+        assert_eq!(
+            alloc::format!("{conv}"),
+            "DeformConv2d {stride: [1, 1], kernel_size: [5, 5], dilation: [1, 1], weight_groups: 1, offset_groups: 1, padding: Valid, params: 126}"
+        );
+    }
+
+    #[test]
+    #[should_panic = "Number of channels in input tensor and input channels of convolution must be equal. got: 4, expected: 5"]
+    fn input_channels_mismatch() {
+        let config = DeformConv2dConfig::new([5, 3], [3, 3]);
+        let conv = config.init(&Default::default());
+
+        let input = Tensor::<4>::zeros([1, 4, 10, 10], &Default::default());
+        let offset = Tensor::<4>::zeros([1, 2 * 3 * 3, 10, 10], &Default::default());
+        let _ = conv.forward(input, offset, None);
+    }
+}

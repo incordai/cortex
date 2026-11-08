@@ -1,0 +1,122 @@
+[package]
+workspace = "../.."
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "Generic backend that can be compiled just-in-time to any shader language target"
+documentation = "https://docs.rs/cortex-cubecl"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "gpu"]
+license.workspace = true
+name = "cortex-cubecl"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-cubecl"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "autotune",
+    "std",
+    "fusion",
+    "cubecl/default",
+    "cortex-backend/default",
+    "cortex-fusion?/default",
+    "cortex-cubecl-fusion?/default",
+]
+std = [
+    "cubecl/std",
+    "cortex-backend/std",
+    "cortex-fusion?/std",
+    "cortex-cubecl-fusion?/std",
+]
+doc = ["default", "wgpu", "fft", "dep:branches"]
+# Native FFT kernels, enabled by cortex-signal.
+fft = ["cubek/fft"]
+
+# The runtime to compile against. A backend no longer carries its runtime in its type, but
+# `cubecl::Device` — and through it `CubeBackend` — exists only once at least one runtime is
+# compiled in, so a build of this crate has to name one. The runtime crates (`cortex-cuda`,
+# `cortex-wgpu`, `cortex-rocm`, `cortex-cpu`) each turn one on for their own dependents; these are here
+# so that this crate also builds, and documents, on its own. `doc` picks wgpu as the portable one.
+cuda = ["cubecl/cuda", "cortex-backend/cubecl-cuda"]
+hip = ["cubecl/hip", "cortex-backend/cubecl-hip"]
+cpu = ["cubecl/cpu", "cortex-backend/cubecl-cpu"]
+wgpu = ["cubecl/wgpu", "cortex-backend/cubecl-wgpu"]
+wgpu-msl = ["wgpu", "cubecl/wgpu-msl", "cortex-backend/cubecl-wgpu-msl"]
+metal = ["cubecl/metal", "cortex-backend/cubecl-metal"]
+vulkan = ["wgpu", "cubecl/vulkan", "cortex-backend/cubecl-vulkan"]
+webgpu = ["wgpu", "cubecl/webgpu", "cortex-backend/cubecl-webgpu"]
+
+tracing = [
+    "dep:tracing",
+    "cubecl/tracing",
+    "cortex-std/tracing",
+    "cortex-backend/tracing",
+    "cortex-fusion?/tracing",
+    "cortex-cubecl-fusion?/tracing",
+]
+
+# Compile persistent caches; runtime configuration controls which caches are used.
+persistence = ["cubecl/persistence"]
+autotune = ["cortex-cubecl-fusion?/autotune"]
+autotune-checks = [
+    "autotune",
+    "cubecl/autotune-checks",
+    "cubek/autotune-checks",
+    "cortex-cubecl-fusion?/autotune-checks",
+]
+
+
+fusion = ["cortex-fusion", "cortex-cubecl-fusion"]
+fusion-experimental = ["fusion"]
+
+template = []
+
+
+[dependencies]
+branches = { workspace = true, optional = true }
+cortex-cubecl-fusion = { workspace = true, optional = true }
+cortex-fusion = { workspace = true, optional = true }
+cortex-ir = { workspace = true }
+cortex-std = { workspace = true }
+cortex-backend = { workspace = true, features = [
+    "cubecl",
+    # `CubeBackend`'s device *is* `cubecl::Device`, so it has to be a cortex device.
+    "cubecl-device",
+] }
+cubecl = { workspace = true, features = ["stdlib"] }
+cubek = { workspace = true, features = [
+    "attention",
+    "attention-tiled",
+    "attention-backward",
+    "matmul",
+    "matmul-tiled",
+    "microkernel",
+    "convolution",
+    "interpolate",
+    "pool",
+    "reduce",
+    "random",
+    "quantization",
+    "stdlib",
+] }
+tracing = { workspace = true, features = ["attributes"], optional = true }
+
+derive-new = { workspace = true }
+log = { workspace = true }
+
+# Async
+futures-lite = { workspace = true, features = ["std"] }
+
+# Template
+serde = { workspace = true }
+text_placeholder = { workspace = true, features = ["struct_context"] }
+
+[dev-dependencies]
+cubecl = { workspace = true, features = ["test-runtime"] }
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

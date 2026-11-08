@@ -1,0 +1,280 @@
+use crate::learner::base::Interrupter;
+use crate::metric::processor::{EventProcessorTraining, LearnerEvent, TrainingItem};
+use crate::train::MultiDevicesTrainStep;
+use crate::{
+    Learner, LearnerModel, MultiDeviceOptim, SupervisedTrainingEventProcessor, TrainLoader,
+};
+use cortex_core::data::dataloader::Progress;
+use cortex_core::tensor::Device;
+use cortex_optim::GradientsAccumulator;
+use cortex_optim::MultiGradientsParams;
+
+/// A training epoch.
+#[derive(new)]
+pub struct MultiDeviceTrainEpoch<M: LearnerModel> {
+    dataloaders: Vec<TrainLoader<M>>,
+    grad_accumulation: Option<usize>,
+}
+
+impl<M: LearnerModel> MultiDeviceTrainEpoch<M> {
+    /// Runs the training epoch on multiple devices.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model to train.
+    /// * `optim` - The optimizer to use.
+    /// * `lr_scheduler` - The learning rate scheduler to use.
+    /// * `processor` - The event processor to use.
+    /// * `devices` - The devices to use.
+    ///
+    /// # Returns
+    ///
+    /// The trained model and the optimizer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run(
+        &self,
+        learner: &mut Learner<M>,
+        global_progress: &Progress,
+        event_processor: &mut SupervisedTrainingEventProcessor<M>,
+        interrupter: &Interrupter,
+        devices: Vec<Device>,
+        strategy: MultiDeviceOptim,
+    ) {
+        match strategy {
+            MultiDeviceOptim::OptimMainDevice => self.run_optim_main(
+                learner,
+                global_progress,
+                event_processor,
+                interrupter,
+                devices,
+            ),
+            MultiDeviceOptim::OptimSharded => self.run_optim_distr(
+                learner,
+                global_progress,
+                event_processor,
+                interrupter,
+                devices,
+            ),
+        }
+    }
+
+    fn run_optim_main(
+        &self,
+        learner: &mut Learner<M>,
+        global_progress: &Progress,
+        event_processor: &mut SupervisedTrainingEventProcessor<M>,
+        interrupter: &Interrupter,
+        devices: Vec<Device>,
+    ) {
+        let epoch = global_progress.items_processed;
+        log::info!(
+            "Executing training step for epoch {} on devices {:?}",
+            epoch,
+            devices
+        );
+
+        let mut iterators = self
+            .dataloaders
+            .iter()
+            .map(|d| d.iter())
+            .collect::<Vec<_>>();
+        interrupter.fail_on_error(event_processor.process_train(LearnerEvent::StartSplit {
+            epoch_number: epoch,
+            progress: Progress::aggregate(iterators.iter().map(|it| it.progress())),
+        }));
+        let mut iteration = 0;
+        let mut accumulator = GradientsAccumulator::new();
+        let mut accumulation_current = 0;
+
+        let accumulation = self.grad_accumulation.unwrap_or(1);
+        let step = MultiDevicesTrainStep::<M>::new(&devices);
+
+        // The main device is always the first in the list.
+        let device_main = devices.first().expect("A minimum of one device.").clone();
+
+        while !interrupter.should_stop() {
+            let (items, progress) = match step.step(iterators.as_mut_slice(), &learner.model()) {
+                Ok(result) => result,
+                Err(err) => {
+                    interrupter.fail(err);
+                    break;
+                }
+            };
+            if items.is_empty() {
+                break;
+            }
+
+            let mut progress_items = Vec::with_capacity(items.len());
+            for item in items.into_iter() {
+                let grads = item.output.grads.to_device(&device_main, &learner.model());
+                accumulator.accumulate(&learner.model(), grads);
+                progress_items.push(item.output.item);
+            }
+
+            accumulation_current += 1;
+
+            if accumulation <= accumulation_current {
+                let grads = accumulator.grads();
+                learner.lr_step();
+                learner.optimizer_step(grads);
+                interrupter.fail_on_error(event_processor.process_train(
+                    LearnerEvent::OptimizerStep(
+                        crate::metric::optimizer::OptimizerStepOutput::new(learner.lr_current()),
+                    ),
+                ));
+                accumulation_current = 0;
+            }
+
+            for item in progress_items {
+                iteration += 1;
+                let item = TrainingItem::new(
+                    item,
+                    progress.clone(),
+                    Some(iteration),
+                    Some(learner.lr_current()),
+                );
+
+                interrupter.fail_on_error(
+                    event_processor.process_train(LearnerEvent::ProcessedItem(item)),
+                );
+            }
+
+            if interrupter.should_stop() {
+                break;
+            }
+        }
+        interrupter.fail_on_error(event_processor.flush());
+        if accumulation_current > 0 && !interrupter.should_stop() {
+            let grads = accumulator.grads();
+            learner.lr_step();
+            learner.optimizer_step(grads);
+            interrupter.fail_on_error(event_processor.process_train(LearnerEvent::OptimizerStep(
+                crate::metric::optimizer::OptimizerStepOutput::new(learner.lr_current()),
+            )));
+        }
+
+        let mut progress = Progress::aggregate(iterators.iter().map(|it| it.progress()));
+        if !interrupter.should_stop() {
+            progress.resolve_total();
+        }
+        interrupter.fail_on_error(
+            event_processor.process_train(LearnerEvent::EndSplit { epoch, progress }),
+        );
+        interrupter.fail_on_error(event_processor.flush());
+    }
+
+    fn run_optim_distr(
+        &self,
+        learner: &mut Learner<M>,
+        global_progress: &Progress,
+        event_processor: &mut SupervisedTrainingEventProcessor<M>,
+        interrupter: &Interrupter,
+        devices: Vec<Device>,
+    ) {
+        let epoch = global_progress.items_processed;
+        log::info!(
+            "Executing training step for epoch {} on devices {:?}",
+            epoch,
+            devices
+        );
+
+        let mut iterators = self
+            .dataloaders
+            .iter()
+            .map(|d| d.iter())
+            .collect::<Vec<_>>();
+        interrupter.fail_on_error(event_processor.process_train(LearnerEvent::StartSplit {
+            epoch_number: epoch,
+            progress: Progress::aggregate(iterators.iter().map(|it| it.progress())),
+        }));
+        let mut iteration = 0;
+        let mut accumulators: Vec<GradientsAccumulator<_>> = (0..devices.len())
+            .map(|_| GradientsAccumulator::new())
+            .collect();
+        let mut accumulation_current = 0;
+
+        let accumulation = self.grad_accumulation.unwrap_or(1);
+        let step = MultiDevicesTrainStep::<M>::new(&devices);
+
+        while !interrupter.should_stop() {
+            let (items, progress) = match step.step(iterators.as_mut_slice(), &learner.model()) {
+                Ok(result) => result,
+                Err(err) => {
+                    interrupter.fail(err);
+                    break;
+                }
+            };
+            if items.is_empty() {
+                break;
+            }
+
+            let mut progress_items = Vec::with_capacity(items.len());
+            for item in items.into_iter() {
+                let accumulator = &mut accumulators[item.device_id];
+                accumulator.accumulate(&learner.model(), item.output.grads);
+                progress_items.push(item.output.item);
+            }
+
+            accumulation_current += 1;
+
+            if accumulation <= accumulation_current {
+                Self::step_sharded(learner, &mut accumulators, &devices);
+                interrupter.fail_on_error(event_processor.process_train(
+                    LearnerEvent::OptimizerStep(
+                        crate::metric::optimizer::OptimizerStepOutput::new(learner.lr_current()),
+                    ),
+                ));
+                accumulation_current = 0;
+            }
+
+            for item in progress_items {
+                iteration += 1;
+                let item = TrainingItem::new(
+                    item,
+                    progress.clone(),
+                    Some(iteration),
+                    Some(learner.lr_current()),
+                );
+
+                interrupter.fail_on_error(
+                    event_processor.process_train(LearnerEvent::ProcessedItem(item)),
+                );
+            }
+
+            if interrupter.should_stop() {
+                break;
+            }
+        }
+        interrupter.fail_on_error(event_processor.flush());
+        if accumulation_current > 0 && !interrupter.should_stop() {
+            Self::step_sharded(learner, &mut accumulators, &devices);
+            interrupter.fail_on_error(event_processor.process_train(LearnerEvent::OptimizerStep(
+                crate::metric::optimizer::OptimizerStepOutput::new(learner.lr_current()),
+            )));
+        }
+
+        let mut progress = Progress::aggregate(iterators.iter().map(|it| it.progress()));
+        if !interrupter.should_stop() {
+            progress.resolve_total();
+        }
+        interrupter.fail_on_error(
+            event_processor.process_train(LearnerEvent::EndSplit { epoch, progress }),
+        );
+        interrupter.fail_on_error(event_processor.flush());
+    }
+
+    fn step_sharded(
+        learner: &mut Learner<M>,
+        accumulators: &mut [GradientsAccumulator<M>],
+        devices: &[Device],
+    ) {
+        let mut grads = MultiGradientsParams::default();
+        for (device_id, accumulator) in accumulators.iter_mut().enumerate() {
+            grads
+                .grads
+                .push((accumulator.grads(), devices[device_id].clone()));
+        }
+        learner.lr_step();
+        learner.optimizer_step_multi(grads);
+    }
+}

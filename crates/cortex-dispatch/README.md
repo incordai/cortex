@@ -1,0 +1,41 @@
+# Cortex Backend Dispatch
+
+> Runtime backend selection for [Cortex](https://github.com/tracel-ai/burn)
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-dispatch.svg)](https://crates.io/crates/cortex-dispatch)
+[![Documentation](https://docs.rs/cortex-dispatch/badge.svg)](https://docs.rs/cortex-dispatch)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+`Dispatch` is the backend behind every `cortex::tensor::Tensor`. It holds the tensor primitives of
+each backend compiled into the application and routes every operation to the backend that owns
+its tensors, so model code has no backend type parameter and one program can use several
+backends side by side.
+
+Operations follow `Tensor -> BridgeTensor -> DispatchTensor -> backend primitive`. Dispatch also
+carries each tensor's autodiff and gradient-checkpointing context.
+
+Applications do not use this crate directly: Cortex's backend features (`cuda`, `wgpu`, `flex`, ...)
+enable the matching dispatch features, and a `Device` constructor picks the backend at runtime.
+
+## Backends
+
+| Variant    | Features                                                   | Backend                                                       |
+| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------- |
+| `Cube`     | `cpu`, `cuda`, `metal`, `rocm`, `vulkan`, `webgpu`, `wgpu` | [cortex-cubecl](https://github.com/tracel-ai/burn/tree/main/crates/burn-cubecl), every CubeCL runtime           |
+| `Flex`     | `flex`                                                     | [cortex-flex](https://github.com/tracel-ai/burn/tree/main/crates/burn-flex), pure Rust CPU                      |
+| `Remote`   | `remote`                                                   | [cortex-remote](https://github.com/tracel-ai/burn/tree/main/crates/burn-remote), devices on another server      |
+| `Capture`  | `capture`                                                  | [cortex-capture](https://github.com/tracel-ai/burn/tree/main/crates/burn-capture), records instead of executing |
+| `ShardedCompute` | `shard`                                                 | [cortex-shard](https://github.com/tracel-ai/burn/tree/main/crates/burn-shard), experimental: tensors split over several devices |
+
+`autodiff` wraps any of them in [cortex-autodiff](https://github.com/tracel-ai/burn/tree/main/crates/burn-autodiff), and `fusion` turns on kernel
+fusion for the CubeCL and remote backends. Features combine freely.
+
+Backend extensions add operations to dispatch with the `#[backend_extension]` macro from
+[cortex-backend-extension](https://github.com/tracel-ai/burn/tree/main/crates/burn-backend-extension).
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

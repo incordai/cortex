@@ -1,0 +1,141 @@
+use crate::metric::{
+    AccuracyInput, Adaptor, ConfusionStatsInput, HammingScoreInput, LossInput, PerplexityInput,
+    TopKAccuracyInput, processor::ItemLazy,
+};
+use cortex_core::tensor::{Int, Tensor};
+use cortex_std::ExecutionError;
+
+/// Simple classification output adapted for multiple metrics.
+///
+/// Supported metrics:
+/// - Accuracy
+/// - AUROC
+/// - TopKAccuracy
+/// - Perplexity
+/// - Precision (via ConfusionStatsInput)
+/// - Recall (via ConfusionStatsInput)
+/// - FBetaScore (via ConfusionStatsInput)
+/// - MatthewsCorrelationCoefficient (via ConfusionStatsInput, single-label only)
+/// - Loss.
+#[derive(new)]
+pub struct ClassificationOutput {
+    /// The loss.
+    pub loss: Tensor<1>,
+
+    /// The class logits or probabilities. Shape: \[batch_size, num_classes\].
+    pub output: Tensor<2>,
+
+    /// The ground truth class index for each sample. Shape: \[batch_size\].
+    pub targets: Tensor<1, Int>,
+}
+
+impl ItemLazy for ClassificationOutput {
+    fn sync(self) -> Result<Self, ExecutionError> {
+        // No readback here: metrics reduce on the tensors' device and read back
+        // final scalars or compact per-class statistics. Flushing dispatches the
+        // producing stream's buffered work so the metric thread doesn't wait
+        // on an idle queue; all tensors in a training item come off the
+        // autodiff backend entirely, so the metric thread neither retains the
+        // tape nor carries its dispatch context.
+        self.loss.device().flush()?;
+
+        Ok(ClassificationOutput {
+            output: self.output.without_autodiff(),
+            loss: self.loss.without_autodiff(),
+            targets: self.targets.without_autodiff(),
+        })
+    }
+}
+
+impl Adaptor<AccuracyInput> for ClassificationOutput {
+    fn adapt(&self) -> AccuracyInput {
+        AccuracyInput::new(self.output.clone(), self.targets.clone())
+    }
+}
+
+impl Adaptor<LossInput> for ClassificationOutput {
+    fn adapt(&self) -> LossInput {
+        LossInput::new(self.loss.clone())
+    }
+}
+
+impl Adaptor<TopKAccuracyInput> for ClassificationOutput {
+    fn adapt(&self) -> TopKAccuracyInput {
+        TopKAccuracyInput::new(self.output.clone(), self.targets.clone())
+    }
+}
+
+impl Adaptor<PerplexityInput> for ClassificationOutput {
+    fn adapt(&self) -> PerplexityInput {
+        PerplexityInput::new(self.output.clone(), self.targets.clone())
+    }
+}
+
+impl Adaptor<ConfusionStatsInput> for ClassificationOutput {
+    fn adapt(&self) -> ConfusionStatsInput {
+        let [_, num_classes] = self.output.dims();
+        if num_classes > 1 {
+            ConfusionStatsInput::new(
+                self.output.clone(),
+                self.targets.clone().one_hot(num_classes).bool(),
+            )
+        } else {
+            ConfusionStatsInput::new(
+                self.output.clone(),
+                self.targets.clone().unsqueeze_dim(1).bool(),
+            )
+        }
+    }
+}
+
+/// Multi-label classification output adapted for multiple metrics.
+///
+/// Supported metrics:
+/// - HammingScore
+/// - Precision (via ConfusionStatsInput)
+/// - Recall (via ConfusionStatsInput)
+/// - FBetaScore (via ConfusionStatsInput)
+/// - Loss
+#[derive(new)]
+pub struct MultiLabelClassificationOutput {
+    /// The loss.
+    pub loss: Tensor<1>,
+
+    /// The label logits or probabilities. Shape: \[batch_size, num_classes\].
+    pub output: Tensor<2>,
+
+    /// The ground truth labels. Shape: \[batch_size, num_classes\].
+    pub targets: Tensor<2, Int>,
+}
+
+impl ItemLazy for MultiLabelClassificationOutput {
+    fn sync(self) -> Result<Self, ExecutionError> {
+        // Same contract as `ClassificationOutput::sync`: flush and take every
+        // tensor off the autodiff backend, no readback.
+        self.loss.device().flush()?;
+
+        Ok(MultiLabelClassificationOutput {
+            output: self.output.without_autodiff(),
+            loss: self.loss.without_autodiff(),
+            targets: self.targets.without_autodiff(),
+        })
+    }
+}
+
+impl Adaptor<HammingScoreInput> for MultiLabelClassificationOutput {
+    fn adapt(&self) -> HammingScoreInput {
+        HammingScoreInput::new(self.output.clone(), self.targets.clone())
+    }
+}
+
+impl Adaptor<LossInput> for MultiLabelClassificationOutput {
+    fn adapt(&self) -> LossInput {
+        LossInput::new(self.loss.clone())
+    }
+}
+
+impl Adaptor<ConfusionStatsInput> for MultiLabelClassificationOutput {
+    fn adapt(&self) -> ConfusionStatsInput {
+        ConfusionStatsInput::new(self.output.clone(), self.targets.clone().bool())
+    }
+}

@@ -1,0 +1,315 @@
+use crate::{
+    checkpoint::{base::Checkpointer, builder::CheckpointerBuilder},
+    grads::{BackwardMode, Gradients},
+    graph::{ComputingProperty, Node, NodeId, NodeRef, Parent, Requirement, Step},
+    ops::NodeGuard,
+    runtime::{AutodiffClient, AutodiffClientImpl},
+};
+#[cfg(feature = "std")]
+use crate::{distributed::DistributedGradientRegistration, grads::GradSyncContext};
+use alloc::{boxed::Box, vec};
+use cortex_backend::{Backend, BackendTypes, TensorMetadata};
+use cortex_std::sync::Arc;
+#[cfg(feature = "std")]
+use {alloc::rc::Rc, core::cell::Cell};
+
+use cortex_backend::distributed::{DistributedParamId, DistributedParams};
+
+/// A backend tensor with autodiff ownership.
+///
+/// Use [`Self::node`] to prepare dependent operations and [`Self::primitive`] to
+/// borrow the backend primitive. [`Self::into_parts`] moves both out together.
+#[derive(Debug, Clone)]
+pub struct AutodiffTensor<B: BackendTypes> {
+    pub(crate) primitive: B::FloatTensorPrimitive,
+    pub(crate) node: NodeRef,
+    pub(crate) rc: NodeRefCount,
+}
+
+impl<B: BackendTypes> AutodiffTensor<B> {
+    /// Returns a guard that keeps this node available while preparing a dependent operation.
+    ///
+    /// Pass it to [`crate::ops::Backward::prepare`] before consuming the primitive.
+    pub fn node(&self) -> NodeGuard {
+        NodeGuard::new(self.node.clone(), self.rc.clone())
+    }
+
+    /// Returns the node identifier without retaining the node.
+    pub fn id(&self) -> NodeId {
+        self.node.id
+    }
+
+    /// Borrows the inner backend's tensor primitive.
+    pub fn primitive(&self) -> &B::FloatTensorPrimitive {
+        &self.primitive
+    }
+
+    /// Consumes the tensor, releasing its autodiff reference.
+    ///
+    /// When recording a dependent operation, obtain a guard with [`Self::node`]
+    /// first, or use [`Self::into_parts`] to keep the input available.
+    pub fn into_primitive(self) -> B::FloatTensorPrimitive {
+        self.primitive
+    }
+
+    /// Moves out the primitive and its node guard without cloning either.
+    ///
+    /// Pass the guard to the operation's preparation so it remains alive through
+    /// child registration. Do not store it in backward or checkpoint state.
+    pub fn into_parts(self) -> (B::FloatTensorPrimitive, NodeGuard) {
+        (self.primitive, NodeGuard::new(self.node, self.rc))
+    }
+}
+
+impl<B: BackendTypes> TensorMetadata for AutodiffTensor<B> {
+    type Device = B::Device;
+    fn dtype(&self) -> cortex_std::DType {
+        self.primitive.dtype()
+    }
+
+    fn shape(&self) -> cortex_std::Shape {
+        self.primitive.shape()
+    }
+
+    fn rank(&self) -> usize {
+        self.primitive.rank()
+    }
+    fn device(&self) -> B::Device {
+        self.primitive.device()
+    }
+
+    fn can_mut(&self) -> bool {
+        // Precise: the inner handle's buffer refcount already accounts for any
+        // clone the autodiff graph retains (e.g. checkpointed states).
+        self.primitive.can_mut()
+    }
+}
+
+pub type NodeRefCount = Arc<NodeId>;
+
+#[derive(new, Debug)]
+pub(crate) struct RootStep {
+    node: NodeRef,
+}
+
+impl Step for RootStep {
+    fn step(self: Box<Self>, _grads: &mut Gradients, _checkpointer: &mut Checkpointer) {
+        // Nothing to do
+    }
+
+    fn parents(&self) -> &[Parent] {
+        &self.node.parents
+    }
+
+    fn depth(&self) -> usize {
+        self.node.order
+    }
+
+    fn distributed_params(&self) -> Option<DistributedParams> {
+        self.node.distributed_params.clone()
+    }
+}
+
+/// Keeps backend identity on distributed roots.
+#[cfg(feature = "std")]
+#[derive(Debug)]
+struct DistributedRootStep {
+    root: RootStep,
+    backend: core::any::TypeId,
+}
+
+#[cfg(feature = "std")]
+impl Step for DistributedRootStep {
+    fn step(self: Box<Self>, _grads: &mut Gradients, _checkpointer: &mut Checkpointer) {
+        // Root steps have no gradient computation.
+    }
+
+    fn parents(&self) -> &[Parent] {
+        self.root.parents()
+    }
+
+    fn depth(&self) -> usize {
+        self.root.depth()
+    }
+
+    fn distributed_params(&self) -> Option<DistributedParams> {
+        self.root.distributed_params()
+    }
+
+    fn distributed_backend(&self) -> Option<core::any::TypeId> {
+        Some(self.backend)
+    }
+}
+
+impl<B: Backend> AutodiffTensor<B> {
+    fn register_root(self) -> Self {
+        let root = RootStep::new(self.node.clone());
+        #[cfg(feature = "std")]
+        if self.node.distributed_params.is_some() {
+            let step = DistributedRootStep {
+                root,
+                backend: core::any::TypeId::of::<B>(),
+            };
+            return self.register_step(step, CheckpointerBuilder::default());
+        }
+        self.register_step(root, CheckpointerBuilder::default())
+    }
+
+    /// Create a new leaf tensor.
+    pub fn new(primitive: B::FloatTensorPrimitive) -> Self {
+        let id = NodeId::new();
+        let node: NodeRef = Node::new(
+            vec![],
+            0,
+            id,
+            Requirement::None,
+            ComputingProperty::Ambiguous,
+            AutodiffClientImpl::new(),
+            None,
+        )
+        .into();
+
+        Self {
+            rc: Arc::new(node.id),
+            primitive,
+            node: node.clone(),
+        }
+    }
+
+    pub fn is_tracked(&self) -> bool {
+        !self.node.requirement.is_none()
+    }
+
+    /// Mark the tensor as requiring gradients.
+    ///
+    /// # Panics
+    ///
+    /// It panics if the tensor is not a leaf.
+    pub fn require_grad(mut self) -> Self {
+        match self.node.requirement {
+            Requirement::Grad => self,
+            Requirement::GradInBackward => {
+                panic!("Can't convert a non leaf tensor into a tracked tensor")
+            }
+            Requirement::None => {
+                self.node = Node::new(
+                    vec![],
+                    0,
+                    self.node.id,
+                    Requirement::Grad,
+                    self.node.properties.clone(),
+                    self.node.client.clone(),
+                    self.node.distributed_params.clone(),
+                )
+                .into();
+                self.register_root()
+            }
+        }
+    }
+
+    /// Create a tensor from parent infos.
+    pub(crate) fn from_parents(
+        primitive: B::FloatTensorPrimitive,
+        parent_nodes: &[NodeRef],
+        requirement: Requirement,
+        computing_properties: ComputingProperty,
+    ) -> Self {
+        let node: NodeRef =
+            Node::from_parents(parent_nodes, requirement, computing_properties).into();
+
+        Self {
+            rc: Arc::new(node.id),
+            primitive,
+            node,
+        }
+    }
+
+    /// Register a step into a graph for that tensor.
+    ///
+    /// # Warning
+    ///
+    /// This should be called only once per tensor. Custom operations must keep
+    /// their input `NodeGuard`s alive until this method returns.
+    pub(crate) fn register_step<S: Step + 'static>(
+        self,
+        step_that_created_the_tensor: S,
+        actions: CheckpointerBuilder,
+    ) -> Self {
+        self.node.client.register(
+            self.rc.clone(),
+            Box::new(step_that_created_the_tensor),
+            actions,
+        );
+        self
+    }
+
+    #[cfg(not(feature = "std"))]
+    pub fn backward(self) -> Gradients {
+        let client = self.node.client.clone();
+
+        AutodiffClient::backward::<B>(&client, self, BackwardMode::default())
+    }
+
+    pub fn grad(&self, grads: &Gradients) -> Option<B::FloatTensorPrimitive> {
+        grads.get::<B>(self)
+    }
+
+    pub fn grad_remove(&self, grads: &mut Gradients) -> Option<B::FloatTensorPrimitive> {
+        grads.remove::<B>(self)
+    }
+
+    pub fn grad_replace(&self, grads: &mut Gradients, grad: B::FloatTensorPrimitive) {
+        grads.remove::<B>(self);
+        grads.register::<B>(self.node.id, grad);
+    }
+
+    /// Mark the tensor as distributed across multiple devices.
+    /// Its gradients will be automatically aggregated from those devices after the backward pass.
+    ///
+    /// # Arguments
+    ///
+    /// * `param_id` - The module tensor's [`DistributedParamId`].
+    pub fn grad_distributed(mut self, param_id: DistributedParamId) -> Self {
+        self.node = Node::new(
+            vec![],
+            0,
+            self.node.id,
+            self.node.requirement,
+            self.node.properties.clone(),
+            self.node.client.clone(),
+            Some(DistributedParams { param_id }),
+        )
+        .into();
+        self.register_root()
+    }
+}
+
+#[cfg(feature = "std")]
+impl<B: Backend> AutodiffTensor<B> {
+    pub fn backward(self) -> Gradients {
+        let device = self.primitive.device();
+        let device_cloned = device.clone();
+        let client = self.node.client.clone();
+        let registered = Rc::new(Cell::new(false));
+
+        let mode = BackwardMode::Distributed(Box::new({
+            let registered = registered.clone();
+            move |ctx: GradSyncContext| {
+                registered.set(!ctx.distributed_params.is_empty());
+                let registration = DistributedGradientRegistration::<B>::new(
+                    ctx.n_required_map,
+                    ctx.distributed_params,
+                    device_cloned,
+                );
+                Box::new(registration)
+            }
+        }));
+
+        let grads = AutodiffClient::backward::<B>(&client, self, mode);
+        // A backward that registered nothing has no gradient to wait for.
+        if registered.get() {
+            B::submit_sync_collective(&device);
+        }
+        grads
+    }
+}

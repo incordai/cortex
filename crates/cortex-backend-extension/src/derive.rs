@@ -1,0 +1,350 @@
+//! `ExtensionType` derive implementation for structs and enums crossing the dispatch boundary.
+
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use syn::{Data, DeriveInput, Fields, Ident, Type};
+
+use crate::ir::{self, TensorKind};
+
+/// Field layout of a struct or a single enum variant.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaseStyle {
+    Named,
+    Unnamed,
+    Unit,
+}
+
+/// One derive case: a struct is one case and an enum contributes one case per variant.
+pub struct DeriveCase {
+    path: TokenStream,
+    style: CaseStyle,
+    pub fields: Vec<CaseField>,
+}
+
+pub struct CaseField {
+    pub bind: Ident,
+    pub member: Option<Ident>,
+    pub attrs: Vec<syn::Attribute>,
+    pub ty: Type,
+    pub is_ext: bool,
+    pub tensor_kind: Option<TensorKind>,
+}
+
+impl CaseField {
+    /// The field's scalar encoding for the remote backend, `#[extension_type(scalar ..)]`.
+    pub fn scalar_annotation(&self) -> Option<&syn::Attribute> {
+        self.attrs.iter().find(|attr| {
+            attr.path().is_ident("extension_type") && matches!(attr.meta, syn::Meta::List(_))
+        })
+    }
+}
+
+fn build_case(path: TokenStream, fields: &Fields) -> DeriveCase {
+    let (style, raw): (CaseStyle, Vec<&syn::Field>) = match fields {
+        Fields::Named(fields) => (CaseStyle::Named, fields.named.iter().collect()),
+        Fields::Unnamed(fields) => (CaseStyle::Unnamed, fields.unnamed.iter().collect()),
+        Fields::Unit => (CaseStyle::Unit, Vec::new()),
+    };
+    let fields = raw
+        .iter()
+        .enumerate()
+        .map(|(index, field)| CaseField {
+            bind: format_ident!("__ext_f{index}"),
+            member: field.ident.clone(),
+            attrs: field.attrs.clone(),
+            ty: field.ty.clone(),
+            is_ext: is_nested_extension(&field.attrs),
+            tensor_kind: TensorKind::from_type(&field.ty),
+        })
+        .collect();
+    DeriveCase {
+        path,
+        style,
+        fields,
+    }
+}
+
+/// Whether a field is a nested extension value: a bare `#[extension_type]`. The list form,
+/// `#[extension_type(scalar = ..)]`, encodes an ordinary field instead.
+pub fn is_nested_extension(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("extension_type") && matches!(attr.meta, syn::Meta::Path(_))
+    })
+}
+
+pub fn collect_cases(input: &DeriveInput) -> syn::Result<Vec<DeriveCase>> {
+    let name = &input.ident;
+    match &input.data {
+        Data::Struct(data) => Ok(vec![build_case(quote!(#name), &data.fields)]),
+        Data::Enum(data) => Ok(data
+            .variants
+            .iter()
+            .map(|variant| {
+                let ident = &variant.ident;
+                build_case(quote!(#name::#ident), &variant.fields)
+            })
+            .collect()),
+        Data::Union(_) => Err(syn::Error::new_spanned(
+            name,
+            "ExtensionType cannot be derived for unions",
+        )),
+    }
+}
+
+/// Destructure a case, binding only the fields selected by `needed`.
+pub fn gen_case_pattern(case: &DeriveCase, needed: impl Fn(usize) -> bool) -> TokenStream {
+    let path = &case.path;
+    match case.style {
+        CaseStyle::Unit => quote!(#path),
+        CaseStyle::Named => {
+            let entries = case.fields.iter().enumerate().map(|(index, field)| {
+                let member = field.member.as_ref().expect("named field has an ident");
+                if needed(index) {
+                    let bind = &field.bind;
+                    quote!(#member: #bind)
+                } else {
+                    quote!(#member: _)
+                }
+            });
+            quote!(#path { #(#entries),* })
+        }
+        CaseStyle::Unnamed => {
+            let entries = case.fields.iter().enumerate().map(|(index, field)| {
+                if needed(index) {
+                    let bind = &field.bind;
+                    quote!(#bind)
+                } else {
+                    quote!(_)
+                }
+            });
+            quote!(#path(#(#entries),*))
+        }
+    }
+}
+
+pub fn gen_case_ctor(case: &DeriveCase, expressions: &[TokenStream]) -> TokenStream {
+    let path = &case.path;
+    match case.style {
+        CaseStyle::Unit => quote!(#path),
+        CaseStyle::Named => {
+            let entries = case
+                .fields
+                .iter()
+                .zip(expressions)
+                .map(|(field, expression)| {
+                    let member = field.member.as_ref().expect("named field has an ident");
+                    quote!(#member: #expression)
+                });
+            quote!(#path { #(#entries),* })
+        }
+        CaseStyle::Unnamed => quote!(#path(#(#expressions),*)),
+    }
+}
+
+/// Generate one routing lookup arm, preferring direct fields before nested extension values.
+fn gen_routing_tensor_arm(case: &DeriveCase, float_only: bool) -> TokenStream {
+    let float_index = case
+        .fields
+        .iter()
+        .position(|field| !field.is_ext && field.tensor_kind == Some(TensorKind::Float));
+    let any_index = if float_only {
+        None
+    } else {
+        case.fields
+            .iter()
+            .position(|field| !field.is_ext && field.tensor_kind.is_some())
+    };
+    let extension_indices: Vec<_> = case
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.is_ext)
+        .map(|(index, _)| index)
+        .collect();
+    let method = if float_only {
+        format_ident!("routing_float_tensor")
+    } else {
+        format_ident!("routing_tensor")
+    };
+
+    let (needed, expression): (Vec<usize>, TokenStream) = if let Some(index) = float_index {
+        let bind = &case.fields[index].bind;
+        (vec![index], quote!(Some(#bind)))
+    } else if let Some(index) = any_index {
+        let bind = &case.fields[index].bind;
+        (vec![index], quote!(Some(#bind)))
+    } else if !extension_indices.is_empty() {
+        let calls = extension_indices.iter().map(|&index| {
+            let field = &case.fields[index];
+            let bind = &field.bind;
+            let dispatch_ty = ir::with_backend(&field.ty, quote!(cortex::backend::Dispatch));
+            quote! {
+                .or_else(|| <#dispatch_ty as cortex::backend::ExtensionType<cortex::backend::Dispatch>>::#method(#bind))
+            }
+        });
+        (
+            extension_indices.clone(),
+            quote!(Option::<&cortex::backend::DispatchTensor>::None #(#calls)*),
+        )
+    } else {
+        (
+            Vec::new(),
+            quote!(Option::<&cortex::backend::DispatchTensor>::None),
+        )
+    };
+
+    let pattern = gen_case_pattern(case, |index| needed.contains(&index));
+    quote!(#pattern => #expression,)
+}
+
+/// Generate one arm that merges contexts and detects autodiff floats in one traversal.
+fn gen_autodiff_routing_arm(case: &DeriveCase) -> TokenStream {
+    let needed: Vec<_> = case
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.is_ext || field.tensor_kind.is_some())
+        .map(|(index, _)| index)
+        .collect();
+    let updates = needed.iter().map(|&index| {
+        let field = &case.fields[index];
+        let bind = &field.bind;
+        if field.is_ext {
+            let dispatch_ty = ir::with_backend(&field.ty, quote!(cortex::backend::Dispatch));
+            quote! {
+                let (__field_context, __field_has_autodiff_float) =
+                    <#dispatch_ty as cortex::backend::ExtensionType<cortex::backend::Dispatch>>::autodiff_routing(#bind);
+                __has_autodiff_float |= __field_has_autodiff_float;
+                __context = __context.merge(__field_context);
+            }
+        } else {
+            let float = (field.tensor_kind == Some(TensorKind::Float)).then(|| quote! {
+                __has_autodiff_float |= matches!(
+                    __field_context,
+                    cortex::backend::DispatchAutodiffContext::Enabled(_)
+                );
+            });
+            quote! {
+                let __field_context = #bind.autodiff;
+                #float
+                __context = __context.merge(__field_context);
+            }
+        }
+    });
+    let pattern = gen_case_pattern(case, |index| needed.contains(&index));
+
+    quote! {
+        #pattern => {
+            let mut __context = cortex::backend::DispatchAutodiffContext::Disabled;
+            let mut __has_autodiff_float = false;
+            #(#updates)*
+            (__context, __has_autodiff_float)
+        },
+    }
+}
+
+pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
+    let input: DeriveInput = syn::parse2(input)?;
+    let fusion = crate::fusion::derive(&input)?;
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let cases = collect_cases(&input)?;
+
+    let wrap_arms = cases.iter().map(|case| {
+        let pattern = gen_case_pattern(case, |_| true);
+        let expressions: Vec<_> = case
+            .fields
+            .iter()
+            .map(|field| {
+                let bind = &field.bind;
+                if field.is_ext {
+                    quote!(#bind.map_to_dispatch(&map_kind, autodiff))
+                } else if let Some(kind) = field.tensor_kind {
+                    let variant = kind.variant();
+                    quote! {
+                        cortex::backend::DispatchTensor {
+                            kind: map_kind(cortex::backend::BackendTensor::#variant(#bind)),
+                            autodiff,
+                        }
+                    }
+                } else {
+                    quote!(#bind)
+                }
+            })
+            .collect();
+        let constructor = gen_case_ctor(case, &expressions);
+        quote!(#pattern => #constructor,)
+    });
+
+    let unwrap_arms = cases.iter().map(|case| {
+        let pattern = gen_case_pattern(case, |_| true);
+        let expressions: Vec<_> = case
+            .fields
+            .iter()
+            .map(|field| {
+                let bind = &field.bind;
+                if field.is_ext {
+                    quote!(cortex::backend::ExtensionType::map_from_dispatch(#bind, &unwrap_kind))
+                } else if let Some(kind) = field.tensor_kind {
+                    let method = kind.accessor();
+                    quote!(unwrap_kind(#bind).#method())
+                } else {
+                    quote!(#bind)
+                }
+            })
+            .collect();
+        let constructor = gen_case_ctor(case, &expressions);
+        quote!(#pattern => #constructor,)
+    });
+
+    let routing_tensor_arms = cases.iter().map(|case| gen_routing_tensor_arm(case, false));
+    let float_routing_tensor_arms = cases.iter().map(|case| gen_routing_tensor_arm(case, true));
+    let autodiff_routing_arms = cases.iter().map(gen_autodiff_routing_arm);
+
+    Ok(quote! {
+        #fusion
+        impl #impl_generics cortex::backend::ExtensionType<B> for #name #ty_generics #where_clause {
+            type Target = #name<cortex::backend::Dispatch>;
+
+            #[allow(unused_variables)]
+            fn map_to_dispatch<F>(
+                self,
+                map_kind: F,
+                autodiff: cortex::backend::DispatchAutodiffContext,
+            ) -> Self::Target
+            where
+                F: Fn(cortex::backend::BackendTensor<B>) -> cortex::backend::DispatchTensorKind,
+            {
+                match self { #(#wrap_arms)* }
+            }
+
+            #[allow(unused_variables)]
+            fn map_from_dispatch<F>(target: Self::Target, unwrap_kind: F) -> Self
+            where
+                F: Fn(cortex::backend::DispatchTensor) -> cortex::backend::BackendTensor<B>,
+            {
+                match target { #(#unwrap_arms)* }
+            }
+
+            fn routing_tensor(target: &Self::Target) -> Option<&cortex::backend::DispatchTensor> {
+                match target { #(#routing_tensor_arms)* }
+            }
+
+            fn routing_float_tensor(target: &Self::Target) -> Option<&cortex::backend::DispatchTensor> {
+                match target { #(#float_routing_tensor_arms)* }
+            }
+
+            fn autodiff_routing(
+                target: &Self::Target,
+            ) -> (cortex::backend::DispatchAutodiffContext, bool) {
+                match target { #(#autodiff_routing_arms)* }
+            }
+
+            fn autodiff_context(
+                target: &Self::Target,
+            ) -> cortex::backend::DispatchAutodiffContext {
+                Self::autodiff_routing(target).0
+            }
+        }
+    })
+}

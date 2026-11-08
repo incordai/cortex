@@ -1,0 +1,25 @@
+[package]
+authors = [
+    "nathanielsimard <nathaniel.simard.42@gmail.com>",
+    "Ankitects Pty Ltd",
+]
+edition.workspace = true
+license.workspace = true
+name = "custom-renderer"
+description = "Example of how to render training progress outside of the tui"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cortex = { workspace = true, features = [
+    "autodiff",
+    "wgpu",
+    "train",
+    "dataset",
+    "vision",
+] }
+guide = { path = "../guide", default-features = false }
+

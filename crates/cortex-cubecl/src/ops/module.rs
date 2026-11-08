@@ -1,0 +1,576 @@
+use crate::{
+    CubeBackend,
+    kernel::{
+        self,
+        conv::{ConvTranspose2dStrategy, ConvTranspose3dStrategy},
+    },
+};
+use cortex_backend::tensor::{BoolTensor, FloatTensor, IntTensor};
+use cortex_backend::{
+    TensorMetadata,
+    ops::{
+        AttentionCache, AttentionModuleOptions, ConvOptions, ConvTransposeOptions,
+        DeformConv2dBackward, DeformConvOptions, FloatTensorOps, InterpolateOptions,
+        MaxPool2dBackward, MaxPool2dWithIndices, MaxPool3dBackward, MaxPool3dWithIndices,
+        ModuleOps,
+    },
+};
+use cortex_std::{DType, FloatDType, IntDType};
+
+impl ModuleOps<Self> for CubeBackend {
+    fn conv1d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_forward::<1>(x, weight, bias, options, Default::default()).unwrap()
+    }
+
+    fn conv1d_x_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_data_backward(
+            output_grad,
+            weight,
+            x.shape(),
+            options,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    fn conv1d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<1>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_weight_backward::<1>(
+            x,
+            output_grad,
+            weight.shape(),
+            options,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    fn conv2d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_forward::<2>(x, weight, bias, options, Default::default()).unwrap()
+    }
+
+    fn conv2d_x_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_data_backward(
+            output_grad,
+            weight,
+            x.shape(),
+            options,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    fn conv2d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_weight_backward::<2>(
+            x,
+            output_grad,
+            weight.shape(),
+            options,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    /// Sums gradients `[batch, output_channels, height, width]` over batch and
+    /// spatial axes, returning `[output_channels]` with the same dtype and device.
+    /// `bias` has shape `[output_channels]`. The unused input `x` has layout
+    /// `[batch, input_channels, input_height, input_width]`.
+    fn conv2d_bias_backward(
+        _x: FloatTensor<Self>,
+        bias: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        if output_grad.dtype == DType::F32 {
+            let grad = Self::float_sum_dims(output_grad, &[0, 2, 3]);
+            return Self::float_reshape(grad, bias.shape());
+        }
+
+        // Keep low-precision gradients on one pass until reduce_dims preserves
+        // accumulator precision between passes instead of narrowing partial sums.
+        // Dense NHWC storage needs only a metadata reshape.
+        let [batch, channels, height, width] = output_grad.shape().dims();
+        let grad = super::permute_nchw_to_nhwc(output_grad);
+        let grad = Self::float_reshape(grad, [batch * height * width, channels].into());
+        let grad = Self::float_sum_dim(grad, 0);
+        Self::float_reshape(grad, bias.shape())
+    }
+
+    fn deform_conv2d(
+        x: FloatTensor<Self>,
+        offset: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        mask: Option<FloatTensor<Self>>,
+        bias: Option<FloatTensor<Self>>,
+        options: DeformConvOptions<2>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::deform_conv2d(x, offset, weight, mask, bias, options).unwrap()
+    }
+
+    fn deform_conv2d_backward(
+        x: FloatTensor<Self>,
+        offset: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        mask: Option<FloatTensor<Self>>,
+        bias: Option<FloatTensor<Self>>,
+        output_grad: FloatTensor<Self>,
+        options: DeformConvOptions<2>,
+    ) -> DeformConv2dBackward<Self> {
+        let (x, o, w, m, b) = kernel::conv::deform_conv2d_backward(
+            x,
+            offset,
+            weight,
+            mask,
+            bias,
+            output_grad,
+            options,
+        )
+        .unwrap();
+        DeformConv2dBackward::new(x, o, w, m, b)
+    }
+
+    fn conv3d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_forward::<3>(x, weight, bias, options, Default::default()).unwrap()
+    }
+
+    fn conv3d_x_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_data_backward(
+            output_grad,
+            weight,
+            x.shape(),
+            options,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    fn conv3d_weight_backward(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        output_grad: FloatTensor<Self>,
+        options: ConvOptions<3>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_weight_backward::<3>(
+            x,
+            output_grad,
+            weight.shape(),
+            options,
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    fn conv_transpose2d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_transpose2d(x, weight, bias, options, ConvTranspose2dStrategy::default())
+            .unwrap()
+    }
+
+    fn conv_transpose3d(
+        x: FloatTensor<Self>,
+        weight: FloatTensor<Self>,
+        bias: Option<FloatTensor<Self>>,
+        options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<Self> {
+        kernel::conv::conv_transpose3d(x, weight, bias, options, ConvTranspose3dStrategy::default())
+            .unwrap()
+    }
+
+    fn avg_pool2d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        kernel::pool::avg_pool2d(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+        )
+    }
+
+    fn avg_pool2d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        kernel::pool::avg_pool2d_backward(
+            x,
+            grad,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+        )
+    }
+
+    fn max_pool2d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        kernel::pool::max_pool2d(x, kernel_size, stride, padding, dilation, ceil_mode)
+    }
+
+    fn max_pool2d_with_indices(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool2dWithIndices<Self> {
+        let (output, indices) = kernel::pool::max_pool2d_with_indices(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            indices_dtype.into(),
+        );
+
+        MaxPool2dWithIndices::new(output, indices)
+    }
+
+    fn max_pool2d_with_indices_backward(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+        output_grad: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+    ) -> MaxPool2dBackward<Self> {
+        MaxPool2dBackward::new(kernel::pool::max_pool2d_with_indices_backward(
+            x,
+            output_grad,
+            indices,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+        ))
+    }
+
+    fn adaptive_avg_pool2d(x: FloatTensor<Self>, output_size: [usize; 2]) -> FloatTensor<Self> {
+        kernel::pool::adaptive_avg_pool2d(x, output_size)
+    }
+
+    fn adaptive_avg_pool2d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        kernel::pool::adaptive_avg_pool2d_backward(x, grad)
+    }
+
+    fn adaptive_avg_pool3d(x: FloatTensor<Self>, output_size: [usize; 3]) -> FloatTensor<Self> {
+        kernel::pool::adaptive_avg_pool3d(x, output_size)
+    }
+
+    fn adaptive_avg_pool3d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        kernel::pool::adaptive_avg_pool3d_backward(x, grad)
+    }
+
+    fn avg_pool3d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        kernel::pool::avg_pool3d(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+        )
+    }
+
+    fn avg_pool3d_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        kernel::pool::avg_pool3d_backward(
+            x,
+            grad,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            count_include_pad,
+            ceil_mode,
+        )
+    }
+
+    fn max_pool3d(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+    ) -> FloatTensor<Self> {
+        let (output, _indices) = kernel::pool::max_pool3d_with_indices(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            cortex_backend::DType::I32,
+        );
+        output
+    }
+
+    fn max_pool3d_with_indices(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+        indices_dtype: IntDType,
+    ) -> MaxPool3dWithIndices<Self> {
+        let (output, indices) = kernel::pool::max_pool3d_with_indices(
+            x,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            indices_dtype.into(),
+        );
+
+        MaxPool3dWithIndices::new(output, indices)
+    }
+
+    fn max_pool3d_with_indices_backward(
+        x: FloatTensor<Self>,
+        kernel_size: [usize; 3],
+        stride: [usize; 3],
+        padding: [usize; 3],
+        dilation: [usize; 3],
+        ceil_mode: bool,
+        output_grad: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+    ) -> MaxPool3dBackward<Self> {
+        MaxPool3dBackward::new(kernel::pool::max_pool3d_with_indices_backward(
+            x,
+            output_grad,
+            indices,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+        ))
+    }
+
+    fn interpolate(
+        x: FloatTensor<Self>,
+        output_size: [usize; 2],
+        options: InterpolateOptions,
+    ) -> FloatTensor<Self> {
+        kernel::interpolate::interpolate(x, output_size, options, Default::default()).unwrap()
+    }
+
+    fn interpolate_backward(
+        x: FloatTensor<Self>,
+        grad: FloatTensor<Self>,
+        output_size: [usize; 2],
+        options: InterpolateOptions,
+    ) -> FloatTensor<Self> {
+        kernel::interpolate::interpolate_backward(x, grad, output_size, options)
+    }
+
+    fn attention(
+        query: FloatTensor<Self>,
+        key: FloatTensor<Self>,
+        value: FloatTensor<Self>,
+        mask: Option<BoolTensor<Self>>,
+        attn_bias: Option<FloatTensor<Self>>,
+        cache: Option<AttentionCache<Self>>,
+        options: AttentionModuleOptions,
+    ) -> FloatTensor<Self> {
+        kernel::attention::attention(
+            query,
+            key,
+            value,
+            mask,
+            attn_bias,
+            cache,
+            options,
+            Default::default(),
+        )
+    }
+
+    fn has_attention_backward() -> bool {
+        true
+    }
+
+    fn attention_with_logsumexp(
+        query: FloatTensor<Self>,
+        key: FloatTensor<Self>,
+        value: FloatTensor<Self>,
+        options: AttentionModuleOptions,
+    ) -> (FloatTensor<Self>, FloatTensor<Self>) {
+        // What the kernels do not serve, a softcap or a causal mask anchored at the top left, is
+        // composed.
+        if !kernel::attention::backward_serves(&query, &key, &value, &options) {
+            return cortex_backend::ops::attention::attention_with_logsumexp_default::<Self>(
+                query, key, value, options,
+            );
+        }
+        kernel::attention::attention_with_logsumexp(query, key, value, options)
+    }
+
+    fn attention_backward(
+        query: FloatTensor<Self>,
+        key: FloatTensor<Self>,
+        value: FloatTensor<Self>,
+        out: FloatTensor<Self>,
+        logsumexp: FloatTensor<Self>,
+        out_grad: FloatTensor<Self>,
+        options: AttentionModuleOptions,
+    ) -> cortex_backend::ops::AttentionBackward<Self> {
+        if !kernel::attention::backward_serves(&query, &key, &value, &options) {
+            return cortex_backend::ops::attention::attention_backward_default::<Self>(
+                query, key, value, out, logsumexp, out_grad, options,
+            );
+        }
+        kernel::attention::attention_backward(query, key, value, out, logsumexp, out_grad, options)
+    }
+
+    fn has_ctc_loss_backward() -> bool {
+        true
+    }
+
+    fn ctc_loss(
+        log_probs: FloatTensor<Self>,
+        targets: IntTensor<Self>,
+        input_lengths: IntTensor<Self>,
+        target_lengths: IntTensor<Self>,
+        blank: usize,
+    ) -> FloatTensor<Self> {
+        let dtype = log_probs.dtype.into();
+        let log_probs = match dtype {
+            FloatDType::F16 | FloatDType::BF16 => Self::float_cast(log_probs, FloatDType::F32),
+            _ => log_probs,
+        };
+        let loss = kernel::ctc::ctc_loss(log_probs, targets, input_lengths, target_lengths, blank);
+
+        Self::float_cast(loss, dtype)
+    }
+
+    fn ctc_loss_backward(
+        log_probs: FloatTensor<Self>,
+        targets: IntTensor<Self>,
+        input_lengths: IntTensor<Self>,
+        target_lengths: IntTensor<Self>,
+        grad_loss: FloatTensor<Self>,
+        blank: usize,
+    ) -> FloatTensor<Self> {
+        let dtype = log_probs.dtype.into();
+        let log_probs = match dtype {
+            FloatDType::F16 | FloatDType::BF16 => Self::float_cast(log_probs, FloatDType::F32),
+            _ => log_probs,
+        };
+        let grad_loss = Self::float_cast(grad_loss, log_probs.dtype.into());
+        let (log_alpha_full, log_beta_full, nll) = kernel::ctc::ctc_alpha_beta(
+            log_probs.clone(),
+            targets.clone(),
+            input_lengths.clone(),
+            target_lengths,
+            blank,
+        );
+        let grad = cortex_backend::ops::ctc::ctc_grad_from_alpha_beta_default::<Self>(
+            log_probs,
+            targets,
+            input_lengths,
+            grad_loss,
+            log_alpha_full,
+            log_beta_full,
+            nll,
+            blank,
+        );
+
+        Self::float_cast(grad, dtype)
+    }
+}

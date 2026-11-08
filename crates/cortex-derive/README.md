@@ -1,0 +1,42 @@
+# Cortex Derive
+
+> Derive macros for [Cortex](https://github.com/tracel-ai/burn)
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-derive.svg)](https://crates.io/crates/cortex-derive)
+[![Documentation](https://docs.rs/cortex-derive/badge.svg)](https://docs.rs/cortex-derive)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+Use these through `cortex`, which re-exports them; this crate is not meant to be a direct dependency.
+
+- `#[derive(Module)]` implements `Module` for a struct or enum of modules, parameters and constants.
+  `#[module(skip)]` excludes a field.
+- `#[derive(Config)]` makes a struct a serializable configuration with a generated `new`
+  constructor and `with_*` setters for optional fields and fields marked `#[config(default = ...)]`.
+- `#[derive(RecordState)]` decomposes an optimizer or scheduler state into named tensors and scalars
+  for the cortexpack format.
+
+The crate also implements the `assert_shape!`, `debug_assert_shape!` and `einsum!` tensor macros.
+
+```rust,ignore
+use cortex::prelude::*;
+
+#[derive(Config, Debug)]
+pub struct MlpConfig {
+    hidden: usize,
+    #[config(default = 0.1)]
+    dropout: f64,
+}
+
+#[derive(Module, Debug)]
+pub struct Mlp {
+    linear: nn::Linear,
+    dropout: nn::Dropout,
+}
+```
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

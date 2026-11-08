@@ -1,0 +1,109 @@
+# Examples
+
+In the [next chapter](./basic-workflow) you'll have the opportunity to implement the whole Cortex
+`guide` example yourself in a step by step manner.
+
+Many additional Cortex examples are available in the
+[examples](https://github.com/tracel-ai/burn/tree/main/examples) directory. Cortex examples are
+organized as library crates with one or more examples that are executable binaries. An example can
+then be executed using the following cargo command line in the root of the example's directory:
+
+```bash
+cargo run --release --example <example name>
+```
+
+From the repository root the package has to be named too. A root invocation with no `-p` selects
+every workspace member and unifies their features, which builds backends the example never asked
+for:
+
+```bash
+cargo run -p <package name> --release --example <example name>
+```
+
+To learn more about crates and examples, read the Rust section below.
+
+<details>
+<summary><strong>🦀 About Rust crates</strong></summary>
+
+Each Cortex example is a **package**, which is a subdirectory of the `examples` directory. A package
+is composed of one or more **crates**.
+
+A package is a bundle of one or more crates that provides a set of functionality. A package contains
+a `Cargo.toml` file that describes how to build those crates.
+
+A crate is a compilation unit in Rust. It could be a single file, but it is often easier to split up
+crates into multiple **modules**.
+
+A module lets us organize code within a crate for readability and easy reuse. Modules also allow us
+to control the _privacy_ of items. For instance the `pub(crate)` keyword is employed to make a
+module publicly available inside the crate. In the snippet below there are four modules declared,
+two of them are public and visible to the users of the crates, one of them is public inside the
+crate only and crate users cannot see it, at last one is private when there is no keyword. These
+modules can be single files or a directory with a `mod.rs` file inside.
+
+```rust, ignore
+pub mod data;
+pub mod inference;
+pub(crate) mod model;
+mod training;
+```
+
+A crate can come in one of two forms: a **binary crate** or a **library crate**. When compiling a
+crate, the compiler first looks in the crate root file (`src/lib.rs` for a library crate and
+`src/main.rs` for a binary crate). Any module declared in the crate root file will be inserted in
+the crate for compilation.
+
+All Cortex examples are library crates and they can contain one or more executable examples that use
+the library. We even have some Cortex examples that use the library crate of other examples.
+
+The examples are unique files under the `examples` directory. Each file produces an executable file
+with the same name. Each example can then be executed with `cargo run --example <executable name>`.
+
+Below is a file tree of a typical Cortex example package:
+
+```
+examples/cortex-example
+├── Cargo.toml
+├── examples
+│   ├── example1.rs      ---> compiled to example1 binary
+│   ├── example2.rs      ---> compiled to example2 binary
+│   └── ...
+└── src
+    ├── lib.rs           ---> this is the root file for a library
+    ├── module1.rs
+    ├── module2.rs
+    └── ...
+```
+
+</details><br>
+
+The following additional examples are currently available if you want to check them out:
+
+| Example                                                                                                   | Description                                                                                                                                                                                  |
+| :-------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Custom CSV Dataset](https://github.com/tracel-ai/burn/tree/main/examples/custom-csv-dataset)             | Implements a dataset to parse CSV data for a regression task.                                                                                                                                |
+| [Regression](https://github.com/tracel-ai/burn/tree/main/examples/simple-regression)                      | Trains a simple MLP on the California Housing dataset to predict the median house value for a district.                                                                                      |
+| [Custom Image Dataset](https://github.com/tracel-ai/burn/tree/main/examples/custom-image-dataset)         | Trains a simple CNN on custom image dataset following a simple folder structure.                                                                                                             |
+| [Custom Renderer](https://github.com/tracel-ai/burn/tree/main/examples/custom-renderer)                   | Implements a custom renderer to display the [`Learner`](./building-blocks/learner.md) progress.                                                                                              |
+| [Image Classification Web](https://github.com/tracel-ai/burn-onnx/tree/main/examples/image-classification-web) | Image classification web browser demo using Cortex, WGPU and WebAssembly.                                                                                                                      |
+| [MNIST Inference on Web](https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web)        | An interactive MNIST inference demo in the browser.                                                                                  |
+| [MNIST Training](https://github.com/tracel-ai/burn/tree/main/examples/mnist)                              | Demonstrates how to train a custom [`Module`](./building-blocks/module.md) (MLP) with the [`Learner`](./building-blocks/learner.md) configured to log metrics and keep training checkpoints. |
+| [ONNX Import Inference](https://github.com/tracel-ai/burn-onnx/tree/main/examples/onnx-inference)         | Imports an ONNX model pre-trained on MNIST to perform inference on a sample image with Cortex.                                                                                                 |
+| [PyTorch Import Inference](https://github.com/tracel-ai/burn/tree/main/examples/import-model-weights)          | Imports a PyTorch model pre-trained on MNIST to perform inference on a sample image with Cortex.                                                                                               |
+| [Text Classification](https://github.com/tracel-ai/burn/tree/main/examples/text-classification)           | Trains a text classification transformer model on the AG News or DbPedia datasets. The trained model can then be used to classify a text sample.                                             |
+| [Text Generation](https://github.com/tracel-ai/burn/tree/main/examples/text-generation)                   | Trains a text generation transformer model on the DbPedia dataset.                                                                                                                           |
+| [Wasserstein GAN MNIST](https://github.com/tracel-ai/burn/tree/main/examples/wgan)                        | Trains a WGAN model to generate new handwritten digits based on MNIST.                                                                                                                       |
+
+For more information on each example, see their respective `README.md` file. Be sure to check out
+the [examples](https://github.com/tracel-ai/burn/tree/main/examples) directory for an up-to-date
+list.
+
+<div class="warning">
+
+Note that some examples use the
+[`datasets` library by HuggingFace](https://huggingface.co/docs/datasets/index) to download the
+datasets required in the examples. This is a Python library, which means that you will need to
+install Python before running these examples. This requirement will be clearly indicated in the
+example's README when applicable.
+
+</div>

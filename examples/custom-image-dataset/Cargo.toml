@@ -1,0 +1,24 @@
+[package]
+authors = ["laggui <lagrange.guillaume.1@gmail.com>"]
+edition.workspace = true
+license.workspace = true
+name = "custom-image-dataset"
+description = "Example implementation for loading a custom image dataset from disk"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex/std", "cortex/tui"]
+wgpu = ["cortex/wgpu"]
+metal = ["cortex/metal"]
+vulkan = ["cortex/vulkan"]
+
+[dependencies]
+cortex = { workspace = true, features = ["train", "vision", "network"] }
+
+# File download
+flate2 = { workspace = true }
+tar = { workspace = true }

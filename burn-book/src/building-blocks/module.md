@@ -1,0 +1,681 @@
+# Module
+
+The `Module` derive allows you to create your own neural network modules, similar to PyTorch. The
+derive function only generates the necessary methods to essentially act as a parameter container for
+your type, it makes no assumptions about how the forward pass is declared.
+
+```rust, ignore
+use cortex::module::Module;
+
+#[derive(Module, Debug)]
+pub struct PositionWiseFeedForward {
+    linear_inner: Linear,
+    linear_outer: Linear,
+    dropout: Dropout,
+    gelu: Gelu,
+}
+
+impl PositionWiseFeedForward {
+    /// Normal method added to a struct.
+    pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
+        let x = self.linear_inner.forward(input);
+        let x = self.gelu.forward(x);
+        let x = self.dropout.forward(x);
+
+        self.linear_outer.forward(x)
+    }
+}
+```
+
+## Fields and generic adapters
+
+Fields must implement `Module` and `ModuleDisplay`, unless they are recognized constants (such as
+`usize`, `f32`, `bool` or `String`) or marked `#[module(skip)]`. Use the attribute for custom
+configuration and runtime state, including generic fields. Skipped fields still need
+`Clone + Debug + Send`; they are cloned but excluded from traversal, checkpoints, device movement
+and training/validation transitions.
+
+Bounds are inferred from field types, so a child `Wrapper<T>` needs `Module + ModuleDisplay`
+without requiring `T` to implement those traits. For a generic child `M` and configuration `C`,
+mark the `C` field with `#[module(skip)]`. Your own `Forward` bounds are preserved; the derive
+does not constrain forward methods.
+
+Named and tuple structs can contain recursive children such as `Vec<Self>` or `Option<Box<Self>>`.
+These children participate in traversal, checkpoints and state transitions like any other submodule.
+
+Enums can also derive `Module`. A variant holds either a single unnamed field or named fields:
+
+```rust, ignore
+#[derive(Module, Debug)]
+pub enum Head {
+    Small(Linear),
+    Wide { first: Linear, second: Linear },
+}
+```
+
+Named fields are saved under the variant and the field name (`Wide.first.weight`), the same names
+as a tuple variant wrapping a struct with those fields. Unit variants and tuple variants with
+several fields are not supported.
+
+Custom generic types such as `Block<f32>` are treated as submodules; use `#[module(skip)]` if they
+hold configuration instead. For structures requiring custom traversal, use a
+[manual implementation](https://github.com/tracel-ai/burn/blob/release/0.22/burn-book/src/migrating-to-0.22.md#manual-module-implementations).
+
+## Forward Contract
+
+The derive does not constrain `forward`, so a module's shape contract lives in two places: the doc
+comment of the method, and assertions at its boundary.
+
+### Documenting shapes
+
+Modules in `cortex::nn` document input and output shapes in a `# Shapes` section, one line per tensor,
+with names for the axes that vary at runtime:
+
+```rust, ignore
+/// Applies the feed-forward block.
+///
+/// # Shapes
+///
+/// - input: `[batch_size, seq_length, d_model]`
+/// - output: `[batch_size, seq_length, d_model]`
+pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
+```
+
+Use the same convention for your own modules. It is the first thing a caller reads, and it is the
+reference for the assertions below.
+
+### Enforcing the contract
+
+The rank of a `Tensor<D>` is a type parameter, so a caller cannot pass a `Tensor<4>` where a
+`Tensor<3>` is expected, and `let [batch_size, seq_length, _] = input.dims();` names the axes with
+the rank checked at compile time. The size of each axis is only known at runtime. Two macros,
+available from the prelude, check those sizes at the boundary of a method:
+
+- `assert_shape!` checks the axes of a tensor. It stays on in release builds.
+- `debug_assert_shape!` is the same check, compiled out unless debug assertions are enabled.
+
+Each takes a tensor and a bracketed pattern with one slot per axis. A slot is either `_`, which
+skips the axis, `..`, which stands for any number of axes and may appear once, or any `usize`
+expression the axis must equal:
+
+```rust, ignore
+let [batch_size, seq_length, _] = x.dims();
+let flat = x.clone().reshape([batch_size * seq_length, 256]);
+
+assert_shape!(x, [batch_size, seq_length, 256]);       // names from dims() and a literal
+assert_shape!(flat, [batch_size * seq_length, 256]);   // arithmetic on names
+assert_shape!(patch, [3 * 2, 2]);                      // arithmetic on literals
+assert_shape!(mask, [batch_size, _]);                  // skip an axis
+assert_shape!(hidden, [_, _, self.d_model]);           // a config field
+assert_shape!(hidden, [.., self.d_model]);             // any rank, last axis checked
+assert_shape!(image, [_, self.num_channels, ..]);      // channels first, any spatial rank
+```
+
+The pattern length is the expected rank. Since `tensor.dims()` returns `[usize; D]`, a pattern whose
+length differs from `D` is a compile error rather than a runtime panic, and so is passing anything
+other than a `Tensor`. That makes an exact pattern unusable in a method generic over
+`const D: usize`, like the `PositionWiseFeedForward` at the top of this page. Use `..` there for the
+axes you do not name; the pattern then checks a minimum rank at runtime instead:
+
+```rust, ignore
+pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
+    assert_shape!(input, [.., self.d_model]);
+    // ...
+}
+```
+
+```rust, ignore
+use cortex::nn::{Gelu, Linear};
+use cortex::prelude::*;
+
+#[derive(Module, Debug)]
+pub struct FeedForward {
+    linear_inner: Linear,
+    linear_outer: Linear,
+    gelu: Gelu,
+    d_model: usize,
+    d_ff: usize,
+}
+
+impl FeedForward {
+    /// # Shapes
+    ///
+    /// - input: `[batch_size, seq_length, d_model]`
+    /// - output: `[batch_size, seq_length, d_model]`
+    pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
+        let [batch_size, seq_length, _] = input.dims();
+        assert_shape!(input, [_, _, self.d_model]);
+
+        let x = self.linear_inner.forward(input);
+        debug_assert_shape!(x, [batch_size, seq_length, self.d_ff]);
+
+        let x = self.gelu.forward(x);
+        let output = self.linear_outer.forward(x);
+
+        assert_shape!(output, [batch_size, seq_length, self.d_model]);
+        output
+    }
+}
+```
+
+The pattern reads like the `# Shapes` line above it. A failed check panics with the macro call, the
+axis, the expected and actual sizes, and the full dims of the tensor:
+
+```text
+assert_shape!(output, [batch_size, seq_length, self.d_model]): axis 2 expected 512, got 2048 (dims [8, 128, 2048])
+```
+
+### Choosing a macro
+
+- Name the runtime axes once at the top of `forward` with
+  `let [batch_size, seq_length, _] = input.dims();` and use those names in every check.
+- `assert_shape!` is the default for a contract check. A mismatch that reaches a tensor operation
+  may fail there with a message about that operation's arguments, or broadcast silently when an axis
+  has size 1. The check is a few integer comparisons, so its cost does not matter next to a kernel
+  launch. Cortex's own modules use it at their boundaries.
+- `debug_assert_shape!` is for hot inner loops, or for internal invariants that an earlier always-on
+  check already implies.
+
+These checks complement the validation Cortex performs inside each tensor operation. An operation
+reports a mismatch in terms of its own arguments; a boundary check reports it in terms of the
+module's contract, before any kernel runs.
+
+These macros were inspired by the [`cortex-contracts`](https://github.com/crutcher/cortex-contracts)
+crate by Crutcher Dunnavant.
+
+## Tensor
+
+If you want to create your own module that contains tensors, and not just other modules defined with
+the `Module` derive, you need to be careful to achieve the behavior you want.
+
+- `Param<Tensor<D>>`: If you want the tensor to be included as a parameter of your modules, you need
+  to wrap the tensor in a `Param` struct. This will create an ID that will be used to identify this
+  parameter. This is essential when performing module optimization and when saving states such as
+  optimizer and module checkpoints. Note that a module's record only contains parameters.
+
+- `Param<Tensor<D>>.set_require_grad(false)`: If you want the tensor to be included as a parameter
+  of your modules, and therefore saved with the module's weights, but you don't want it to be
+  updated by the optimizer.
+
+- `Tensor<D>`: If you want the tensor to act as a constant that can be recreated when instantiating
+  a module. This can be useful when generating sinusoidal embeddings, for example.
+
+## Methods
+
+These methods are available for all modules.
+
+Gradient tracking and layer training behavior are separate. `no_grad` and `set_require_grad` change
+only floating-point tensor parameters. `freeze` additionally disables module-owned training flags,
+such as those controlling dropout and batch-normalization running statistics. Group variants apply
+the same behavior only to values matched by the parameter group.
+
+Parameter setters preserve configured trainability even on devices without autodiff, applying it
+when `module.train()` enables autodiff. This differs from calling `Tensor::require_grad()` or
+`Tensor::set_require_grad(true)` directly, which requires the tensor to already have autodiff
+enabled.
+
+| Cortex API                                           | PyTorch Equivalent                       |
+| -------------------------------------------------- | ---------------------------------------- |
+| `module.devices()`                                 | N/A                                      |
+| `module.fork(device)`                              | N/A                                      |
+| `module.to_device(device)`                         | N/A                                      |
+| `module.set_require_grad(enabled)`                 | `module.requires_grad_(enabled)`         |
+| `module.set_require_grad_group(group, enabled)`    | N/A                                      |
+| `module.no_grad()`                                 | `module.requires_grad_(False)`           |
+| `module.freeze()`                                  | N/A                                      |
+| `module.unfreeze()`                                | N/A                                      |
+| `module.num_params()`                              | N/A                                      |
+| `module.visit(visitor)`                            | N/A                                      |
+| `module.map(mapper)`                               | N/A                                      |
+| `module.freeze_group(param_group)`                 | N/A                                      |
+| `module.unfreeze_group(param_group)`               | N/A                                      |
+| `module.apply_lora(lora)`                          | N/A                                      |
+| `module.apply_qlora(qlora)`                        | N/A                                      |
+| `module.apply_reparameterization(reparameterizer)` | N/A                                      |
+| `module.into_record()`                             | Similar to `state_dict`                  |
+| `module.load_record(record)`                       | Similar to `load_state_dict(state_dict)` |
+| `module.try_load_record(record)`                   | Similar to `load_state_dict(state_dict)` |
+| `module.try_load_file(file_path)`                  | Similar to `torch.load(...)`             |
+| `module.load_file(file_path)`                      | Similar to `torch.load(...)`             |
+| `module.save_file(file_path)`                      | Similar to `torch.save(state_dict, ...)` |
+
+### Moving between devices
+
+Use `fork` when you want to train a module on the destination device. Use `to_device` when gradients
+should flow back to the original parameters. For a module with trainable autodiff parameters:
+
+```rust, ignore
+let moved = model.clone().to_device(&destination); // Gradients flow to model's source parameters.
+let independent = model.fork(&destination); // Optimize this module on the destination.
+```
+
+Once a parameter's tensor has been initialized, `to_device` records the transfer in its autodiff
+graph, even if the compute device is unchanged. Gradients flow through the transferred tensor, but
+are not retained for that tensor itself, so an optimizer cannot update the moved parameter. `fork`
+detaches the transferred tensor from the original graph and restores its gradient-retention setting,
+allowing the destination parameter to be optimized independently.
+
+Cortex initializes module parameters lazily by default: their tensor values are created when first
+accessed. If a parameter is still uninitialized and no clone shares its state, both `to_device` and
+`fork` simply change where it will be initialized. No transfer is recorded in this case, and
+built-in initializers use the destination device's random number generator and default dtype. If a
+clone still shares the state, the parameter is initialized on the source device before being
+transferred. Use `fork` for training on the destination so that your code works regardless of
+initialization or cloning.
+
+Both operations preserve the source tensors' autodiff association and checkpointing strategy; the
+destination's autodiff defaults do not enable training. For a module created without autodiff or
+returned by `valid()`, use `module.train().fork(&destination)` to enable autodiff, restore its
+configured training state, and create independent destination parameters.
+
+### Training and validation
+
+The `Module` trait provides both `valid()` and `train()`. Importing `Module` is sufficient for these
+transitions; there is no separate `AutodiffModule` trait. A `Module` bound does not establish the
+current autodiff state. Training and validation modules have the same Rust type. Inspect individual
+parameter tensors with `is_autodiff()` to check whether autodiff is enabled and `is_require_grad()`
+to check whether their gradients are retained.
+
+| Cortex API         | PyTorch Equivalent |
+| ---------------- | ------------------ |
+| `module.valid()` | `module.eval()`    |
+| `module.train()` | `module.train()`   |
+
+Unlike their PyTorch counterparts, Cortex's `valid()` and `train()` also transition a module between
+its autodiff and inner backends. `valid()` temporarily disables gradient tracking and training flags
+while preserving their configured state. `train()` returns the module to the autodiff backend and
+reapplies that state; it does not undo an explicit `no_grad()` or `freeze()`.
+
+For dropout, training behavior also requires an autodiff-associated input. `dropout.train()` cannot
+change the context of inputs supplied later. Create inputs on the training device, or explicitly
+call `input.autodiff()`; `input.to_device(&training_device)` alone does not enable autodiff.
+Ordinary model inputs need no `require_grad()` unless their own gradients are needed.
+
+Cortex's `freeze()` and `unfreeze()` persistently set both tensor gradient tracking and module-owned
+training flags, so they have no direct PyTorch equivalent.
+
+## Visitor & Mapper
+
+As mentioned earlier, modules primarily function as parameter containers. Therefore, we naturally
+offer several ways to perform functions on each parameter. This is distinct from PyTorch, where
+extending module functionalities is not as straightforward.
+
+The `map` and `visitor` methods are quite similar but serve different purposes. Mapping is used for
+potentially mutable operations where each parameter of a module can be updated to a new value. In
+Cortex, optimizers are essentially just sophisticated module mappers. Visitors, on the other hand, are
+used when you don't intend to modify the module but need to retrieve specific information from it,
+such as the number of parameters or a list of devices in use.
+
+You can implement your own mapper or visitor using the following tensor hooks. They receive `Param`
+values, which provide access to both the parameter ID and its tensor:
+
+```rust, ignore
+use cortex::{
+    module::Param,
+    tensor::{Bool, Int, Tensor},
+};
+
+/// Module visitor trait.
+pub trait ModuleVisitor {
+    /// Visit a float tensor in the module.
+    fn visit_float<const D: usize>(&mut self, param: &Param<Tensor<D>>);
+    /// Visit an int tensor in the module.
+    fn visit_int<const D: usize>(&mut self, param: &Param<Tensor<D, Int>>);
+    /// Visit a bool tensor in the module.
+    fn visit_bool<const D: usize>(&mut self, param: &Param<Tensor<D, Bool>>);
+}
+
+/// Module mapper trait.
+pub trait ModuleMapper {
+    /// Map a float tensor in the module.
+    fn map_float<const D: usize>(&mut self, param: Param<Tensor<D>>) -> Param<Tensor<D>>;
+    /// Map an int tensor in the module.
+    fn map_int<const D: usize>(&mut self, param: Param<Tensor<D, Int>>) -> Param<Tensor<D, Int>>;
+    /// Map a bool tensor in the module.
+    fn map_bool<const D: usize>(&mut self, param: Param<Tensor<D, Bool>>) -> Param<Tensor<D, Bool>>;
+}
+```
+
+Note that the trait doesn't require all methods to be implemented as they are already defined to
+perform no operation. If you're only interested in float tensors (like the majority of use cases),
+then you can simply implement `map_float` or `visit_float`.
+
+For example, the `ModuleMapper` trait could be implemented to clamp all parameters into the range
+`[min, max]`.
+
+```rust, ignore
+use cortex::{
+    module::{Module, ModuleMapper, Param},
+    tensor::Tensor,
+};
+
+/// Clamp parameters into the range `[min, max]`.
+pub struct Clamp {
+    /// Lower-bound of the range.
+    pub min: f32,
+    /// Upper-bound of the range.
+    pub max: f32,
+}
+
+// Clamp all floating-point parameter tensors between `[min, max]`.
+impl ModuleMapper for Clamp {
+    fn map_float<const D: usize>(&mut self, param: Param<Tensor<D>>) -> Param<Tensor<D>> {
+        param.map(|tensor| tensor.clamp(self.min, self.max))
+    }
+}
+
+// Clamp module mapper into the range `[-0.5, 0.5]`
+let mut clamp = Clamp {
+    min: -0.5,
+    max: 0.5,
+};
+let model = model.map(&mut clamp);
+```
+
+To constrain trainable model parameters, keep their tensors as leaves that retain their gradients.
+Detach after clamping to cut the operation's graph connection, then restore the original retention
+setting. `Param::map` also preserves configured trainability for later calls to `train()`.
+
+```rust, ignore
+impl ModuleMapper for Clamp {
+    fn map_float<const D: usize>(&mut self, param: Param<Tensor<D>>) -> Param<Tensor<D>> {
+        param.map(|tensor| {
+            let require_grad = tensor.is_require_grad();
+            tensor
+                .clamp(self.min, self.max)
+                .detach()
+                .set_require_grad(require_grad)
+        })
+    }
+}
+```
+
+## Reparameterization
+
+A reparameterization changes how a parameter's effective value is computed without changing the
+module's type or forward pass. The original parameter remains its structural base, while an attached
+state materializes the value returned by `Param::val()`. LoRA uses this mechanism to keep a frozen
+structural base and attach trainable low-rank factors:
+
+```rust, ignore
+use cortex::module::{Lora, Module};
+
+let model = model.apply_lora(Lora::new(8, 16.0));
+```
+
+The `Reparameterizer` receives every floating-point parameter and its module path. It decides which
+parameters to transform, prepares their structural bases, and optionally attaches a
+`Reparameterization`, whose `apply(base)` method computes the effective value. A reparameterization
+is itself a regular module, so its parameters automatically participate in visitors, mappers,
+optimization, records, device transfers, and autodiff. Custom techniques implement these traits and
+are applied through `apply_reparameterization`, making custom parameter-level PEFT methods possible
+without modifying the original model or layer.
+
+LoRA and QLoRA are built on the same mechanism but provide the convenience methods `apply_lora` and
+`apply_qlora` for normal use. Reparameterizations cannot currently be nested, so
+`apply_reparameterization` should only be called on a module that does not already contain
+reparameterized parameters. Use `Param::base()` to access the stored base directly and
+`Param::val()` to obtain the materialized value.
+
+### Validation and materialization
+
+`valid()` disables autodiff and training flags while keeping base weights and adapters separate. It
+does not select which parameters are saved: `valid().into_record()` includes both the base weights
+and adapter factors. For adapter-only export, select the factors with `into_record_group`:
+
+```rust, ignore
+use cortex::module::{Lora, Module, ParamGroup};
+use cortex::store::ModuleRecord;
+
+// Select the built-in LoRA factors, including those used by QLoRA.
+let adapters = ParamGroup::from_regex(r"(^|\.)lora\.(a|b)$").unwrap();
+model
+    .valid()
+    .into_record_group(adapters)
+    .save("adapters.bpk")
+    .unwrap();
+
+// Start from the original base checkpoint and attach the same adapter configuration.
+let restored = base_model
+    .apply_lora(Lora::new(8, 16.0))
+    .valid()
+    .load_record(ModuleRecord::load("adapters.bpk").unwrap().allow_partial(true));
+```
+
+Here, `base_model` has already loaded the original base weights, and the LoRA configuration matches
+the one used for training. For QLoRA, recreate the same packed base and adapters with `apply_qlora`
+instead. Adapter-only records contain the factor tensors; they do not include the base weights or
+adapter configuration. `allow_partial(true)` leaves parameters absent from the record unchanged.
+
+`materialize()` folds reparameterizations into the weights and removes their structure. Use a merged
+snapshot for repeated inference without recomputing adapter updates, or to export a standalone
+model:
+
+```rust, ignore
+let validation = model.valid(); // Keep adapters for evaluation and adapter-only export.
+let merged = validation.clone().materialize(); // Merge them for inference or full-model export.
+```
+
+Materialization does not change training mode and cannot be undone; keep the original model if you
+need its adapters. Parameters without reparameterizations remain lazy. For QLoRA, materialization
+produces dense weights. Requantization is separate and can change the model's outputs.
+
+QLoRA forward passes can still materialize dense effective weights. Autodiff may retain them for
+backward and compute full weight-shaped gradients. Fusion can avoid a separate dequantized base
+allocation, but does not eliminate all dense intermediates.
+
+## Module Display
+
+Cortex provides a simple way to display the structure of a module and its configuration at a glance.
+You can print the module to see its structure, which is useful for debugging and tracking changes
+across different versions of a module. (See the print output of the
+[Basic Workflow Model](../basic-workflow/model.md) example.)
+
+To customize the display of a module, you can implement the `ModuleDisplay` trait for your module.
+This will change the default display settings for the module and its children. Note that
+`ModuleDisplay` is automatically implemented for all modules, but you can override it to customize
+the display by annotating the module with `#[module(custom_display)]`.
+
+```rust
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct PositionWiseFeedForward {
+    linear_inner: Linear,
+    linear_outer: Linear,
+    dropout: Dropout,
+    gelu: Gelu,
+}
+
+impl ModuleDisplay for PositionWiseFeedForward {
+    /// Custom settings for the display of the module.
+    /// If `None` is returned, the default settings will be used.
+    fn custom_settings(&self) -> Option<cortex::module::DisplaySettings> {
+        DisplaySettings::new()
+            // Will show all attributes (default is false)
+            .with_show_all_attributes(false)
+            // Will show each attribute on a new line (default is true)
+            .with_new_line_after_attribute(true)
+            // Will show the number of parameters (default is true)
+            .with_show_num_parameters(true)
+            // Will indent by 2 spaces (default is 2)
+            .with_indentation_size(2)
+            // Will show the parameter ID (default is false)
+            .with_show_param_id(false)
+            // Convenience method to wrap settings in Some()
+            .optional()
+    }
+
+    /// Custom content to be displayed.
+    /// If `None` is returned, the default content will be used
+    /// (all attributes of the module)
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        content
+            .add("linear_inner", &self.linear_inner)
+            .add("linear_outer", &self.linear_outer)
+            .add("anything", "anything_else")
+            .optional()
+    }
+}
+```
+
+## Built-in Modules
+
+Cortex comes with built-in modules that you can use to build your own modules.
+
+`CosineSimilarity`, `PairwiseDistance`, `CosineEmbeddingLoss`, `TripletMarginLoss`, and
+`Initializer::Orthogonal` require the `linalg` feature of `cortex`.
+
+### General
+
+| Cortex API            | PyTorch Equivalent                            |
+| ------------------- | --------------------------------------------- |
+| `BatchNorm`         | `nn.BatchNorm1d`, `nn.BatchNorm2d` etc.       |
+| `Celu`              | `nn.CELU`                                     |
+| `Dropout`           | `nn.Dropout`                                  |
+| `Elu`               | `nn.ELU`                                      |
+| `Embedding`         | `nn.Embedding`                                |
+| `Fold4d`            | `nn.Fold`                                     |
+| `GaussianNoise`     | _No direct equivalent_                        |
+| `Gelu`              | `nn.Gelu`                                     |
+| `GLU`               | `nn.GLU`                                      |
+| `GroupNorm`         | `nn.GroupNorm`                                |
+| `HardShrink`        | `nn.Hardshrink`                               |
+| `HardSigmoid`       | `nn.Hardsigmoid`                              |
+| `Hardtanh`          | `nn.Hardtanh`                                 |
+| `CosineSimilarity`  | `nn.CosineSimilarity`                         |
+| `HardSwish`         | `nn.Hardswish`                                |
+| `Identity`          | `nn.Identity`                                 |
+| `InstanceNorm`      | `nn.InstanceNorm1d`, `nn.InstanceNorm2d` etc. |
+| `LayerNorm`         | `nn.LayerNorm`                                |
+| `LocalResponseNorm` | `nn.LocalResponseNorm`                        |
+| `LeakyRelu`         | `nn.LeakyReLU`                                |
+| `LogSigmoid`        | `nn.LogSigmoid`                               |
+| `Mish`              | `nn.Mish`                                     |
+| `Linear`            | `nn.Linear`                                   |
+| `PairwiseDistance`  | `nn.PairwiseDistance`                         |
+| `PixelShuffle`      | `nn.PixelShuffle`                             |
+| `PixelUnshuffle`    | `nn.PixelUnshuffle`                           |
+| `PRelu`             | `nn.PReLU`                                    |
+| `Relu`              | `nn.ReLU`                                     |
+| `Relu6`             | `nn.ReLU6`                                    |
+| `RRelu`             | `nn.RReLU`                                    |
+| `Selu`              | `nn.SELU`                                     |
+| `Sigmoid`           | `nn.Sigmoid`                                  |
+| `SiLU`              | `nn.SiLU`                                     |
+| `Softplus`          | `nn.Softplus`                                 |
+| `SoftShrink`        | `nn.Softshrink`                               |
+| `Softsign`          | `nn.Softsign`                                 |
+| `Shrink`            | _No direct equivalent_                        |
+| `RmsNorm`           | _No direct equivalent_                        |
+| `SwiGlu`            | _No direct equivalent_                        |
+| `Tanh`              | `nn.Tanh`                                     |
+| `Tanhshrink`        | `nn.Tanhshrink`                               |
+| `Threshold`         | `nn.Threshold`                                |
+| `ThresholdedRelu`   | _No direct equivalent_                        |
+| `Unfold4d`          | `nn.Unfold`                                   |
+
+### Convolutions
+
+| Cortex API          | PyTorch Equivalent             |
+| ----------------- | ------------------------------ |
+| `Conv1d`          | `nn.Conv1d`                    |
+| `Conv2d`          | `nn.Conv2d`                    |
+| `Conv3d`          | `nn.Conv3d`                    |
+| `ConvTranspose1d` | `nn.ConvTranspose1d`           |
+| `ConvTranspose2d` | `nn.ConvTranspose2d`           |
+| `ConvTranspose3d` | `nn.ConvTranspose3d`           |
+| `DeformConv2d`    | `torchvision.ops.DeformConv2d` |
+
+### Pooling
+
+| Cortex API            | PyTorch Equivalent     |
+| ------------------- | ---------------------- |
+| `AdaptiveAvgPool1d` | `nn.AdaptiveAvgPool1d` |
+| `AdaptiveAvgPool2d` | `nn.AdaptiveAvgPool2d` |
+| `AdaptiveAvgPool3d` | `nn.AdaptiveAvgPool3d` |
+| `AvgPool1d`         | `nn.AvgPool1d`         |
+| `AvgPool2d`         | `nn.AvgPool2d`         |
+| `MaxPool1d`         | `nn.MaxPool1d`         |
+| `MaxPool2d`         | `nn.MaxPool2d`         |
+
+### Interpolation
+
+| Cortex API        | PyTorch Equivalent |
+| --------------- | ------------------ |
+| `Interpolate1d` | `nn.Upsample`      |
+| `Interpolate2d` | `nn.Upsample`      |
+
+Interpolation modules resize tensors using one of the available `InterpolateMode` options:
+
+| Mode      | Description                                        |
+| --------- | -------------------------------------------------- |
+| `Nearest` | Nearest-neighbor interpolation                     |
+| `NearestExact` | Nearest-neighbor interpolation with half-pixel mapping |
+| `Linear`  | Linear interpolation (bilinear for 2D)             |
+| `Cubic`   | Cubic interpolation (bicubic for 2D)               |
+| `Lanczos` | Lanczos3 resampling (6-tap sinc-based filter, a=3) |
+
+Configuration is done via `Interpolate1dConfig` / `Interpolate2dConfig` with these options. Exactly
+one of `output_size` or `scale_factor` must be set; `forward` panics otherwise.
+
+| Option          | Type                                   | Default   | Description                                    |
+| --------------- | -------------------------------------- | --------- | ---------------------------------------------- |
+| `output_size`   | `Option<usize>` / `Option<[usize; 2]>` | `None`    | Target output size; set this or `scale_factor` |
+| `scale_factor`  | `Option<f32>` / `Option<[f32; 2]>`     | `None`    | Output is `floor(input * scale_factor)`        |
+| `mode`          | `InterpolateMode`                      | `Nearest` | Interpolation algorithm                        |
+
+Algorithm-specific settings belong to the `InterpolateMode` variants.
+`Linear`, `Cubic` and `Lanczos` accept `HalfPixel` or `AlignCorners` coordinate transforms.
+`Nearest` uses fixed asymmetric coordinates with floor rounding; `NearestExact` uses fixed
+half-pixel coordinates with ties rounded upward.
+
+```rust,ignore
+Interpolate2dConfig::new()
+    .with_output_size(Some([224, 224]))
+    .with_mode(InterpolateMode::Cubic {
+        coordinate_transform: CoordinateTransformMode::HalfPixel,
+        a: -0.75,
+    })
+    .init();
+```
+
+### RNNs
+
+| Cortex API         | PyTorch Equivalent     |
+| ---------------- | ---------------------- |
+| `Gru`/`BiGru`    | `nn.GRU`               |
+| `Lstm`/`BiLstm`  | `nn.LSTM`              |
+| `GateController` | _No direct equivalent_ |
+
+### Transformer
+
+| Cortex API             | PyTorch Equivalent      |
+| -------------------- | ----------------------- |
+| `MultiHeadAttention` | `nn.MultiheadAttention` |
+| `TransformerDecoder` | `nn.TransformerDecoder` |
+| `TransformerEncoder` | `nn.TransformerEncoder` |
+| `PositionalEncoding` | _No direct equivalent_  |
+| `RotaryEncoding`     | _No direct equivalent_  |
+
+### Loss
+
+| Cortex API                 | PyTorch Equivalent                |
+| ------------------------ | --------------------------------- |
+| `BinaryCrossEntropyLoss` | `nn.BCELoss`                      |
+| `CosineEmbeddingLoss`    | `nn.CosineEmbeddingLoss`          |
+| `CrossEntropyLoss`       | `nn.CrossEntropyLoss`             |
+| `CTCLoss`                | `nn.CTCLoss`                      |
+| `GramMatrixLoss`         | _No direct equivalent_            |
+| `GaussianNLLLoss`        | `nn.GaussianNLLLoss`              |
+| `HingeEmbeddingLoss`     | `nn.HingeEmbeddingLoss`           |
+| `HuberLoss`              | `nn.HuberLoss`                    |
+| `KLDivLoss`              | `nn.KLDivLoss`                    |
+| `LpLoss`                 | _No direct equivalent_            |
+| `MarginRankingLoss`      | `nn.MarginRankingLoss`            |
+| `MseLoss`                | `nn.MSELoss`                      |
+| `MultiMarginLoss`        | `nn.MultiMarginLoss`              |
+| `PoissonNllLoss`         | `nn.PoissonNLLLoss`               |
+| `RNNTLoss`               | `torchaudio.functional.rnnt_loss` |
+| `SmoothL1Loss`           | `nn.SmoothL1Loss`                 |
+| `SoftMarginLoss`         | `nn.SoftMarginLoss`               |
+| `TripletMarginLoss`      | `nn.TripletMarginLoss`            |

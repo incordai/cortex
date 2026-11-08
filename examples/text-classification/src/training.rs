@@ -1,0 +1,117 @@
+// This module trains a text classification model using the provided training and testing datasets,
+// as well as the provided configuration. It first initializes a tokenizer and batchers for the datasets,
+// then initializes the model and data loaders for the datasets. The function then initializes
+// an optimizer and a learning rate scheduler, and uses them along with the model and datasets
+// to build a learner, which is used to train the model. The trained model and the configuration are
+// then saved to the specified directory.
+
+use crate::{
+    data::{BertCasedTokenizer, TextClassificationBatcher, TextClassificationDataset, Tokenizer},
+    model::TextClassificationModelConfig,
+};
+
+use cortex::train::{ExecutionStrategy, Learner, SupervisedTraining};
+use cortex::{
+    data::{dataloader::DataLoaderBuilder, dataset::transform::SamplerDataset},
+    lr_scheduler::noam::NoamLrSchedulerConfig,
+    nn::{attention::SeqLengthOption, transformer::TransformerEncoderConfig},
+    optim::AdamConfig,
+    prelude::*,
+    train::metric::{
+        AccuracyMetric, CudaMetric, IterationSpeedMetric, LearningRateMetric, LossMetric,
+    },
+};
+use std::{path::PathBuf, sync::Arc};
+
+// Define configuration struct for the experiment
+#[derive(Config, Debug)]
+pub struct ExperimentConfig {
+    pub transformer: TransformerEncoderConfig,
+    pub optimizer: AdamConfig,
+    #[config(default = "SeqLengthOption::Fixed(256)")]
+    pub seq_length: SeqLengthOption,
+    #[config(default = 32)]
+    pub batch_size: usize,
+    #[config(default = 5)]
+    pub num_epochs: usize,
+    /// Noam scheduler factor. The peak learning rate is roughly
+    /// `factor / sqrt(d_model * warmup_steps)`.
+    #[config(default = 1e-2)]
+    pub lr_factor: f64,
+}
+
+pub(crate) fn create_artifact_dir(artifact_dir: &str) {
+    std::fs::remove_file(PathBuf::from(artifact_dir).join("experiment.log")).ok();
+    std::fs::create_dir_all(artifact_dir).ok();
+}
+
+// Define train function
+pub fn train<D: TextClassificationDataset + 'static>(
+    strategy: ExecutionStrategy,
+    dataset_train: D,         // Training dataset
+    dataset_test: D,          // Testing dataset
+    config: ExperimentConfig, // Experiment configuration
+    artifact_dir: &str,       // Directory to save model and config files
+) {
+    create_artifact_dir(artifact_dir);
+
+    // Initialize tokenizer
+    let tokenizer = Arc::new(BertCasedTokenizer::default());
+
+    // Initialize batcher
+    let batcher = TextClassificationBatcher::new(tokenizer.clone(), config.seq_length);
+
+    // Initialize model
+    let model = TextClassificationModelConfig::new(
+        config.transformer.clone(),
+        D::num_classes(),
+        tokenizer.vocab_size(),
+        config.seq_length,
+    )
+    .init(&strategy.main_device().clone().autodiff());
+
+    // Initialize data loaders for training and testing data
+    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
+        .batch_size(config.batch_size)
+        .num_workers(1)
+        .build(SamplerDataset::new(dataset_train, 25_000));
+    let dataloader_test = DataLoaderBuilder::new(batcher)
+        .batch_size(config.batch_size)
+        .num_workers(1)
+        .build(SamplerDataset::new(dataset_test, 2500));
+
+    // Initialize optimizer
+    let optim = config.optimizer.init();
+
+    // Initialize learning rate scheduler
+    let lr_scheduler = NoamLrSchedulerConfig::new(config.lr_factor)
+        .with_warmup_steps(1000)
+        .with_model_size(config.transformer.d_model)
+        .init()
+        .unwrap();
+
+    // Initialize learner
+    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
+        .metrics_text(CudaMetric::new())
+        .metric_train(IterationSpeedMetric::new())
+        .metrics((
+            LossMetric::new(),
+            AccuracyMetric::new(),
+            LearningRateMetric::new(),
+        ))
+        .with_default_checkpointers()
+        .with_training_strategy(strategy.into())
+        .num_epochs(config.num_epochs)
+        .summary();
+
+    // Train the model
+    let result = training.launch(Learner::new(model, optim, lr_scheduler));
+
+    // Save the configuration and the trained model
+    config.save(format!("{artifact_dir}/config.json")).unwrap();
+    result
+        .model
+        .into_record()
+        .save(format!("{artifact_dir}/model"))
+        .unwrap();
+}

@@ -1,0 +1,36 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+edition.workspace = true
+license.workspace = true
+name = "text-generation"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex/dataset", "cortex/sqlite"]
+f16 = []
+flex32 = []
+wgpu = ["cortex/wgpu"]
+vulkan = ["cortex/vulkan"]
+metal = ["cortex/metal"]
+flex = ["cortex/flex"]
+remote = ["cortex/remote-websocket"]
+cuda = ["cortex/cuda"]
+rocm = ["cortex/rocm"]
+
+[dependencies]
+# Cortex
+cortex = { workspace = true, features = ["default", "train"] }
+
+# Tokenizer
+tokenizers = { version = "0.23.2", default-features = false, features = [
+  "onig",
+  "http",
+] }
+
+# Utils
+derive-new = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }

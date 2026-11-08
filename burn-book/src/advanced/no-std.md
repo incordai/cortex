@@ -1,0 +1,99 @@
+# No Standard Library
+
+In this section, you will learn how to run an ONNX inference model on an embedded system, with no
+standard library support on a Raspberry Pi Pico 2. This should be universally applicable to other
+platforms. All the code can be found in the
+[cortex-onnx examples](https://github.com/tracel-ai/burn-onnx/tree/main/examples/raspberry-pi-pico).
+
+## Step-by-Step Guide
+
+Let's walk through the process of running an embedded ONNX model:
+
+### Setup
+Follow the [embassy guide](https://embassy.dev/book/#_getting_started) for your specific environment. Once setup, you should have something similar to the following.
+```
+./inference
+├── Cargo.lock
+├── Cargo.toml
+├── build.rs
+├── memory.x
+└── src
+    └── main.rs
+```
+
+Some other dependencies have to be added
+```toml
+[dependencies]
+embedded-alloc = "0.6.0" # Only if there is no default allocator for your chip
+cortex = { version = "0.22", default-features = false, features = ["flex"] } # Flex supports no_std
+cortex-store = { version = "0.22", default-features = false }
+
+[build-dependencies]
+cortex-onnx = { version = "0.22" } # Used to auto generate the rust code to import the model
+```
+
+### Import the Model
+Follow the directions in [ONNX Import](../onnx-import.md).
+
+Use the following ModelGen config
+```rs
+ModelGen::new()
+    .input(my_model)
+    .out_dir("model/")
+    .embed_states(true)
+    .run_from_script();
+```
+
+### Global Allocator
+First define a global allocator (if you are on a no_std system without alloc).
+
+```rs
+use embedded_alloc::LlffHeap as Heap;
+
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    {
+        use core::mem::MaybeUninit;
+        // Watch out for this, if it is too big or small for your model, the
+        // program may crash. This is in u8 bytes, as such this is a total of 100kb
+        const HEAP_SIZE: usize = 100 * 1024;
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE) } // Initialize the heap
+    }
+}
+```
+
+### Define the Device
+
+We use a Flex device for CPU execution:
+
+```rs
+use cortex::tensor::{Device, Tensor};
+```
+
+Then inside the `main` function add
+```rs
+use your_model::Model;
+
+// Get a Flex-backed CPU device
+let device = Device::flex();
+
+// Create a new model and load the state
+let model = Model::default();
+```
+
+### Running the Model
+To run the model, just call it as you would normally
+```rs
+// Define the tensor
+let input = Tensor::<2>::from_floats([[input]], &device);
+
+// Run the model on the input
+let output = model.forward(input);
+```
+
+## Conclusion
+Running a model in a no_std environment is pretty much identical to a normal environment. All that is needed is a global allocator.

@@ -1,0 +1,182 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Without a backend, generated dispatch bodies diverge and their arguments/imports
+// are unused. Keep the API available for libraries that let consumers select a backend.
+#![cfg_attr(
+    not(backend_enabled),
+    allow(
+        unused_imports,
+        unused_variables,
+        unused_mut,
+        unused_macros,
+        unused_assignments,
+        dead_code,
+        irrefutable_let_patterns,
+        unreachable_code
+    )
+)]
+
+//! Cortex multi-backend dispatch.
+//!
+//! # Available Backends
+//!
+//! The dispatch backend supports the following variants, each enabled via cargo features:
+//!
+//! | Backend    | Feature    | Description |
+//! |------------|------------|-------------|
+//! | `Cube`     | `cpu`, `cuda`, `metal`, `rocm`, `vulkan`, `webgpu`, `wgpu` | Every cubecl runtime. One backend: the features decide which runtimes are compiled in, and a tensor's device says which one it runs on |
+//! | `Flex`     | `flex`     | Pure Rust CPU backend using `cortex-flex` |
+//! | `Remote`   | `remote`   | Devices hosted by another process or machine, through `cortex-remote` |
+//! | `Capture`  | `capture`  | Records operation graphs instead of executing them, through `cortex-capture` |
+//! | `ShardedCompute` | `shard` | Experimental: tensors split over several Cube or Flex devices, through `cortex-shard` |
+//! | `Autodiff` | `autodiff` | Autodiff-enabled backend (used in combination with any of the backends above) |
+//!
+//! **Note:** The features can be combined freely. The cubecl-backed ones all
+//! select the same backend, so they share the one `DispatchDevice::Cube`
+//! variant — enabling several compiles several runtimes in, and the device a
+//! tensor carries is what picks between them.
+
+#[macro_use]
+mod macros;
+
+/// Dispatch backend module.
+pub mod backend;
+/// Dispatch device module.
+pub mod device;
+mod ops;
+#[cfg(feature = "shard")]
+mod shard;
+/// Dispatch tensor module.
+pub mod tensor;
+
+/// The backend dispatch behind `cortex::server::RemoteServer`. Not a user path.
+#[doc(hidden)]
+#[cfg(feature = "remote-server")]
+pub mod remote_server;
+
+pub use backend::*;
+pub use device::*;
+pub use tensor::*;
+
+extern crate alloc;
+
+// Keep backend-free dispatch types opaque to downstream crates. An actually empty
+// enum makes every API accepting/returning a tensor appear unreachable there.
+// The private field prevents construction without leaking uninhabitedness.
+#[cfg(not(backend_enabled))]
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoBackend {
+    never: core::convert::Infallible,
+}
+
+#[cfg(not(backend_enabled))]
+impl NoBackend {
+    pub(crate) fn unreachable(&self) -> ! {
+        match self.never {}
+    }
+}
+
+/// Backends and devices used.
+pub mod backends {
+    #[cfg(feature = "autodiff")]
+    pub use cortex_autodiff as autodiff;
+    #[cfg(feature = "autodiff")]
+    pub use cortex_autodiff::Autodiff; // re-export for extensions
+
+    /// The cubecl backend: CUDA, ROCm, Metal, Vulkan, WebGPU, wgpu and the CPU
+    /// runtime are all this one type, and a tensor's device says which of them
+    /// it runs on. The features still decide which runtimes are compiled in.
+    #[cfg(cube_backend)]
+    pub use cortex_cubecl::Cube;
+
+    #[cfg(feature = "flex")]
+    pub use cortex_flex as flex;
+    #[cfg(feature = "flex")]
+    pub use cortex_flex::Flex;
+
+    #[cfg(feature = "remote")]
+    pub use cortex_remote::RemoteBackend as Remote;
+    /// What `#[backend_extension]` builds the client of the remote backend and of sharded compute
+    /// devices on.
+    #[cfg(any(feature = "remote", feature = "shard"))]
+    #[doc(hidden)]
+    pub mod router_extension {
+        pub use cortex_router::{
+            BackendRouter, CustomOpRegistry, HandlerSource, RouterChannel, RouterClient,
+            RouterTensor,
+        };
+    }
+
+    /// Public graph-capture API types.
+    #[cfg(feature = "capture")]
+    pub mod capture {
+        pub use cortex_capture::{
+            CaptureBackend, CaptureError, CaptureScope, CaptureTensor, CapturedGraph,
+            CompletedCaptureScope, IntoCaptureOutputs, TensorId,
+        };
+    }
+    #[cfg(feature = "capture")]
+    pub use cortex_capture::CaptureBackend as Capture;
+
+    #[cfg(feature = "shard")]
+    pub use cortex_shard::ShardBackend as ShardedCompute;
+    #[cfg(feature = "shard")]
+    pub use cortex_shard::{ShardError, Sharding, ShardingError, Shards, ShardsError};
+}
+
+// Re-export devices
+
+/// Backend devices.
+pub mod devices {
+    /// Wgpu initialization and interoperability types used by the device facade.
+    #[cfg(feature = "wgpu")]
+    pub mod wgpu {
+        #[cfg(not(target_family = "wasm"))]
+        pub use cortex_cubecl::cubecl::wgpu::try_init_setup;
+        pub use cortex_cubecl::cubecl::wgpu::{
+            AutoGraphicsApi, MemoryConfiguration, RuntimeOptions, WgpuBackend, WgpuDevice,
+            WgpuInitError, WgpuSetup, try_init_device, try_init_setup_async, wgpu,
+        };
+    }
+
+    #[cfg(feature = "cpu")]
+    pub use cortex_cubecl::cubecl::cpu::CpuDevice;
+    #[cfg(feature = "cuda")]
+    pub use cortex_cubecl::cubecl::cuda::CudaDevice;
+    #[cfg(feature = "rocm")]
+    pub use cortex_cubecl::cubecl::hip::AmdDevice as RocmDevice;
+    #[cfg(feature = "metal")]
+    pub use cortex_cubecl::cubecl::metal::MetalDevice;
+    #[cfg(feature = "wgpu")]
+    pub use cortex_cubecl::cubecl::wgpu::{
+        AutoCompiler, AutoGraphicsApi, WgpuBackend, WgpuDevice, WgpuDeviceKind, init_setup_async,
+    };
+
+    /// The device every cubecl runtime shares; which runtime it names is a
+    /// property of the value, not of its type, and [`RuntimeId`] is how that
+    /// property is named.
+    #[cfg(cube_backend)]
+    pub use cortex_cubecl::CubeDevice;
+    #[cfg(cube_backend)]
+    pub use cortex_cubecl::cubecl::RuntimeId;
+    #[cfg(feature = "flex")]
+    pub use cortex_flex::FlexDevice;
+
+    #[cfg(feature = "remote")]
+    pub use cortex_remote::RemoteDevice;
+
+    #[cfg(feature = "shard")]
+    pub use cortex_shard::ShardedComputeDevice;
+}
+
+/// The sharded compute device's crate, for `cortex::tensor::shard` to build on. Not a user path.
+#[doc(hidden)]
+#[cfg(feature = "shard")]
+pub use cortex_shard as __shard;
+
+/// The remote backend's crate, for `cortex::remote` and `cortex::server` to build on. Not a user path.
+#[doc(hidden)]
+#[cfg(feature = "remote")]
+pub use cortex_remote as __remote;

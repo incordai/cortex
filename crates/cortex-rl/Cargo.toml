@@ -1,0 +1,25 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "RL crate for the Cortex framework"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch"]
+license.workspace = true
+name = "cortex-rl"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-rl"
+documentation = "https://docs.rs/cortex-rl"
+version.workspace = true
+
+[dependencies]
+cortex-core = { workspace = true, features = ["std"] }
+
+derive-new.workspace = true
+log = { workspace = true }
+
+[dev-dependencies]
+# Test backend
+cortex-core = { workspace = true, features = ["default", "flex"]}
+
+[lints]
+workspace = true

@@ -1,0 +1,187 @@
+use crate::Initializer;
+use cortex_core as cortex;
+
+use crate::activation::{Activation, ActivationConfig};
+use crate::modules::bounds;
+use crate::modules::role::Role;
+use crate::{Dropout, DropoutConfig, Linear, LinearConfig};
+use cortex::config::Config;
+use cortex::instrument::{self, Bounds, compute};
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use cortex::tensor::{Device, Tensor, assert_shape};
+
+/// Configuration to create a [position-wise feed-forward](PositionWiseFeedForward) layer using the [init function](PositionWiseFeedForwardConfig::init).
+#[derive(Config, Debug)]
+pub struct PositionWiseFeedForwardConfig {
+    /// The size of the input and output features.
+    pub d_model: usize,
+    /// The size of the hidden inner features.
+    pub d_ff: usize,
+    /// The dropout rate. Default: 0.1
+    #[config(default = 0.1)]
+    pub dropout: f64,
+    /// The type of function used to initialize neural network parameters
+    #[config(
+        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0), fan_out_only:false}"
+    )]
+    pub initializer: Initializer,
+    /// The activation function used between the two linear layers. Default: Gelu
+    #[config(default = "ActivationConfig::Gelu")]
+    pub activation: ActivationConfig,
+}
+
+/// Applies the position-wise feed-forward network to the input tensor from the paper [Attention Is All You Need](https://arxiv.org/pdf/1706.03762v7).
+///
+/// # Params
+///
+/// - linear inner: Linear layer with `d_model` input features and `d_ff` output features.
+/// - linear outer: Linear layer with `d_ff` input features and `d_model` output features.
+///
+/// `FFN(x) = max(0, xW1 + b1)W2 + b2`
+///
+/// Should be created using [PositionWiseFeedForwardConfig]
+///
+/// # Notes
+///
+/// Tensor checkpoints saved when this module always used GELU remain compatible:
+/// GELU has no parameters, and the linear layer tensor paths are unchanged.
+///
+/// Older checkpoints using stateful activations omitted their parameters. To load
+/// such checkpoints, use a storage path filter that includes only `linear_inner`
+/// and `linear_outer`. The activation keeps its initialized parameters, while
+/// missing linear layer parameters are still reported by strict loading.
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct PositionWiseFeedForward {
+    /// Linear layer with `d_model` input features and `d_ff` output features.
+    pub linear_inner: Linear,
+    /// Linear layer with `d_ff` input features and `d_model` output features.
+    pub linear_outer: Linear,
+    /// Dropout layer.
+    pub dropout: Dropout,
+    /// Activation function.
+    pub activation: Activation,
+}
+
+impl ModuleDisplay for PositionWiseFeedForward {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        let [d_model, dff] = self.linear_inner.weight.shape().dims();
+
+        content
+            .add("d_model", &d_model)
+            .add("d_ff", &dff)
+            .add("prob", &self.dropout.prob)
+            .optional()
+    }
+}
+
+impl PositionWiseFeedForwardConfig {
+    /// Initialize a new [position-wise feed-forward](PositionWiseFeedForward) module.
+    pub fn init(&self, device: &Device) -> PositionWiseFeedForward {
+        PositionWiseFeedForward {
+            linear_inner: LinearConfig::new(self.d_model, self.d_ff)
+                .with_initializer(self.initializer.clone())
+                .init(device),
+            linear_outer: LinearConfig::new(self.d_ff, self.d_model)
+                .with_initializer(self.initializer.clone())
+                .init(device),
+            dropout: DropoutConfig::new(self.dropout).init(),
+            activation: self.activation.init(device),
+        }
+    }
+}
+
+impl PositionWiseFeedForward {
+    /// The floor for the feed-forward alone: read the input and both projections' parameters
+    /// once, write the output once. The hidden activation between them is what a fuser keeps
+    /// out of memory, and the outer projection undoes the inner one's widening with the same
+    /// arithmetic.
+    pub(crate) fn bounds<const D: usize>(&self, input: &Tensor<D>) -> Bounds {
+        Bounds {
+            read: instrument::tensor_bytes(input) + bounds::parameters(self),
+            write: instrument::tensor_bytes(input),
+            flops: 2 * self.linear_inner.bounds(input).flops,
+        }
+    }
+
+    /// Applies the forward pass on the input tensor.
+    ///
+    /// # Shapes
+    ///
+    /// - input: `[batch_size, seq_length, d_model]`
+    /// - output: `[batch_size, seq_length, d_model]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the last axis of `input` is not `d_model`.
+    #[compute(bounds = Self::bounds)]
+    pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
+        let [d_model, _] = self.linear_inner.weight.shape().dims();
+        assert_shape!(input, [.., d_model]);
+
+        let x = Role::INNER.run(|| self.linear_inner.forward(input));
+        let x = self.activation.forward(x);
+        let x = self.dropout.forward(x);
+
+        Role::OUTER.run(|| self.linear_outer.forward(x))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::activation::{PReluConfig, SwiGluConfig};
+
+    #[rstest::rstest]
+    #[case::prelu(ActivationConfig::PRelu(PReluConfig::new()), 1)]
+    #[case::swiglu(ActivationConfig::SwiGlu(SwiGluConfig::new(1, 1)), 2)]
+    fn stateful_activation_participates_in_module_lifecycle(
+        #[case] activation: ActivationConfig,
+        #[case] activation_params: usize,
+    ) {
+        let device = crate::test_device();
+        let model = PositionWiseFeedForwardConfig::new(1, 1)
+            .with_activation(activation)
+            .init(&device);
+        assert_eq!(model.num_params(), 4 + activation_params);
+        assert_eq!(
+            alloc::format!("{model}"),
+            alloc::format!(
+                "PositionWiseFeedForward {{d_model: 1, d_ff: 1, prob: 0.1, params: {}}}",
+                4 + activation_params
+            )
+        );
+
+        let model = model.train();
+        assert!(model.activation.devices().iter().all(|d| d.is_autodiff()));
+        let model = model.valid();
+        assert!(model.activation.devices().iter().all(|d| !d.is_autodiff()));
+        let model = model.train();
+        assert!(model.activation.devices().iter().all(|d| d.is_autodiff()));
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_shape!(input, [.., d_model]): axis 2 expected 2, got 3")]
+    fn input_d_model_must_match() {
+        let device = Default::default();
+        let pwff = PositionWiseFeedForwardConfig::new(2, 4).init(&device);
+        let _ = pwff.forward(Tensor::<3>::zeros([1, 5, 3], &device));
+    }
+
+    #[test]
+    fn display() {
+        let config = PositionWiseFeedForwardConfig::new(2, 4);
+        let pwff = config.init(&Default::default());
+
+        assert_eq!(
+            alloc::format!("{pwff}"),
+            "PositionWiseFeedForward {d_model: 2, d_ff: 4, prob: 0.1, params: 22}"
+        );
+    }
+}

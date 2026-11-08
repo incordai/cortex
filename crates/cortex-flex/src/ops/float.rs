@@ -1,0 +1,1559 @@
+//! Float tensor operations for the Flex backend.
+
+use alloc::vec;
+use alloc::vec::Vec;
+use cortex_backend::RandomKey;
+use cortex_backend::{
+    DType, Distribution, Element, ExecutionError, FloatDType, Scalar, TensorData, TensorMetadata,
+    ops::{FloatTensorOps, GridSampleOptions, IntTensorOps},
+    tensor::{BoolTensor, Device, FloatTensor, IntTensor},
+};
+use cortex_std::{Bytes, IntDType, Shape, Slice, bf16, f16};
+use num_traits::{Float, ToPrimitive};
+
+use crate::Layout;
+use crate::ops::binary::{BinaryOp, binary_op, scalar_op};
+use crate::ops::matmul;
+use crate::ops::unary;
+use crate::{Flex, FlexTensor};
+
+/// Python/PyTorch-style remainder: result has same sign as divisor.
+#[inline]
+fn remainder_float<T: Float>(a: T, b: T) -> T {
+    let r = a % b;
+    if r != T::zero() && (r < T::zero()) != (b < T::zero()) {
+        r + b
+    } else {
+        r
+    }
+}
+
+fn powi_float<T: Float>(base: T, exponent: i32) -> T {
+    // Keep the exponent integer: native powi can lower to powf on some targets.
+    let magnitude = exponent.unsigned_abs() as usize;
+    if exponent < 0 {
+        // Computing base^magnitude first can overflow even when its reciprocal is
+        // representable (e.g. 2^-149 in f32). Invert the half power instead.
+        // Taking 1/base first would amplify its rounding error for large exponents.
+        let reciprocal = num_traits::pow(base, magnitude / 2).recip();
+        let result = reciprocal * reciprocal;
+        if magnitude & 1 == 1 {
+            result / base
+        } else {
+            result
+        }
+    } else {
+        num_traits::pow(base, magnitude)
+    }
+}
+
+impl FloatTensorOps<Flex> for Flex {
+    fn float_from_data(data: TensorData, _device: &Device<Flex>) -> FloatTensor<Flex> {
+        FlexTensor::from_data(data)
+    }
+
+    fn float_random(
+        shape: Shape,
+        distribution: Distribution,
+        _device: &Device<Flex>,
+        dtype: FloatDType,
+        key: RandomKey,
+    ) -> FloatTensor<Flex> {
+        use cortex_std::rand::SeedableRng;
+        let mut rng = crate::backend::FlexRng::seed_from_u64(key.seed());
+        let data = match dtype {
+            FloatDType::F64 => TensorData::random::<f64, _, _>(shape, distribution, &mut rng),
+            FloatDType::F32 | FloatDType::Flex32 => {
+                TensorData::random::<f32, _, _>(shape, distribution, &mut rng)
+            }
+            FloatDType::F16 => TensorData::random::<f16, _, _>(shape, distribution, &mut rng),
+            FloatDType::BF16 => TensorData::random::<bf16, _, _>(shape, distribution, &mut rng),
+        };
+        FlexTensor::from_data(data)
+    }
+
+    async fn float_into_data(tensor: FloatTensor<Flex>) -> Result<TensorData, ExecutionError> {
+        Ok(tensor.into_data())
+    }
+
+    fn float_to_device(tensor: FloatTensor<Flex>, _device: &Device<Flex>) -> FloatTensor<Flex> {
+        // CPU backend: no-op, tensors are always on CPU
+        tensor
+    }
+
+    fn float_detach(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        tensor
+    }
+
+    fn float_into_int(tensor: FloatTensor<Flex>, out_dtype: cortex_std::IntDType) -> IntTensor<Flex> {
+        let tensor = tensor.to_contiguous();
+        let shape = tensor.layout().shape().clone();
+        let src = tensor.dtype();
+        let out_dt = DType::from(out_dtype);
+
+        // Read source floats as f64 (lossless for f32/f16/bf16).
+        macro_rules! read_floats {
+            (|$x:ident| $conv:expr) => {
+                match src {
+                    DType::F32 => tensor
+                        .storage::<f32>()
+                        .iter()
+                        .map(|v| {
+                            let $x = *v as f64;
+                            $conv
+                        })
+                        .collect(),
+                    DType::F64 => tensor
+                        .storage::<f64>()
+                        .iter()
+                        .map(|v| {
+                            let $x = *v;
+                            $conv
+                        })
+                        .collect(),
+                    DType::F16 => tensor
+                        .storage::<f16>()
+                        .iter()
+                        .map(|v| {
+                            let $x = f32::from(*v) as f64;
+                            $conv
+                        })
+                        .collect(),
+                    DType::BF16 => tensor
+                        .storage::<bf16>()
+                        .iter()
+                        .map(|v| {
+                            let $x = f32::from(*v) as f64;
+                            $conv
+                        })
+                        .collect(),
+                    _ => panic!("float_into_int: unsupported source dtype {:?}", src),
+                }
+            };
+        }
+
+        macro_rules! convert {
+            ($int_ty:ty) => {{
+                let data: Vec<$int_ty> = read_floats!(|x| x as $int_ty);
+                FlexTensor::new(Bytes::from_elems(data), Layout::contiguous(shape), out_dt)
+            }};
+        }
+
+        match out_dtype {
+            IntDType::I64 => convert!(i64),
+            IntDType::I32 => convert!(i32),
+            IntDType::I16 => convert!(i16),
+            IntDType::I8 => convert!(i8),
+            IntDType::U64 => convert!(u64),
+            IntDType::U32 => convert!(u32),
+            IntDType::U16 => convert!(u16),
+            IntDType::U8 => convert!(u8),
+        }
+    }
+
+    fn float_empty(shape: Shape, _device: &Device<Flex>, dtype: FloatDType) -> FloatTensor<Flex> {
+        FlexTensor::empty(shape, dtype.into())
+    }
+
+    fn float_add(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        binary_op(lhs, rhs, |a, b| a + b, |a, b| a + b, Some(BinaryOp::Add))
+    }
+
+    fn float_add_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        let rhs_val = rhs.to_f64().unwrap();
+        scalar_op(lhs, rhs_val, |a, b| a + b, |a, b| a + b)
+    }
+
+    fn float_sub(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        binary_op(lhs, rhs, |a, b| a - b, |a, b| a - b, Some(BinaryOp::Sub))
+    }
+
+    fn float_sub_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        let rhs_val = rhs.to_f64().unwrap();
+        scalar_op(lhs, rhs_val, |a, b| a - b, |a, b| a - b)
+    }
+
+    fn float_mul(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        binary_op(lhs, rhs, |a, b| a * b, |a, b| a * b, Some(BinaryOp::Mul))
+    }
+
+    fn float_mul_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        let rhs_val = rhs.to_f64().unwrap();
+        scalar_op(lhs, rhs_val, |a, b| a * b, |a, b| a * b)
+    }
+
+    fn float_div(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        binary_op(lhs, rhs, |a, b| a / b, |a, b| a / b, Some(BinaryOp::Div))
+    }
+
+    fn float_div_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        let rhs_val = rhs.to_f64().unwrap();
+        scalar_op(lhs, rhs_val, |a, b| a / b, |a, b| a / b)
+    }
+
+    fn float_remainder(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        // Python/PyTorch-style remainder: result has same sign as divisor
+        binary_op(lhs, rhs, remainder_float, remainder_float, None)
+    }
+
+    fn float_remainder_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        // Python/PyTorch-style remainder: result has same sign as divisor
+        scalar_op(lhs, rhs.to_f64().unwrap(), remainder_float, remainder_float)
+    }
+
+    fn float_fmod(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        // Rust's `%` on floats is C's fmod: result has same sign as dividend
+        binary_op(lhs, rhs, |a, b| a % b, |a, b| a % b, None)
+    }
+
+    fn float_fmod_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        scalar_op(lhs, rhs.to_f64().unwrap(), |a, b| a % b, |a, b| a % b)
+    }
+
+    fn float_matmul(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        matmul::matmul(lhs, rhs)
+    }
+
+    fn float_cross(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        dim: usize,
+    ) -> FloatTensor<Flex> {
+        let shape = lhs.layout().shape();
+        let ndims = shape.num_dims();
+        assert_eq!(
+            shape[dim], 3,
+            "cross product requires dimension {} to have size 3, got {}",
+            dim, shape[dim]
+        );
+
+        // Helper to create slices that select index `idx` along `dim`
+        let make_slices = |idx: usize| -> alloc::vec::Vec<Slice> {
+            (0..ndims)
+                .map(|d| {
+                    if d == dim {
+                        Slice::new(idx as isize, Some((idx + 1) as isize), 1)
+                    } else {
+                        Slice::new(0, None, 1)
+                    }
+                })
+                .collect()
+        };
+
+        // Extract components along the dimension
+        // a = [a0, a1, a2], b = [b0, b1, b2]
+        let a0 = Self::float_slice(lhs.clone(), &make_slices(0));
+        let a1 = Self::float_slice(lhs.clone(), &make_slices(1));
+        let a2 = Self::float_slice(lhs, &make_slices(2));
+
+        let b0 = Self::float_slice(rhs.clone(), &make_slices(0));
+        let b1 = Self::float_slice(rhs.clone(), &make_slices(1));
+        let b2 = Self::float_slice(rhs, &make_slices(2));
+
+        // Cross product: c = a × b
+        // c0 = a1*b2 - a2*b1
+        // c1 = a2*b0 - a0*b2
+        // c2 = a0*b1 - a1*b0
+        let c0 = Self::float_sub(
+            Self::float_mul(a1.clone(), b2.clone()),
+            Self::float_mul(a2.clone(), b1.clone()),
+        );
+        let c1 = Self::float_sub(
+            Self::float_mul(a2, b0.clone()),
+            Self::float_mul(a0.clone(), b2),
+        );
+        let c2 = Self::float_sub(Self::float_mul(a0, b1), Self::float_mul(a1, b0));
+
+        // Concatenate along the dimension
+        Self::float_cat(vec![c0, c1, c2], dim)
+    }
+
+    fn float_recip(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::recip(tensor)
+    }
+
+    fn float_swap_dims(tensor: FloatTensor<Flex>, dim1: usize, dim2: usize) -> FloatTensor<Flex> {
+        tensor.transpose(dim1, dim2)
+    }
+
+    fn float_permute(tensor: FloatTensor<Flex>, axes: &[usize]) -> FloatTensor<Flex> {
+        tensor.permute(axes)
+    }
+
+    fn float_flip(tensor: FloatTensor<Flex>, axes: &[usize]) -> FloatTensor<Flex> {
+        crate::ops::flip::flip(tensor, axes)
+    }
+
+    fn float_cat(tensors: Vec<FloatTensor<Flex>>, dim: usize) -> FloatTensor<Flex> {
+        crate::ops::cat::cat(tensors, dim)
+    }
+
+    fn float_reshape(tensor: FloatTensor<Flex>, shape: Shape) -> FloatTensor<Flex> {
+        tensor.reshape(shape)
+    }
+
+    fn float_gather(
+        dim: usize,
+        tensor: FloatTensor<Flex>,
+        indices: IntTensor<Flex>,
+    ) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::gather_scatter::gather::<f32>(tensor, dim, indices),
+            DType::F64 => crate::ops::gather_scatter::gather::<f64>(tensor, dim, indices),
+            DType::F16 => crate::ops::gather_scatter::gather::<f16>(tensor, dim, indices),
+            DType::BF16 => crate::ops::gather_scatter::gather::<bf16>(tensor, dim, indices),
+            _ => panic!("float_gather: unsupported dtype {:?}", tensor.dtype()),
+        }
+    }
+
+    fn float_scatter(
+        dim: usize,
+        tensor: FloatTensor<Flex>,
+        indices: IntTensor<Flex>,
+        value: FloatTensor<Flex>,
+        update: cortex_backend::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<Flex> {
+        match update {
+            cortex_backend::tensor::IndexingUpdateOp::Assign => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::scatter_assign::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::scatter_assign::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::scatter_assign::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::scatter_assign::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!("float_scatter: unsupported dtype {:?}", tensor.dtype()),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Add => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::scatter_add::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::scatter_add::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::scatter_add::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::scatter_add::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!("float_scatter: unsupported dtype {:?}", tensor.dtype()),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Mul => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::scatter_mul::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::scatter_mul::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::scatter_mul::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::scatter_mul::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!("float_scatter: unsupported dtype {:?}", tensor.dtype()),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Min => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::scatter_min::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::scatter_min::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::scatter_min::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::scatter_min::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!("float_scatter: unsupported dtype {:?}", tensor.dtype()),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Max => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::scatter_max::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::scatter_max::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::scatter_max::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::scatter_max::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!("float_scatter: unsupported dtype {:?}", tensor.dtype()),
+            },
+        }
+    }
+
+    fn float_scatter_nd(
+        data: FloatTensor<Flex>,
+        indices: IntTensor<Flex>,
+        values: FloatTensor<Flex>,
+        reduction: cortex_backend::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<Flex> {
+        match data.dtype() {
+            DType::F32 => {
+                crate::ops::gather_scatter::scatter_nd::<f32>(data, indices, values, reduction)
+            }
+            DType::F64 => {
+                crate::ops::gather_scatter::scatter_nd::<f64>(data, indices, values, reduction)
+            }
+            DType::F16 => {
+                crate::ops::gather_scatter::scatter_nd::<f16>(data, indices, values, reduction)
+            }
+            DType::BF16 => {
+                crate::ops::gather_scatter::scatter_nd::<bf16>(data, indices, values, reduction)
+            }
+            _ => panic!("float_scatter_nd: unsupported dtype {:?}", data.dtype()),
+        }
+    }
+
+    fn float_gather_nd(data: FloatTensor<Flex>, indices: IntTensor<Flex>) -> FloatTensor<Flex> {
+        match data.dtype() {
+            DType::F32 => crate::ops::gather_scatter::gather_nd::<f32>(data, indices),
+            DType::F64 => crate::ops::gather_scatter::gather_nd::<f64>(data, indices),
+            DType::F16 => crate::ops::gather_scatter::gather_nd::<f16>(data, indices),
+            DType::BF16 => crate::ops::gather_scatter::gather_nd::<bf16>(data, indices),
+            _ => panic!("float_gather_nd: unsupported dtype {:?}", data.dtype()),
+        }
+    }
+
+    fn float_select(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        indices: IntTensor<Flex>,
+    ) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::gather_scatter::select::<f32>(tensor, dim, indices),
+            DType::F64 => crate::ops::gather_scatter::select::<f64>(tensor, dim, indices),
+            DType::F16 => crate::ops::gather_scatter::select::<f16>(tensor, dim, indices),
+            DType::BF16 => crate::ops::gather_scatter::select::<bf16>(tensor, dim, indices),
+            _ => panic!("float_select: unsupported dtype {:?}", tensor.dtype()),
+        }
+    }
+
+    fn float_select_assign(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        indices: IntTensor<Flex>,
+        value: FloatTensor<Flex>,
+        update: cortex_backend::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<Flex> {
+        match update {
+            cortex_backend::tensor::IndexingUpdateOp::Assign => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::select_assign::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::select_assign::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::select_assign::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::select_assign::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!(
+                    "float_select_assign: unsupported dtype {:?}",
+                    tensor.dtype()
+                ),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Add => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::select_add::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::select_add::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::select_add::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::select_add::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!(
+                    "float_select_assign: unsupported dtype {:?}",
+                    tensor.dtype()
+                ),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Mul => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::select_mul::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::select_mul::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::select_mul::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::select_mul::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!(
+                    "float_select_assign: unsupported dtype {:?}",
+                    tensor.dtype()
+                ),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Min => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::select_min::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::select_min::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::select_min::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::select_min::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!(
+                    "float_select_assign: unsupported dtype {:?}",
+                    tensor.dtype()
+                ),
+            },
+            cortex_backend::tensor::IndexingUpdateOp::Max => match tensor.dtype() {
+                DType::F32 => {
+                    crate::ops::gather_scatter::select_max::<f32>(tensor, dim, indices, value)
+                }
+                DType::F64 => {
+                    crate::ops::gather_scatter::select_max::<f64>(tensor, dim, indices, value)
+                }
+                DType::F16 => {
+                    crate::ops::gather_scatter::select_max::<f16>(tensor, dim, indices, value)
+                }
+                DType::BF16 => {
+                    crate::ops::gather_scatter::select_max::<bf16>(tensor, dim, indices, value)
+                }
+                _ => panic!(
+                    "float_select_assign: unsupported dtype {:?}",
+                    tensor.dtype()
+                ),
+            },
+        }
+    }
+
+    fn float_slice(tensor: FloatTensor<Flex>, slices: &[Slice]) -> FloatTensor<Flex> {
+        crate::ops::slice::slice(tensor, slices)
+    }
+
+    fn float_slice_assign(
+        tensor: FloatTensor<Flex>,
+        slices: &[Slice],
+        value: FloatTensor<Flex>,
+    ) -> FloatTensor<Flex> {
+        crate::ops::slice::slice_assign(tensor, slices, value)
+    }
+
+    fn float_mask_where(
+        tensor: FloatTensor<Flex>,
+        mask: BoolTensor<Flex>,
+        value: FloatTensor<Flex>,
+    ) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::mask::mask_where_f32(tensor, mask, value),
+            DType::F64 => crate::ops::mask::mask_where_f64(tensor, mask, value),
+            DType::F16 => crate::ops::mask::mask_where_f16(tensor, mask, value),
+            DType::BF16 => crate::ops::mask::mask_where_bf16(tensor, mask, value),
+            dtype => panic!("float_mask_where: unsupported dtype {:?}", dtype),
+        }
+    }
+
+    fn float_mask_fill(
+        tensor: FloatTensor<Flex>,
+        mask: BoolTensor<Flex>,
+        value: Scalar,
+    ) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::mask::mask_fill_f32(tensor, mask, value.to_f32().unwrap()),
+            DType::F64 => crate::ops::mask::mask_fill_f64(tensor, mask, value.to_f64().unwrap()),
+            DType::F16 => crate::ops::mask::mask_fill_f16(
+                tensor,
+                mask,
+                f16::from_f64(value.to_f64().unwrap()),
+            ),
+            DType::BF16 => crate::ops::mask::mask_fill_bf16(
+                tensor,
+                mask,
+                bf16::from_f64(value.to_f64().unwrap()),
+            ),
+            dtype => panic!("float_mask_fill: unsupported dtype {:?}", dtype),
+        }
+    }
+
+    fn float_equal(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::equal(lhs, rhs, out_dtype)
+    }
+
+    fn float_equal_elem(
+        lhs: FloatTensor<Flex>,
+        rhs: Scalar,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::equal_elem(lhs, rhs.to_f64().unwrap(), out_dtype)
+    }
+
+    fn float_greater(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::greater(lhs, rhs, out_dtype)
+    }
+
+    fn float_greater_elem(
+        lhs: FloatTensor<Flex>,
+        rhs: Scalar,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::greater_elem(lhs, rhs.to_f64().unwrap(), out_dtype)
+    }
+
+    fn float_greater_equal(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::greater_equal(lhs, rhs, out_dtype)
+    }
+
+    fn float_greater_equal_elem(
+        lhs: FloatTensor<Flex>,
+        rhs: Scalar,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::greater_equal_elem(lhs, rhs.to_f64().unwrap(), out_dtype)
+    }
+
+    fn float_lower(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::lower(lhs, rhs, out_dtype)
+    }
+
+    fn float_lower_elem(
+        lhs: FloatTensor<Flex>,
+        rhs: Scalar,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::lower_elem(lhs, rhs.to_f64().unwrap(), out_dtype)
+    }
+
+    fn float_lower_equal(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::lower_equal(lhs, rhs, out_dtype)
+    }
+
+    fn float_lower_equal_elem(
+        lhs: FloatTensor<Flex>,
+        rhs: Scalar,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::lower_equal_elem(lhs, rhs.to_f64().unwrap(), out_dtype)
+    }
+
+    fn float_not_equal(
+        lhs: FloatTensor<Flex>,
+        rhs: FloatTensor<Flex>,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::not_equal(lhs, rhs, out_dtype)
+    }
+
+    fn float_not_equal_elem(
+        lhs: FloatTensor<Flex>,
+        rhs: Scalar,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::not_equal_elem(lhs, rhs.to_f64().unwrap(), out_dtype)
+    }
+
+    fn float_neg(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::unary_op(tensor, |x: f32| -x, |x: f64| -x)
+    }
+
+    fn float_clamp(tensor: FloatTensor<Flex>, min: Scalar, max: Scalar) -> FloatTensor<Flex> {
+        let min32 = min.to_f32().unwrap();
+        let max32 = max.to_f32().unwrap();
+        let min64 = min.to_f64().unwrap();
+        let max64 = max.to_f64().unwrap();
+        // A NaN bound gives NaN, agreeing with `clamp_min`/`clamp_max` below and
+        // with PyTorch. Otherwise `min > max` panics as `f32::clamp` does, on the
+        // bounds in the precision the tensor uses, but checked once here: the
+        // check inside `f32::clamp` runs per element and keeps the loop from
+        // vectorizing. The comparisons below are the ones `f32::clamp` makes, so
+        // NaN inputs and signed zeros come out the same.
+        if min64.is_nan() || max64.is_nan() {
+            return unary::unary_op(tensor, |_: f32| f32::NAN, |_: f64| f64::NAN);
+        }
+        let ordered = match tensor.dtype() {
+            DType::F64 => min64 <= max64,
+            _ => min32 <= max32,
+        };
+        assert!(
+            ordered,
+            "clamp: min > max. min = {min64:?}, max = {max64:?}"
+        );
+        unary::unary_op(
+            tensor,
+            move |x: f32| {
+                if x < min32 {
+                    min32
+                } else if x > max32 {
+                    max32
+                } else {
+                    x
+                }
+            },
+            move |x: f64| {
+                if x < min64 {
+                    min64
+                } else if x > max64 {
+                    max64
+                } else {
+                    x
+                }
+            },
+        )
+    }
+
+    fn float_clamp_min(tensor: FloatTensor<Flex>, min: Scalar) -> FloatTensor<Flex> {
+        let min32 = min.to_f32().unwrap();
+        let min64 = min.to_f64().unwrap();
+        // `max` returns the non-NaN operand, which would map NaN to the bound.
+        // Testing `is_nan` first lets NaN propagate, as PyTorch does.
+        unary::unary_op(
+            tensor,
+            move |x: f32| if x.is_nan() || x > min32 { x } else { min32 },
+            move |x: f64| if x.is_nan() || x > min64 { x } else { min64 },
+        )
+    }
+
+    fn float_clamp_max(tensor: FloatTensor<Flex>, max: Scalar) -> FloatTensor<Flex> {
+        let max32 = max.to_f32().unwrap();
+        let max64 = max.to_f64().unwrap();
+        // `min` returns the non-NaN operand, which would map NaN to the bound.
+        // Testing `is_nan` first lets NaN propagate, as PyTorch does.
+        unary::unary_op(
+            tensor,
+            move |x: f32| if x.is_nan() || x < max32 { x } else { max32 },
+            move |x: f64| if x.is_nan() || x < max64 { x } else { max64 },
+        )
+    }
+
+    // Builds +-1 from the sign bit and the bits of 1.0 rather than a `> 0.0` /
+    // `< 0.0` branch chain. The branch chain is compiled into a lookup from a
+    // `[2 x float]` constant pool at -O2 and above, and some backends (notably
+    // Xtensa) have no instruction selection pattern for a PC-relative
+    // reference to a constant pool, so the whole crate fails to compile for
+    // those targets. The bit form needs no float constant besides 0.0, and
+    // unlike a `libm::copysignf` call it inlines, so the loop vectorizes.
+    //
+    // NaN and both zeros give 0, so they are checked first.
+    fn float_sign(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::unary_op(
+            tensor,
+            |x: f32| {
+                if x.is_nan() || x == 0.0 {
+                    0.0
+                } else {
+                    f32::from_bits((x.to_bits() & 0x8000_0000) | 0x3f80_0000)
+                }
+            },
+            |x: f64| {
+                if x.is_nan() || x == 0.0 {
+                    0.0
+                } else {
+                    f64::from_bits((x.to_bits() & 0x8000_0000_0000_0000) | 0x3ff0_0000_0000_0000)
+                }
+            },
+        )
+    }
+
+    fn float_mean(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        crate::ops::reduce::mean(tensor)
+    }
+
+    fn float_max(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        crate::ops::reduce::max(tensor)
+    }
+
+    fn float_max_dim(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        crate::ops::reduce::max_dim(tensor, dim)
+    }
+
+    fn float_min(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        crate::ops::reduce::min(tensor)
+    }
+
+    fn float_min_dim(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        crate::ops::reduce::min_dim(tensor, dim)
+    }
+
+    fn float_max_dim_with_indices(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        indices_dtype: cortex_std::IntDType,
+    ) -> (FloatTensor<Flex>, IntTensor<Flex>) {
+        let (values, indices) = crate::ops::reduce::max_dim_with_indices(tensor, dim);
+        if indices.dtype() != DType::from(indices_dtype) {
+            (values, Flex::int_cast(indices, indices_dtype))
+        } else {
+            (values, indices)
+        }
+    }
+
+    fn float_min_dim_with_indices(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        indices_dtype: cortex_std::IntDType,
+    ) -> (FloatTensor<Flex>, IntTensor<Flex>) {
+        let (values, indices) = crate::ops::reduce::min_dim_with_indices(tensor, dim);
+        if indices.dtype() != DType::from(indices_dtype) {
+            (values, Flex::int_cast(indices, indices_dtype))
+        } else {
+            (values, indices)
+        }
+    }
+
+    fn float_any(tensor: FloatTensor<Flex>, out_dtype: cortex_std::BoolDType) -> BoolTensor<Flex> {
+        crate::ops::comparison::any_float(tensor, out_dtype)
+    }
+
+    fn float_any_dim(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::any_float_dim(tensor, dim, out_dtype)
+    }
+
+    fn float_all(tensor: FloatTensor<Flex>, out_dtype: cortex_std::BoolDType) -> BoolTensor<Flex> {
+        crate::ops::comparison::all_float(tensor, out_dtype)
+    }
+
+    fn float_all_dim(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        out_dtype: cortex_std::BoolDType,
+    ) -> BoolTensor<Flex> {
+        crate::ops::comparison::all_float_dim(tensor, dim, out_dtype)
+    }
+
+    fn float_sum(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        crate::ops::reduce::sum(tensor)
+    }
+
+    fn float_sum_dim(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        crate::ops::reduce::sum_dim(tensor, dim)
+    }
+
+    fn float_mean_dim(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        crate::ops::reduce::mean_dim(tensor, dim)
+    }
+
+    fn float_prod(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        crate::ops::reduce::prod(tensor)
+    }
+
+    fn float_prod_dim(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        crate::ops::reduce::prod_dim(tensor, dim)
+    }
+
+    fn float_cumsum(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::cumulative::cumsum_f32(tensor, dim),
+            DType::F64 => crate::ops::cumulative::cumsum_f64(tensor, dim),
+            DType::F16 => {
+                crate::ops::cumulative::cumsum_half(tensor, dim, f16::to_f32, f16::from_f32)
+            }
+            DType::BF16 => {
+                crate::ops::cumulative::cumsum_half(tensor, dim, bf16::to_f32, bf16::from_f32)
+            }
+            _ => panic!("float_cumsum: unsupported dtype {:?}", tensor.dtype()),
+        }
+    }
+
+    fn float_cumprod(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::cumulative::cumprod_f32(tensor, dim),
+            DType::F64 => crate::ops::cumulative::cumprod_f64(tensor, dim),
+            DType::F16 => {
+                crate::ops::cumulative::cumprod_half(tensor, dim, f16::to_f32, f16::from_f32)
+            }
+            DType::BF16 => {
+                crate::ops::cumulative::cumprod_half(tensor, dim, bf16::to_f32, bf16::from_f32)
+            }
+            _ => panic!("float_cumprod: unsupported dtype {:?}", tensor.dtype()),
+        }
+    }
+
+    fn float_cummin(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::cumulative::cummin_f32(tensor, dim),
+            DType::F64 => crate::ops::cumulative::cummin_f64(tensor, dim),
+            DType::F16 => {
+                crate::ops::cumulative::cummin_half(tensor, dim, f16::to_f32, f16::from_f32)
+            }
+            DType::BF16 => {
+                crate::ops::cumulative::cummin_half(tensor, dim, bf16::to_f32, bf16::from_f32)
+            }
+            _ => panic!("float_cummin: unsupported dtype {:?}", tensor.dtype()),
+        }
+    }
+
+    fn float_cummax(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        match tensor.dtype() {
+            DType::F32 => crate::ops::cumulative::cummax_f32(tensor, dim),
+            DType::F64 => crate::ops::cumulative::cummax_f64(tensor, dim),
+            DType::F16 => {
+                crate::ops::cumulative::cummax_half(tensor, dim, f16::to_f32, f16::from_f32)
+            }
+            DType::BF16 => {
+                crate::ops::cumulative::cummax_half(tensor, dim, bf16::to_f32, bf16::from_f32)
+            }
+            _ => panic!("float_cummax: unsupported dtype {:?}", tensor.dtype()),
+        }
+    }
+
+    fn float_cast(tensor: FloatTensor<Flex>, dtype: FloatDType) -> FloatTensor<Flex> {
+        use crate::Layout;
+        use cortex_std::{Bytes, bf16, f16};
+
+        let src_dtype = tensor.dtype();
+        let target_dtype = DType::from(dtype);
+
+        // No-op if already the same dtype
+        if src_dtype == target_dtype {
+            return tensor;
+        }
+
+        let tensor = tensor.to_contiguous();
+        let shape = tensor.layout().shape().clone();
+
+        fn cast_slice<Src: Element + bytemuck::Pod, Dst: Element + bytemuck::Pod>(
+            src: &[Src],
+        ) -> Vec<Dst> {
+            use core::any::TypeId;
+            if TypeId::of::<Src>() == TypeId::of::<f64>()
+                && TypeId::of::<Dst>() == TypeId::of::<f16>()
+            {
+                let f64_slice: &[f64] = bytemuck::cast_slice(src);
+                let mut out = vec![Dst::default(); src.len()];
+                let f16_slice: &mut [f16] = bytemuck::cast_slice_mut(&mut out);
+                for (dst, &v) in f16_slice.iter_mut().zip(f64_slice.iter()) {
+                    *dst = f16::from_f64(v);
+                }
+                return out;
+            }
+            if TypeId::of::<Src>() == TypeId::of::<f64>()
+                && TypeId::of::<Dst>() == TypeId::of::<bf16>()
+            {
+                let f64_slice: &[f64] = bytemuck::cast_slice(src);
+                let mut out = vec![Dst::default(); src.len()];
+                let bf16_slice: &mut [bf16] = bytemuck::cast_slice_mut(&mut out);
+                for (dst, &v) in bf16_slice.iter_mut().zip(f64_slice.iter()) {
+                    *dst = bf16::from_f64(v);
+                }
+                return out;
+            }
+            src.iter().map(|&v| Dst::from_elem(v)).collect()
+        }
+
+        macro_rules! cast_from {
+            ($src_ty:ty) => {{
+                let src: &[$src_ty] = tensor.storage();
+                match target_dtype {
+                    DType::F32 => {
+                        let result = cast_slice::<$src_ty, f32>(src);
+                        FlexTensor::new(
+                            Bytes::from_elems(result),
+                            Layout::contiguous(shape),
+                            DType::F32,
+                        )
+                    }
+                    DType::F64 => {
+                        let result = cast_slice::<$src_ty, f64>(src);
+                        FlexTensor::new(
+                            Bytes::from_elems(result),
+                            Layout::contiguous(shape),
+                            DType::F64,
+                        )
+                    }
+                    DType::F16 => {
+                        let result = cast_slice::<$src_ty, f16>(src);
+                        FlexTensor::new(
+                            Bytes::from_elems(result),
+                            Layout::contiguous(shape),
+                            DType::F16,
+                        )
+                    }
+                    DType::BF16 => {
+                        let result = cast_slice::<$src_ty, bf16>(src);
+                        FlexTensor::new(
+                            Bytes::from_elems(result),
+                            Layout::contiguous(shape),
+                            DType::BF16,
+                        )
+                    }
+                    _ => panic!("float_cast: unsupported target dtype {:?}", target_dtype),
+                }
+            }};
+        }
+
+        match src_dtype {
+            DType::F32 => cast_from!(f32),
+            DType::F64 => cast_from!(f64),
+            DType::F16 => cast_from!(f16),
+            DType::BF16 => cast_from!(bf16),
+            _ => panic!("float_cast: unsupported source dtype {:?}", src_dtype),
+        }
+    }
+
+    fn float_exp(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::exp(tensor)
+    }
+
+    fn float_log(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::log(tensor)
+    }
+
+    fn float_log1p(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::log1p(tensor)
+    }
+
+    fn float_powf(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        binary_op(lhs, rhs, |a: f32, b| a.powf(b), |a: f64, b| a.powf(b), None)
+    }
+
+    fn float_powf_scalar_impl(tensor: FloatTensor<Flex>, value: Scalar) -> FloatTensor<Flex> {
+        let exp = value.to_f64().unwrap();
+        scalar_op(tensor, exp, |a: f32, b| a.powf(b), |a: f64, b| a.powf(b))
+    }
+
+    fn float_sqrt(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::sqrt(tensor)
+    }
+
+    fn float_abs(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::abs(tensor)
+    }
+
+    fn float_cos(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::cos(tensor)
+    }
+
+    fn float_sin(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::sin(tensor)
+    }
+
+    fn float_tan(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::tan(tensor)
+    }
+
+    fn float_cosh(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::cosh(tensor)
+    }
+
+    fn float_sinh(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::sinh(tensor)
+    }
+
+    fn float_tanh(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::tanh(tensor)
+    }
+
+    fn float_acos(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::acos(tensor)
+    }
+
+    fn float_acosh(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::acosh(tensor)
+    }
+
+    fn float_asin(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::asin(tensor)
+    }
+
+    fn float_asinh(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::asinh(tensor)
+    }
+
+    fn float_atan(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::atan(tensor)
+    }
+
+    fn float_atanh(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::atanh(tensor)
+    }
+
+    fn float_atan2(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        #[cfg(feature = "simd")]
+        let (lhs, rhs) =
+            match crate::ops::binary::simd_zip_map::<f32, _>(lhs, rhs, crate::simd::Atan2) {
+                Ok(out) => return out,
+                Err(operands) => operands,
+            };
+        binary_op(
+            lhs,
+            rhs,
+            |a: f32, b| a.atan2(b),
+            |a: f64, b| a.atan2(b),
+            None,
+        )
+    }
+
+    fn float_round(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::round(tensor)
+    }
+
+    fn float_floor(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::floor(tensor)
+    }
+
+    fn float_ceil(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::ceil(tensor)
+    }
+
+    fn float_trunc(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::trunc(tensor)
+    }
+
+    fn float_erf(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        unary::erf(tensor)
+    }
+
+    fn float_argmax(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        out_dtype: cortex_std::IntDType,
+    ) -> IntTensor<Flex> {
+        let result = crate::ops::reduce::argmax(tensor, dim);
+        if result.dtype() != DType::from(out_dtype) {
+            Flex::int_cast(result, out_dtype)
+        } else {
+            result
+        }
+    }
+
+    fn float_argmin(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        out_dtype: cortex_std::IntDType,
+    ) -> IntTensor<Flex> {
+        let result = crate::ops::reduce::argmin(tensor, dim);
+        if result.dtype() != DType::from(out_dtype) {
+            Flex::int_cast(result, out_dtype)
+        } else {
+            result
+        }
+    }
+
+    fn float_expand(tensor: FloatTensor<Flex>, shape: Shape) -> FloatTensor<Flex> {
+        crate::ops::expand::expand(tensor, shape)
+    }
+
+    fn float_unfold(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        size: usize,
+        step: usize,
+    ) -> FloatTensor<Flex> {
+        // unfold is now type-agnostic (zero-copy strided view)
+        crate::ops::unfold::unfold(tensor, dim, size, step)
+    }
+
+    fn float_grid_sample_2d(
+        tensor: FloatTensor<Flex>,
+        grid: FloatTensor<Flex>,
+        options: GridSampleOptions,
+    ) -> FloatTensor<Flex> {
+        crate::ops::grid_sample::grid_sample_2d(tensor, grid, options)
+    }
+
+    fn float_zeros(shape: Shape, _device: &Device<Flex>, dtype: FloatDType) -> FloatTensor<Flex> {
+        FlexTensor::zeros(shape, dtype.into())
+    }
+
+    fn float_ones(shape: Shape, _device: &Device<Flex>, dtype: FloatDType) -> FloatTensor<Flex> {
+        let dt: cortex_backend::DType = dtype.into();
+        match dt {
+            DType::F32 => FlexTensor::filled_typed(shape, dt, 1.0f32),
+            DType::F64 => FlexTensor::filled_typed(shape, dt, 1.0f64),
+            DType::F16 => FlexTensor::filled_typed(shape, dt, f16::ONE),
+            DType::BF16 => FlexTensor::filled_typed(shape, dt, bf16::ONE),
+            _ => unreachable!(),
+        }
+    }
+
+    fn float_full(
+        shape: Shape,
+        fill_value: Scalar,
+        _device: &Device<Flex>,
+        dtype: FloatDType,
+    ) -> FloatTensor<Flex> {
+        let dt: cortex_backend::DType = dtype.into();
+        match dt {
+            DType::F32 => FlexTensor::filled_typed(shape, dt, fill_value.to_f32().unwrap()),
+            DType::F64 => FlexTensor::filled_typed(shape, dt, fill_value.to_f64().unwrap()),
+            DType::F16 => {
+                FlexTensor::filled_typed(shape, dt, f16::from_f32(fill_value.to_f32().unwrap()))
+            }
+            DType::BF16 => {
+                FlexTensor::filled_typed(shape, dt, bf16::from_f32(fill_value.to_f32().unwrap()))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn float_transpose(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        let ndims = tensor.layout().num_dims();
+        if ndims < 2 {
+            return tensor;
+        }
+        tensor.transpose(ndims - 2, ndims - 1)
+    }
+
+    fn float_repeat_dim(tensor: FloatTensor<Flex>, dim: usize, times: usize) -> FloatTensor<Flex> {
+        crate::ops::repeat_dim::repeat_dim(tensor, dim, times)
+    }
+
+    fn float_sort(tensor: FloatTensor<Flex>, dim: usize, descending: bool) -> FloatTensor<Flex> {
+        crate::ops::sort::sort(tensor, dim, descending)
+    }
+
+    fn float_sort_with_indices(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        descending: bool,
+        indices_dtype: cortex_std::IntDType,
+    ) -> (FloatTensor<Flex>, IntTensor<Flex>) {
+        let (values, indices) = crate::ops::sort::sort_with_indices(tensor, dim, descending);
+        let indices = if indices.dtype() != DType::from(indices_dtype) {
+            Flex::int_cast(indices, indices_dtype)
+        } else {
+            indices
+        };
+        (values, indices)
+    }
+
+    fn float_argsort(
+        tensor: FloatTensor<Flex>,
+        dim: usize,
+        descending: bool,
+        out_dtype: cortex_std::IntDType,
+    ) -> IntTensor<Flex> {
+        let indices = crate::ops::sort::argsort(tensor, dim, descending);
+        if indices.dtype() != DType::from(out_dtype) {
+            Flex::int_cast(indices, out_dtype)
+        } else {
+            indices
+        }
+    }
+
+    fn float_powi(lhs: FloatTensor<Flex>, rhs: IntTensor<Flex>) -> FloatTensor<Flex> {
+        let dtype = lhs.dtype();
+        Self::float_powf(lhs, Flex::int_into_float(rhs, dtype.into()))
+    }
+
+    fn float_powi_scalar(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        match rhs.to_i64().unwrap() {
+            0 => Self::float_ones(lhs.shape(), &Default::default(), lhs.dtype().into()),
+            1 => lhs,
+            2 => Self::float_mul(lhs.clone(), lhs),
+            -1 => Self::float_recip(lhs),
+            -2 => Self::float_recip(Self::float_mul(lhs.clone(), lhs)),
+            _ => Self::float_powi_scalar_impl(lhs, rhs),
+        }
+    }
+
+    fn float_powi_scalar_impl(lhs: FloatTensor<Flex>, rhs: Scalar) -> FloatTensor<Flex> {
+        let exponent = rhs.to_f64().unwrap();
+        if f64::from(exponent as i32) != exponent {
+            return Self::float_powf_scalar_impl(lhs, rhs);
+        }
+        let exponent = exponent as i32;
+        #[cfg(feature = "simd")]
+        let lhs = match unary::simd_map_float(lhs, crate::simd::PowI(exponent)) {
+            Ok(out) => return out,
+            Err(lhs) => lhs,
+        };
+        unary::unary_op(
+            lhs,
+            |x| powi_float(x, exponent),
+            |x| powi_float(x, exponent),
+        )
+    }
+
+    fn float_powf_scalar(tensor: FloatTensor<Flex>, value: Scalar) -> FloatTensor<Flex> {
+        if let Some(exp) = value.try_as_integer() {
+            Self::float_powi_scalar(tensor, exp)
+        } else {
+            Self::float_powf_scalar_impl(tensor, value)
+        }
+    }
+
+    fn float_max_abs(tensor: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        let abs = unary::abs(tensor);
+        crate::ops::reduce::max(abs)
+    }
+
+    fn float_max_abs_dim(tensor: FloatTensor<Flex>, dim: usize) -> FloatTensor<Flex> {
+        let abs = unary::abs(tensor);
+        crate::ops::reduce::max_dim(abs, dim)
+    }
+
+    fn float_is_nan(tensor: FloatTensor<Flex>, out_dtype: cortex_std::BoolDType) -> BoolTensor<Flex> {
+        unary::float_predicate(tensor, out_dtype, |x: f32| x.is_nan(), |x: f64| x.is_nan())
+    }
+
+    fn float_is_inf(tensor: FloatTensor<Flex>, out_dtype: cortex_std::BoolDType) -> BoolTensor<Flex> {
+        unary::float_predicate(
+            tensor,
+            out_dtype,
+            |x: f32| x.is_infinite(),
+            |x: f64| x.is_infinite(),
+        )
+    }
+
+    fn float_hypot(lhs: FloatTensor<Flex>, rhs: FloatTensor<Flex>) -> FloatTensor<Flex> {
+        #[cfg(feature = "simd")]
+        let (lhs, rhs) =
+            match crate::ops::binary::simd_zip_map::<f32, _>(lhs, rhs, crate::simd::Hypot) {
+                Ok(out) => return out,
+                Err(operands) => operands,
+            };
+        binary_op(
+            lhs,
+            rhs,
+            |a: f32, b| a.hypot(b),
+            |a: f64, b| a.hypot(b),
+            None,
+        )
+    }
+}
+
+// Tests kept here exercise flex-specific behavior: direct `Flex::`
+// backend-op calls with explicit IntDType/FloatDType to pin dtype storage
+// selection (U8/I32/I64, F16/F64). Plain arithmetic, math, cast, cross,
+// unfold, and random smoke tests have been dropped in favor of the
+// equivalent coverage in cortex-backend-tests, which exercises every backend.
+// When adding new tests, keep them here only if they probe flex dtype
+// storage or flex internals; otherwise add them to
+// crates/cortex-backend-tests/tests/tensor/float/ops/.
+#[cfg(test)]
+mod tests {
+    use cortex_backend::TensorData;
+
+    use crate::Flex;
+
+    #[test]
+    fn powi_scalar_preserves_f32_subnormal() {
+        use cortex_backend::ops::FloatTensorOps;
+
+        let tensor = crate::FlexTensor::from_data(TensorData::from([2.0f32]));
+        Flex::float_powi_scalar(tensor, (-149).into())
+            .into_data()
+            .assert_eq(&TensorData::from([f32::from_bits(1)]), true);
+    }
+
+    #[test]
+    fn powi_scalar_preserves_f64_subnormal() {
+        use cortex_backend::ops::FloatTensorOps;
+
+        let tensor = crate::FlexTensor::from_data(TensorData::from([2.0f64]));
+        Flex::float_powi_scalar(tensor, (-1074).into())
+            .into_data()
+            .assert_eq(&TensorData::from([f64::from_bits(1)]), true);
+    }
+
+    /// The SIMD path must give `powi_float`'s bits for exponents the scalar
+    /// dispatch doesn't special-case, of both signs and odd and even.
+    #[cfg(feature = "simd")]
+    #[test]
+    fn powi_simd_matches_scalar_bitwise() {
+        use super::powi_float;
+        use crate::simd::{PowI, map_to_vec};
+
+        let f32_in: alloc::vec::Vec<f32> = (-40..=40)
+            .map(|i| i as f32 * 0.37)
+            .chain([
+                0.0,
+                -0.0,
+                1e-30,
+                1e30,
+                f32::from_bits(1),
+                f32::INFINITY,
+                f32::NAN,
+            ])
+            .collect();
+        let f64_in: alloc::vec::Vec<f64> = f32_in.iter().map(|&x| f64::from(x) * 1.1).collect();
+        for n in [3, 4, 5, 7, 31, 100, -3, -4, -5, -7, -31, -100, i32::MIN] {
+            let out = map_to_vec(&f32_in, PowI(n));
+            for (&x, &y) in f32_in.iter().zip(&out) {
+                let expected = powi_float(x, n);
+                assert!(
+                    y.to_bits() == expected.to_bits() || (y.is_nan() && expected.is_nan()),
+                    "f32 {x:e}^{n} = {y:e}, scalar gives {expected:e}"
+                );
+            }
+            let out = map_to_vec(&f64_in, PowI(n));
+            for (&x, &y) in f64_in.iter().zip(&out) {
+                let expected = powi_float(x, n);
+                assert!(
+                    y.to_bits() == expected.to_bits() || (y.is_nan() && expected.is_nan()),
+                    "f64 {x:e}^{n} = {y:e}, scalar gives {expected:e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "min > max")]
+    fn clamp_panics_when_min_exceeds_max() {
+        use cortex_backend::ops::FloatTensorOps;
+
+        let tensor = crate::FlexTensor::from_data(TensorData::from([0.5f32]));
+        Flex::float_clamp(tensor, 1.0.into(), 0.0.into());
+    }
+
+    /// Bounds that differ in f64 but round to the same f32 are ordered for an
+    /// f32 tensor, as they were for `f32::clamp`.
+    #[test]
+    fn clamp_checks_bounds_in_the_tensor_precision() {
+        use cortex_backend::ops::FloatTensorOps;
+
+        let tensor = crate::FlexTensor::from_data(TensorData::from([0.5f32, 2.0]));
+        Flex::float_clamp(tensor, 1.000_000_01f64.into(), 1.0.into())
+            .into_data()
+            .assert_eq(&TensorData::from([1.0f32, 1.0]), true);
+    }
+
+    #[test]
+    fn test_float_into_int_i32() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([1.5f32, -2.7, 0.0, 255.9]));
+        let result = Flex::float_into_int(t, IntDType::I32);
+        assert_eq!(result.dtype(), cortex_backend::DType::I32);
+        let data: Vec<i32> = result.into_data().try_into_vec().unwrap();
+        assert_eq!(data, vec![1, -2, 0, 255]);
+    }
+
+    #[test]
+    fn test_float_into_int_u8() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([0.0f32, 1.9, 127.5, 255.0]));
+        let result = Flex::float_into_int(t, IntDType::U8);
+        assert_eq!(result.dtype(), cortex_backend::DType::U8);
+        let data: Vec<u8> = result.into_data().try_into_vec().unwrap();
+        assert_eq!(data, vec![0, 1, 127, 255]);
+    }
+
+    #[test]
+    fn test_float_argmax_i32_out_dtype() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([[1.0f32, 3.0, 2.0]]));
+        let result = Flex::float_argmax(t, 1, IntDType::I32);
+        assert_eq!(result.dtype(), cortex_backend::DType::I32);
+        let data: Vec<i32> = result.into_data().try_into_vec().unwrap();
+        assert_eq!(data, vec![1]);
+    }
+
+    #[test]
+    fn test_float_argmin_i32_out_dtype() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([[3.0f32, 1.0, 2.0]]));
+        let result = Flex::float_argmin(t, 1, IntDType::I32);
+        assert_eq!(result.dtype(), cortex_backend::DType::I32);
+        let data: Vec<i32> = result.into_data().try_into_vec().unwrap();
+        assert_eq!(data, vec![1]);
+    }
+
+    #[test]
+    fn test_float_argmax_i64_out_dtype() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([[1.0f32, 3.0, 2.0]]));
+        let result = Flex::float_argmax(t, 1, IntDType::I64);
+        assert_eq!(result.dtype(), cortex_backend::DType::I64);
+        let data: Vec<i64> = result.into_data().try_into_vec().unwrap();
+        assert_eq!(data, vec![1]);
+    }
+
+    #[test]
+    fn test_float_max_dim_with_indices_i32() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([[1.0f32, 5.0], [3.0, 2.0]]));
+        let (values, indices) = Flex::float_max_dim_with_indices(t, 1, IntDType::I32);
+        assert_eq!(indices.dtype(), cortex_backend::DType::I32);
+        let idx: Vec<i32> = indices.into_data().try_into_vec().unwrap();
+        assert_eq!(idx, vec![1, 0]);
+        let vals: Vec<f32> = values.into_data().try_into_vec().unwrap();
+        assert_eq!(vals, vec![5.0, 3.0]);
+    }
+
+    #[test]
+    fn test_float_min_dim_with_indices_i32() {
+        use cortex_backend::ops::FloatTensorOps;
+        use cortex_std::IntDType;
+
+        let t = crate::FlexTensor::from_data(TensorData::from([[1.0f32, 5.0], [3.0, 2.0]]));
+        let (values, indices) = Flex::float_min_dim_with_indices(t, 1, IntDType::I32);
+        assert_eq!(indices.dtype(), cortex_backend::DType::I32);
+        let idx: Vec<i32> = indices.into_data().try_into_vec().unwrap();
+        assert_eq!(idx, vec![0, 1]);
+        let vals: Vec<f32> = values.into_data().try_into_vec().unwrap();
+        assert_eq!(vals, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_float_random_f64() {
+        use cortex_backend::{DType, FloatDType, RandomKey, ops::FloatTensorOps};
+
+        let shape = cortex_std::Shape::from(vec![100]);
+        let dist = cortex_backend::Distribution::Uniform(0.0, 1.0);
+        let device = crate::FlexDevice;
+        let t = Flex::float_random(shape, dist, &device, FloatDType::F64, RandomKey::new(42));
+        assert_eq!(t.dtype(), DType::F64);
+        let data: Vec<f64> = t.into_data().try_into_vec().unwrap();
+        assert!(data.iter().all(|&v| (0.0..=1.0).contains(&v)));
+    }
+
+    #[test]
+    fn test_float_random_f16() {
+        use cortex_backend::{DType, FloatDType, RandomKey, ops::FloatTensorOps};
+
+        let shape = cortex_std::Shape::from(vec![100]);
+        let dist = cortex_backend::Distribution::Uniform(0.0, 1.0);
+        let device = crate::FlexDevice;
+        let t = Flex::float_random(shape, dist, &device, FloatDType::F16, RandomKey::new(42));
+        assert_eq!(t.dtype(), DType::F16);
+    }
+}

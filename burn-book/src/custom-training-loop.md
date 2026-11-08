@@ -1,0 +1,101 @@
+# Custom Training Loops
+
+Even though Cortex comes with a project dedicated to simplifying training, it doesn't mean that you
+have to use it. Sometimes you may have special needs for your training, and it might be faster to
+just reimplement the training loop yourself. Also, you may just prefer implementing your own
+training loop instead of using a pre-built one in general.
+
+Cortex's got you covered!
+
+We will start from the same example shown in the [basic workflow](./basic-workflow) section, but
+without using the `Learner` struct. Reuse the `data` and `model` modules from that project.
+
+```rust,ignore
+{{#include ../../examples/custom-training-loop/src/lib.rs:imports}}
+use crate::{data::MnistBatcher, model::ModelConfig};
+
+{{#include ../../examples/custom-training-loop/src/lib.rs:config}}
+
+pub fn run(device: Device) {
+{{#include ../../examples/custom-training-loop/src/lib.rs:setup}}
+    // Training and validation loops are shown below.
+}
+```
+
+As seen with the previous example, setting up the configurations and the dataloader hasn't changed.
+Now, let's move forward and write our own training loop:
+
+```rust,ignore
+pub fn run(device: Device) {
+    // Set up the configuration, model, optimizer, and dataloaders as above.
+
+{{#include ../../examples/custom-training-loop/src/lib.rs:training_loop}}
+}
+```
+
+The loop uses this helper to compute classification accuracy:
+
+```rust,ignore
+{{#include ../../examples/custom-training-loop/src/lib.rs:accuracy}}
+```
+
+The training loop starts from epoch `1` and goes up to `num_epochs`. Within each epoch, we iterate
+over the training dataloader. During this process, we execute the forward pass, which is necessary
+for computing both the loss and accuracy. To maintain simplicity, we print the results to stdout.
+
+Upon obtaining the loss, we can invoke the `backward()` function, which returns the gradients
+specific to each variable. It's important to note that we need to map these gradients to their
+corresponding parameters using the `GradientsParams` type. This step is essential because you might
+run multiple different autodiff graphs and accumulate gradients for each parameter id.
+
+Finally, we can perform the optimization step using the learning rate, the model, and the computed
+gradients. It's worth mentioning that, unlike PyTorch, there's no need to register the gradients
+with the optimizer, nor do you have to call `zero_grad`. The gradients are automatically consumed
+during the optimization step. If you're interested in gradient accumulation, you can easily achieve
+this by using the `GradientsAccumulator`.
+
+```rust, ignore
+let mut accumulator = GradientsAccumulator::new();
+let loss = loss_fn.forward(model.forward(input), targets);
+let grads = loss.backward();
+let grads = GradientsParams::from_grads(grads, &model);
+accumulator.accumulate(&model, grads);
+// Repeat the forward/backward/accumulate steps for each microbatch in the window.
+let grads = accumulator.grads(); // Pop the accumulated gradients.
+model = optimizer.step(learning_rate, model, grads);
+```
+
+The accumulator sums gradients. Apply the final partial window and advance the learning-rate
+scheduler when updating the optimizer; see
+[Gradient accumulation](./building-blocks/learner.md#gradient-accumulation).
+
+Note that after each epoch, we include a validation loop to assess our model's performance on
+previously unseen data. To disable gradient tracking during this validation step, we can invoke
+`model.valid()`, which returns a model whose parameters are on a device without autodiff
+capabilities.
+
+You can find the code above available as an
+[example](https://github.com/tracel-ai/burn/tree/main/examples/custom-training-loop) for you to
+test.
+
+## Parameter Groups
+
+For different optimizers or learning rates across parts of a model, configure `ParamGroup`s on the
+`ModuleOptimizer` and module learning-rate scheduler. The optimizer then routes each parameter and
+its state during the same `step`; the training loop does not need to split the gradient container or
+step partial modules manually. See [Optimizer](./building-blocks/optimizer.md#parameter-groups).
+
+## Custom Type
+
+You can group a model and optimizer in a type that is generic over those two components; no backend
+parameter is necessary.
+
+```rust, ignore
+struct Learner<M, O> {
+    model: M,
+    optim: O,
+}
+```
+
+Trait bounds can be added on the methods that actually use `M` and `O`. Runtime device dispatch
+keeps these abstractions independent from the backend implementation.

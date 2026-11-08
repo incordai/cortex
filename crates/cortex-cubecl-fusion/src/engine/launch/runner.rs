@@ -1,0 +1,96 @@
+use super::super::codegen::ir::{FuseBlockConfig, GlobalArgsLaunch};
+use crate::{
+    CubeFusionHandle,
+    engine::launch::{
+        LaunchPlan,
+        vectorization::{Vect, vectorization_default},
+    },
+};
+use cortex_fusion::stream::Context;
+use cortex_ir::{TensorId, TensorIr};
+use cubecl::prelude::*;
+use std::collections::{BTreeMap, HashMap};
+
+/// A trace runner is responsible for determining the vectorization factor as well as launching
+/// a kernel based on global [inputs](GlobalArgsLaunch) and [outputs](GlobalArgsLaunch)
+/// with provided [fuse block configs](FuseBlockConfig).
+pub trait TraceRunner: Vectorization {
+    /// The error that might happen while running the trace.
+    type Error;
+
+    /// Run the trace with the given inputs and outputs.
+    ///
+    /// There is one [fuse config](FuseBlockConfig) for each [block](crate::engine::trace::block::FuseBlock) registered
+    /// in the [operation fuser](cortex_fusion::OperationFuser).
+    fn run<'a>(
+        &'a self,
+        client: &'a Client,
+        inputs: GlobalArgsLaunch,
+        outputs: GlobalArgsLaunch,
+        configs: &'a [FuseBlockConfig],
+    ) -> Result<(), Self::Error>;
+}
+
+pub enum VectorizationHandle<'a> {
+    NormalInput(&'a CubeFusionHandle, &'a TensorIr),
+    QuantValues(&'a CubeFusionHandle, &'a TensorIr),
+    QuantParams,
+}
+
+impl<'a> VectorizationHandle<'a> {
+    /// Returns if the current vectorization handle is from the given tensor id.
+    pub fn is_from_tensor(&self, id: TensorId) -> bool {
+        match self {
+            VectorizationHandle::NormalInput(_, tensor_ir) => tensor_ir.id == id,
+            VectorizationHandle::QuantValues(_, tensor_ir) => tensor_ir.id == id,
+            VectorizationHandle::QuantParams => false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct VectorizationAxis {
+    axis: HashMap<TensorId, usize>,
+}
+
+impl VectorizationAxis {
+    pub fn get<F: FnOnce() -> usize>(&self, id: TensorId, default: F) -> usize {
+        self.axis.get(&id).copied().unwrap_or_else(default)
+    }
+    pub fn insert(&mut self, id: TensorId, axis: usize) {
+        self.axis.insert(id, axis);
+    }
+}
+
+pub trait Vectorization {
+    /// Returns the vectorization options.
+    fn axis(&self, _plan: &LaunchPlan<'_>) -> VectorizationAxis {
+        VectorizationAxis::default()
+    }
+    /// The vectorization factor for all inputs and outputs.
+    #[allow(clippy::too_many_arguments)]
+    fn vectorization<'a>(
+        &self,
+        _context: &Context<CubeFusionHandle>,
+        vectorizations: &mut BTreeMap<TensorId, Vect>,
+        inputs: impl Iterator<Item = VectorizationHandle<'a>>,
+        outputs: impl Iterator<Item = &'a TensorIr>,
+        reshaped: impl Iterator<Item = (&'a TensorIr, &'a TensorIr, bool)>,
+        swapped: impl Iterator<Item = (&'a TensorIr, &'a TensorIr, bool, &'a (usize, usize))>,
+        vector_sizes: &[VectorSize],
+        max: VectorSize,
+        axis: VectorizationAxis,
+    ) {
+        vectorization_default(
+            vectorizations,
+            inputs,
+            outputs,
+            reshaped,
+            swapped,
+            vector_sizes,
+            &Default::default(),
+            max,
+            &axis,
+        )
+    }
+}

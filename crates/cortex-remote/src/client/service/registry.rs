@@ -1,0 +1,184 @@
+//! Process-global registry connecting Cortex's compact `DeviceId` to rich remote endpoints.
+
+use cortex_ir::TensorId;
+use cortex_std::{DeviceSettings, ExecutionError, rand::StdRng};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+use super::conn::{EndpointKey, RemoteEndpoint};
+use crate::shared::SessionId;
+
+static TENSOR_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn new_tensor_id() -> TensorId {
+    TensorId::new(TENSOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Whether a device's session has ended, and why: its response stream closed, its writer failed,
+/// or it could not be opened for work already queued on it. An ended session is never reopened;
+/// the next connect registers a new device.
+#[derive(Default)]
+pub(crate) struct SessionEnd {
+    reason: OnceLock<String>,
+}
+
+impl SessionEnd {
+    /// End the session. The first reason given is the one reported.
+    pub(crate) fn end(&self, reason: impl Into<String>) {
+        let _ = self.reason.set(reason.into());
+    }
+
+    pub(crate) fn has_ended(&self) -> bool {
+        self.reason.get().is_some()
+    }
+
+    /// The error every flush, sync and read reports once the session has ended.
+    ///
+    /// A [poisoned device](ExecutionError::DevicePoisoned): the tensors the session held are gone
+    /// with it, so nothing queued on it can run again, and a later connect is a new device.
+    pub(crate) fn error(&self) -> Option<ExecutionError> {
+        self.reason.get().map(|reason| {
+            ExecutionError::device_poisoned(format!("The remote session ended: {reason}"))
+        })
+    }
+
+    /// Why a request on this session was never answered.
+    ///
+    /// Only an ended session drops a request unanswered, so this is [`error`](Self::error).
+    pub(crate) fn unanswered(&self) -> ExecutionError {
+        self.error().unwrap_or_else(|| {
+            ExecutionError::device_poisoned("The remote session dropped a request unanswered")
+        })
+    }
+}
+
+struct EndpointRegistry {
+    next_index: u32,
+    /// The device id currently serving each endpoint and device index.
+    by_endpoint: HashMap<(EndpointKey, u32), u32>,
+    by_index: HashMap<u32, EndpointEntry>,
+}
+
+struct EndpointEntry {
+    endpoint: RemoteEndpoint,
+    device_index: u32,
+    rng: Arc<Mutex<StdRng>>,
+    settings: Arc<OnceLock<DeviceSettings>>,
+    device_count: Arc<OnceLock<u32>>,
+    /// The one session this device opens, named before it opens so a collective can name it.
+    session_id: SessionId,
+    session: Arc<SessionEnd>,
+}
+
+static REGISTRY: OnceLock<Mutex<EndpointRegistry>> = OnceLock::new();
+
+fn registry() -> &'static Mutex<EndpointRegistry> {
+    REGISTRY.get_or_init(|| {
+        Mutex::new(EndpointRegistry {
+            next_index: 0,
+            by_endpoint: HashMap::new(),
+            by_index: HashMap::new(),
+        })
+    })
+}
+
+/// The device id for `endpoint` and `device_index`: the current one, with its dialing hints
+/// refreshed, or a new one when there is none or its session has ended.
+pub(crate) fn register_endpoint(endpoint: RemoteEndpoint, device_index: u32) -> u32 {
+    let key = (endpoint.key(), device_index);
+    let mut registry = registry().lock().unwrap();
+    if let Some(id) = registry.by_endpoint.get(&key).copied() {
+        let entry = registry.by_index.get_mut(&id).unwrap();
+        if !entry.session.has_ended() {
+            entry.endpoint = endpoint;
+            return id;
+        }
+    }
+
+    let id = registry.next_index;
+    // A `DeviceId` carries the registry id in 16 bits. The lock is released first: a panic with
+    // it held would poison the registry for every device already connected.
+    if id > u32::from(u16::MAX) {
+        drop(registry);
+        panic!(
+            "Cortex Remote has registered {id} remote devices in this process, more than a device id \
+             can name"
+        );
+    }
+    registry.next_index += 1;
+    registry.by_endpoint.insert(key, id);
+    registry.by_index.insert(
+        id,
+        EndpointEntry {
+            endpoint,
+            device_index,
+            rng: Arc::new(Mutex::new(cortex_std::rand::get_seeded_rng())),
+            settings: Arc::new(OnceLock::new()),
+            device_count: Arc::new(OnceLock::new()),
+            session_id: SessionId::new(),
+            session: Arc::default(),
+        },
+    );
+    id
+}
+
+/// A registered device: where its server is, and which of the server's devices it is.
+pub(crate) struct RegisteredDevice {
+    pub(crate) endpoint: RemoteEndpoint,
+    pub(crate) device_index: u32,
+}
+
+fn find_entry<T>(id: u32, read: impl FnOnce(&EndpointEntry) -> T) -> Option<T> {
+    registry().lock().unwrap().by_index.get(&id).map(read)
+}
+
+/// Panics on an unregistered id once the lock is released, which keeps the registry usable.
+fn with_entry<T>(id: u32, read: impl FnOnce(&EndpointEntry) -> T) -> T {
+    find_entry(id, read).unwrap_or_else(|| panic!("Device id {id} not registered"))
+}
+
+pub(crate) fn registered_device(id: u32) -> Option<RegisteredDevice> {
+    find_entry(id, |entry| RegisteredDevice {
+        endpoint: entry.endpoint.clone(),
+        device_index: entry.device_index,
+    })
+}
+
+pub(crate) fn settings_for(id: u32) -> DeviceSettings {
+    *settings_cell(id)
+        .get()
+        .expect("Remote service has not connected to this device yet")
+}
+
+pub(crate) fn has_settings(id: u32) -> bool {
+    find_entry(id, |entry| entry.settings.get().is_some()) == Some(true)
+}
+
+pub(crate) fn settings_cell(id: u32) -> Arc<OnceLock<DeviceSettings>> {
+    with_entry(id, |entry| entry.settings.clone())
+}
+
+pub(crate) fn random_generator(id: u32) -> Arc<Mutex<StdRng>> {
+    with_entry(id, |entry| entry.rng.clone())
+}
+
+pub(crate) fn device_count_cell(id: u32) -> Arc<OnceLock<u32>> {
+    with_entry(id, |entry| entry.device_count.clone())
+}
+
+pub(crate) fn device_count_for(id: u32) -> Option<u32> {
+    find_entry(id, |entry| entry.device_count.get().copied()).flatten()
+}
+
+pub(crate) fn session_end(id: u32) -> Arc<SessionEnd> {
+    with_entry(id, |entry| entry.session.clone())
+}
+
+pub(crate) fn session_of(id: u32) -> SessionId {
+    with_entry(id, |entry| entry.session_id)
+}

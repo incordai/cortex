@@ -1,0 +1,124 @@
+#[cfg(feature = "fusion")]
+pub use cortex_fusion as fusion;
+
+#[cfg(feature = "ir")]
+pub use cortex_ir as ir;
+
+pub use cortex_backend::*;
+pub use cortex_backend_extension::{ExtensionType, backend_extension};
+
+// Dispatch backend extension types
+pub use cortex_dispatch::{backend::*, device::*, tensor::*};
+// Re-export the backends dispatches directly.
+#[allow(unused_imports)] // No concrete types are exported in backend-free builds.
+pub use cortex_dispatch::backends::*;
+// Re-export their devices without conflating them with backend implementations in cortex-dispatch.
+#[allow(unused_imports)]
+pub use cortex_dispatch::devices::*;
+
+// Public runtime facade crates. CubeCL runtimes share one dispatch backend, but these aliases and
+// modules remain the stable user-facing API under `cortex::backend`.
+#[cfg(feature = "cpu")]
+pub use cortex_cpu::{self as cpu, Cpu};
+#[cfg(feature = "cuda")]
+pub use cortex_cuda::{self as cuda, Cuda};
+#[cfg(feature = "rocm")]
+pub use cortex_rocm::{self as rocm, Rocm};
+#[cfg(feature = "wgpu")]
+pub use cortex_wgpu::{self as wgpu, Wgpu};
+
+/// A trait to map custom structs and enums of tensor primitives across the [`Dispatch`] boundary, in
+/// both directions.
+///
+/// This trait cooperates with the [`#[backend_extension]`](backend_extension) macro. When an extension
+/// operation returns such a type, [`map_to_dispatch`](Self::map_to_dispatch) wraps each internal tensor
+/// into a [`DispatchTensor`]; when it takes one as an input, [`map_from_dispatch`](Self::map_from_dispatch)
+/// reconstructs the concrete value and [`routing_tensor`](Self::routing_tensor) /
+/// [`routing_float_tensor`](Self::routing_float_tensor) locate a tensor for dispatch routing and
+/// backend selection. [`autodiff_context`](Self::autodiff_context) merges the contexts of all
+/// tensor fields participating in one operation, while
+/// [`autodiff_routing`](Self::autodiff_routing) also determines whether execution needs the autodiff
+/// backend. Nested `#[extension_type]` fields are traversed recursively.
+///
+/// Implementations are generated automatically using `#[derive(ExtensionType)]`.
+pub trait ExtensionType<B: Backend> {
+    /// The target struct layout where all internal concrete backend tensors are transformed
+    /// into [`DispatchTensor`]s.
+    type Target;
+
+    /// Transforms the internal fields of the struct by applying a backend-specific wrapping closure.
+    ///
+    /// # Arguments
+    ///
+    /// * `map_kind` - A closure provided by the dispatch macro that knows how to map a backend-agnostic
+    ///   [`BackendTensor`] variant into the correct [`DispatchTensorKind`] variant (e.g., `Wgpu`, `Cuda`, `Cpu`).
+    /// * `autodiff` - The semantic autodiff backend context to attach to each [`DispatchTensor`].
+    ///
+    /// # Returns
+    ///
+    /// A new instance of the struct mapped to the [`Dispatch`] backend.
+    fn map_to_dispatch<F>(self, map_kind: F, autodiff: DispatchAutodiffContext) -> Self::Target
+    where
+        F: Fn(BackendTensor<B>) -> DispatchTensorKind;
+
+    /// Reconstruct the concrete `Struct<B>` from its dispatch form `Struct<Dispatch>`.
+    ///
+    /// This is the inverse of [`map_to_dispatch`](Self::map_to_dispatch), used when a custom struct is passed as
+    /// an **input** to a backend extension operation. The dispatch glue has already selected the
+    /// target backend `B`; `unwrap_kind` pulls the matching [`BackendTensor`] out of each field's
+    /// [`DispatchTensorKind`], and the derived impl calls the right accessor (`.float()`, `.int()`,
+    /// ...) per field to recover the concrete primitive.
+    ///
+    /// # Arguments
+    ///
+    /// * `unwrap_kind` - A closure provided by the dispatch macro that validates the tensor's
+    ///   representation and unwraps its [`DispatchTensorKind`] into the [`BackendTensor`] for the
+    ///   selected backend `B`, panicking on a backend mismatch.
+    fn map_from_dispatch<F>(target: Self::Target, unwrap_kind: F) -> Self
+    where
+        F: Fn(DispatchTensor) -> BackendTensor<B>;
+
+    /// Return a tensor of the dispatch form to use for routing, or `None` if this value
+    /// currently holds no tensor (e.g. an enum on a tensor-less variant).
+    ///
+    /// A struct/enum input carries no top-level [`DispatchTensor`] of its own, so the dispatch glue
+    /// uses this to read the runtime backend tag (`.kind`) and autodiff context. All other tensor
+    /// fields must carry the same context; dispatch validates them while mapping the value to its
+    /// concrete backend. This lookup recurses into nested `#[extension_type]` fields.
+    fn routing_tensor(target: &Self::Target) -> Option<&DispatchTensor>;
+
+    /// Like [`routing_tensor`](Self::routing_tensor) but returns only a *float* tensor, or `None` if
+    /// there is none.
+    ///
+    /// The dispatch glue prefers a float routing tensor when selecting the concrete backend. It
+    /// falls back to [`routing_tensor`](Self::routing_tensor) only when no float tensor exists
+    /// anywhere in the inputs.
+    fn routing_float_tensor(target: &Self::Target) -> Option<&DispatchTensor>;
+
+    /// Return the merged autodiff context and whether float inputs may need autodiff execution.
+    ///
+    /// The default conservatively selects autodiff when the merged context is enabled and any
+    /// float is present, since the routing float may not be the only float field. Implementations
+    /// can override this to select autodiff only when a float has it enabled. The derive does this
+    /// automatically, inspecting every tensor field and computing both values in one traversal.
+    #[doc(hidden)]
+    fn autodiff_routing(target: &Self::Target) -> (DispatchAutodiffContext, bool) {
+        let context = Self::autodiff_context(target);
+        let needs_autodiff = matches!(context, DispatchAutodiffContext::Enabled(_))
+            && Self::routing_float_tensor(target).is_some();
+        (context, needs_autodiff)
+    }
+
+    /// Merge the autodiff contexts of every tensor held by the dispatch form.
+    ///
+    /// A tensor-less value returns [`DispatchAutodiffContext::Disabled`]. The default uses the
+    /// routing tensor and is sufficient for single-tensor implementations; implementations that
+    /// can hold multiple tensors must merge every tensor context. The derive handles this
+    /// automatically.
+    #[doc(hidden)]
+    fn autodiff_context(target: &Self::Target) -> DispatchAutodiffContext {
+        Self::routing_tensor(target)
+            .map(|tensor| tensor.autodiff)
+            .unwrap_or_default()
+    }
+}

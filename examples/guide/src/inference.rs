@@ -1,0 +1,24 @@
+use crate::{data::MnistBatcher, training::TrainingConfig};
+use cortex::{
+    data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
+    prelude::*,
+    store::ModuleRecord,
+};
+
+pub fn infer(artifact_dir: &str, device: impl Into<Device>, item: MnistItem) {
+    let device = device.into();
+    let config = TrainingConfig::load(format!("{artifact_dir}/config.json"))
+        .expect("Config should exist for the model; run train first");
+    let record = ModuleRecord::load(format!("{artifact_dir}/model"))
+        .expect("Trained model should exist; run train first");
+
+    let model = config.model.init(&device).load_record(record);
+
+    let label = item.label;
+    let batcher = MnistBatcher::default();
+    let batch = batcher.batch(vec![item], &device);
+    let output = model.forward(batch.images);
+    let predicted: u8 = output.argmax(1).flatten::<1>(0, 1).into_scalar();
+
+    println!("Predicted {predicted} Expected {label}");
+}

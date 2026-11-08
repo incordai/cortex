@@ -1,0 +1,243 @@
+use super::*;
+use cortex_tensor::Tolerance;
+use cortex_tensor::{
+    Shape,
+    quantization::{QuantScheme, QuantStore, QuantValue, ScaleDtype},
+};
+
+fn should_quantize_dequantize_symmetric_arange<S: Into<Shape>>(
+    value: QuantValue,
+    store: QuantStore,
+    shape: S,
+) {
+    let shape = shape.into();
+    assert_eq!(shape.rank(), 2); // 2D tests
+
+    let device = Default::default();
+    let ref_device = ReferenceDevice::new();
+
+    let scheme = QuantScheme::default().with_value(value).with_store(store);
+    let scheme_ref = scheme.with_store(QuantStore::Native);
+
+    let input: TestTensor<2> = TestTensorInt::arange(0..shape.num_elements() as i64, &device)
+        .float()
+        .reshape(shape);
+    let input_ref = TestTensor::<2>::from_data(input.to_data(), &ref_device);
+
+    let output = input.quantize_dynamic(&scheme);
+    let output_ref = input_ref.quantize_dynamic(&scheme_ref);
+
+    output.to_data().assert_eq(&output_ref.to_data(), false);
+
+    let output = output.dequantize();
+    let output_ref = output_ref.dequantize();
+
+    output
+        .into_data()
+        .assert_approx_eq::<FloatElem>(&output_ref.to_data(), Tolerance::default());
+}
+
+fn should_quantize_dequantize_symmetric_per_block_arange<S: Into<Shape>>(
+    value: QuantValue,
+    block_size: usize,
+    store: QuantStore,
+    shape: S,
+) {
+    let device = Default::default();
+    let ref_device = ReferenceDevice::new();
+
+    let scheme = QuantScheme::default()
+        .with_value(value)
+        .per_block([block_size as u8], ScaleDtype::F32)
+        .with_store(store);
+    let scheme_ref = scheme.with_store(QuantStore::Native);
+
+    let shape = shape.into();
+    let input: TestTensor<2> = TestTensorInt::arange(0..shape.num_elements() as i64, &device)
+        .float()
+        .reshape(shape);
+    let input_ref = TestTensor::<2>::from_data(input.to_data(), &ref_device);
+
+    let output = input.quantize_dynamic(&scheme);
+    let output_ref = input_ref.quantize_dynamic(&scheme_ref);
+
+    output.to_data().assert_eq(&output_ref.to_data(), false);
+
+    let output = output.dequantize();
+    let output_ref = output_ref.dequantize();
+
+    output
+        .into_data()
+        .assert_approx_eq::<FloatElem>(&output_ref.to_data(), Tolerance::default());
+}
+
+fn should_quantize_dequantize_symmetric_per_block(
+    value: QuantValue,
+    block_size: usize,
+    store: QuantStore,
+) {
+    let scheme = QuantScheme::default()
+        .with_value(value)
+        .per_block([block_size as u8], ScaleDtype::F32)
+        .with_store(store);
+    let scheme_ref = scheme.with_store(QuantStore::Native);
+
+    let device = Default::default();
+    let ref_device = ReferenceDevice::new();
+
+    let input = TestTensor::<2>::from_data(
+        [
+            [
+                -1.8, -1.0, 0.0, 0.5, -1.8, -1.0, 0.0, 0.5, 0.01, 0.025, 0.03, 0.04, 0.01, 0.025,
+                0.03, 0.04,
+            ],
+            [
+                1.8, 1.0, 0.0, -0.5, 1.8, 1.0, 0.0, -0.5, -0.01, -0.025, -0.03, -0.04, -0.01,
+                -0.025, -0.03, -0.04,
+            ],
+        ],
+        &device,
+    );
+    let input_ref = TestTensor::<2>::from_data(input.to_data(), &ref_device);
+
+    let output = input.quantize_dynamic(&scheme);
+    let output_ref = input_ref.quantize_dynamic(&scheme_ref);
+
+    output.to_data().assert_eq(&output_ref.to_data(), false);
+
+    let output = output.dequantize();
+    let output_ref = output_ref.dequantize();
+
+    output
+        .into_data()
+        .assert_approx_eq::<FloatElem>(&output_ref.to_data(), Tolerance::default());
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q8s_packed() {
+    should_quantize_dequantize_symmetric_arange(QuantValue::Q8S, QuantStore::PackedU32(0), [8, 16])
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q8f_packed() {
+    should_quantize_dequantize_symmetric_arange(QuantValue::Q8F, QuantStore::PackedU32(0), [8, 16])
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q4s_packed() {
+    should_quantize_dequantize_symmetric_arange(QuantValue::Q4S, QuantStore::PackedU32(0), [8, 16])
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q4f_packed() {
+    should_quantize_dequantize_symmetric_arange(QuantValue::Q4F, QuantStore::PackedU32(0), [8, 16])
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q2s_packed() {
+    should_quantize_dequantize_symmetric_arange(QuantValue::Q2S, QuantStore::PackedU32(0), [8, 16])
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q2f_packed() {
+    should_quantize_dequantize_symmetric_arange(QuantValue::Q2F, QuantStore::PackedU32(0), [8, 16])
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_per_block_q8s_packed() {
+    should_quantize_dequantize_symmetric_per_block(QuantValue::Q8S, 8, QuantStore::PackedU32(0))
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_per_block_q4s_packed() {
+    should_quantize_dequantize_symmetric_per_block(QuantValue::Q4S, 8, QuantStore::PackedU32(0))
+}
+
+#[test]
+#[should_panic] // "Block size must be divisible by 16" error is shadowed by the CallError
+fn should_panic_when_block_size_cannot_store_num_quants() {
+    // num_quants in u32 = 32 bits / 2 bits = 16
+    should_quantize_dequantize_symmetric_per_block(QuantValue::Q2S, 8, QuantStore::PackedU32(0))
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_per_block_q2s_packed() {
+    should_quantize_dequantize_symmetric_per_block(QuantValue::Q2S, 16, QuantStore::PackedU32(0))
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_q8s_native() {
+    if supports_native() {
+        should_quantize_dequantize_symmetric_arange(QuantValue::Q8S, QuantStore::Native, [32, 32])
+    }
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_per_block_q8s_native() {
+    if supports_native() {
+        should_quantize_dequantize_symmetric_per_block(QuantValue::Q8S, 8, QuantStore::Native)
+    }
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_per_block_arange_q8s_packed() {
+    should_quantize_dequantize_symmetric_per_block_arange(
+        QuantValue::Q8S,
+        32,
+        QuantStore::PackedU32(0),
+        [32, 32],
+    )
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_per_block_arange_q8s_native() {
+    if supports_native() {
+        should_quantize_dequantize_symmetric_per_block_arange(
+            QuantValue::Q8S,
+            32,
+            QuantStore::Native,
+            [32, 32],
+        )
+    }
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_128x256_q8s_native() {
+    if supports_native() {
+        should_quantize_dequantize_symmetric_per_block_arange(
+            QuantValue::Q8S,
+            32,
+            QuantStore::Native,
+            [128, 256],
+        )
+    }
+}
+
+#[test]
+fn should_quantize_dequantize_symmetric_arange_128x256_q8s_packed() {
+    should_quantize_dequantize_symmetric_per_block_arange(
+        QuantValue::Q8S,
+        32,
+        QuantStore::PackedU32(0),
+        [128, 256],
+    )
+}
+
+/// Packing into `u32` needs the innermost dim to be a multiple of the values a word holds, so
+/// this shape is refused. The quantize runs on the device's thread, so the refusal comes back
+/// when the tensor is read, and the device keeps running.
+#[cfg(not(feature = "fusion"))]
+#[test]
+fn should_refuse_a_shape_that_cannot_store_quants() {
+    let device = Default::default();
+    let scheme = QuantScheme::default();
+
+    let error = TestTensor::<2>::from_data([[1.0, 6.35], [2.0, 3.0], [1.0, 3.0]], &device)
+        .quantize_dynamic(&scheme)
+        .try_into_data()
+        .expect_err("a last dim of 2 does not fill a word of 4 values");
+    assert!(
+        format!("{error:?}").contains("Can't store in u32"),
+        "refused for another reason: {error:?}"
+    );
+}

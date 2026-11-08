@@ -1,0 +1,428 @@
+use crate::Initializer;
+use crate::modules::bounds;
+use cortex_core as cortex;
+
+use cortex::config::Config;
+use cortex::instrument::{self, Bounds, compute};
+use cortex::module::Param;
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use cortex::tensor::module::linear;
+use cortex::tensor::{Device, Tensor, assert_shape};
+
+/// Configuration to create a [`Linear`] layer using the [init function](LinearConfig::init).
+#[derive(Config, Debug)]
+pub struct LinearConfig {
+    /// The size of the input features.
+    pub d_input: usize,
+    /// The size of the output features.
+    pub d_output: usize,
+    /// If a bias should be applied during the linear transformation.
+    #[config(default = true)]
+    pub bias: bool,
+    /// The type of function used to initialize neural network parameters
+    #[config(
+        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0), fan_out_only:false}"
+    )]
+    pub initializer: Initializer,
+    /// The layout in which the linear parameters are stored.
+    #[config(default = "LinearLayout::Row")]
+    pub layout: LinearLayout,
+}
+
+#[derive(Config, Debug, Copy)]
+/// The layout in which the linear parameters are stored.
+///
+/// This can have performance impacts.
+pub enum LinearLayout {
+    /// Parameters are stored in Row major.
+    Row,
+    /// Parameters are stored in Col major.
+    Col,
+}
+
+/// Applies a linear transformation to the input tensor.
+///
+/// Should be created with [LinearConfig]
+///
+/// `O = IW + b`
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct Linear {
+    /// Matrix of shape `[d_input, d_output]` initialized from a uniform distribution:
+    ///     `U(-k, k)`, where `k = sqrt(1 / d_input)`
+    pub weight: Param<Tensor<2>>,
+    /// Vector of size `d_output` initialized from a uniform distribution:
+    ///     `U(-k, k)`, where `k = sqrt(1 / d_input)`
+    pub bias: Option<Param<Tensor<1>>>,
+}
+
+impl LinearConfig {
+    /// Initialize a new [`Linear`] module.
+    pub fn init(&self, device: &Device) -> Linear {
+        let weight = match self.layout {
+            LinearLayout::Row => {
+                let shape = [self.d_input, self.d_output];
+                self.initializer
+                    .init_with(shape, Some(self.d_input), Some(self.d_output), device)
+            }
+            LinearLayout::Col => {
+                let shape = [self.d_output, self.d_input];
+
+                self.initializer
+                    .init_with(shape, Some(self.d_output), Some(self.d_input), device)
+                    // The param is already transposed when init. We re-transpose to have
+                    // [d_output, d_input] while saving.
+                    .save_mapper(move |tensor| {
+                        let device = tensor.device();
+                        device.sync().unwrap();
+                        let tensor = tensor.transpose();
+                        device.sync().unwrap();
+                        tensor
+                    })
+                    // When loading from record we have to transpose.
+                    .load_mapper(move |tensor| {
+                        let device = tensor.device();
+                        device.sync().unwrap();
+                        let tensor = tensor.transpose();
+                        device.sync().unwrap();
+
+                        tensor
+                    })
+                    // When loading from initialization, we have to transpose.
+                    .init_mapper(|tensor| {
+                        let device = tensor.device();
+                        device.sync().unwrap();
+                        let tensor = tensor.transpose();
+                        device.sync().unwrap();
+                        tensor
+                    })
+            }
+        };
+        let bias = if self.bias {
+            Some(self.initializer.init_with(
+                [self.d_output],
+                Some(self.d_input),
+                Some(self.d_output),
+                device,
+            ))
+        } else {
+            None
+        };
+
+        Linear { weight, bias }
+    }
+}
+
+impl Linear {
+    /// The floor for running this projection alone: read the input and the parameters once,
+    /// write the output once.
+    ///
+    /// Assumes a floating-point input: the output is priced at the input's width, which
+    /// undercounts it for a quantized input projected to floating point.
+    pub(crate) fn bounds<const D: usize>(&self, input: &Tensor<D>) -> Bounds {
+        let weight = self.weight.val();
+        let [d_input, d_output] = weight.dims().map(|dim| dim as u64);
+        let rows: u64 = input.dims()[..D - 1]
+            .iter()
+            .map(|dim| *dim as u64)
+            .product();
+        Bounds {
+            read: instrument::tensor_bytes(input)
+                + instrument::tensor_bytes(&weight)
+                + bounds::optional_parameter(&self.bias),
+            write: rows * d_output * input.dtype().size() as u64,
+            flops: 2 * rows * d_input * d_output,
+        }
+    }
+
+    /// Applies the forward pass on the input tensor.
+    ///
+    /// # Arguments
+    ///
+    /// - `input` - The input tensor of shape `[..., d_input]`.
+    ///
+    /// # Shapes
+    ///
+    /// - input: `[..., d_input]`
+    /// - output: `[..., d_output]`
+    ///
+    /// # Returns
+    ///
+    /// The transformed tensor of shape `[..., d_output]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the last axis of `input` is not `d_input`.
+    #[compute(bounds = Self::bounds)]
+    pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
+        let weight = self.weight.val();
+        let [d_input, _] = weight.dims();
+        assert_shape!(input, [.., d_input]);
+
+        linear(input, weight, self.bias.as_ref().map(|b| b.val()))
+    }
+}
+
+impl ModuleDisplay for Linear {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        let [d_input, d_output] = self.weight.shape().dims();
+        content
+            .add("d_input", &d_input)
+            .add("d_output", &d_output)
+            .add("bias", &self.bias.is_some())
+            .optional()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cortex::module::{Module, ParamId};
+    use cortex::store::ModuleRecord;
+    use cortex::tensor::ElementConversion;
+    use cortex::tensor::Tolerance;
+    use cortex::tensor::{Shape, TensorData};
+    type FT = f32;
+
+    /// A projection reads its input, weight and bias and writes its output once, at two flops
+    /// per multiply-add of every row.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_projection_declares_its_floor() {
+        let device = Default::default();
+        let linear = LinearConfig::new(3, 4).init(&device);
+        let input = Tensor::<3>::zeros([2, 5, 3], &device);
+
+        let recorded = crate::recording::recorded(|| {
+            linear.forward(input);
+        });
+
+        assert_eq!(recorded.lines(), ["linear"]);
+        assert_eq!(
+            recorded.declared("linear"),
+            Some(Bounds {
+                read: (2 * 5 * 3 + 3 * 4 + 4) * 4,
+                write: 2 * 5 * 4 * 4,
+                flops: 2 * 2 * 5 * 3 * 4,
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_shape!(input, [.., d_input]): axis 1 expected 4, got 3")]
+    fn input_d_input_must_match() {
+        let device = Default::default();
+        let linear = LinearConfig::new(4, 2).init(&device);
+        let _ = linear.forward(Tensor::<2>::zeros([1, 3], &device));
+    }
+
+    #[test]
+    fn initializer_default() {
+        let device = Device::default();
+        device.seed(0);
+
+        let config = LinearConfig::new(5, 5);
+        let k = (1.0 / config.d_input as f64).sqrt().elem::<FT>();
+        let linear = config.init(&device);
+
+        assert_eq!(
+            config.initializer,
+            Initializer::KaimingUniform {
+                gain: 1.0 / 3.0f64.sqrt(),
+                fan_out_only: false
+            }
+        );
+        linear.weight.to_data().assert_within_range(-k..k);
+    }
+
+    #[test]
+    fn initializer_zeros() {
+        let device = Device::default();
+        device.seed(0);
+
+        let config = LinearConfig::new(5, 5).with_initializer(Initializer::Zeros);
+        let linear = config.init(&device);
+
+        assert_eq!(config.initializer, Initializer::Zeros);
+        linear.weight.to_data().assert_approx_eq::<FT>(
+            &TensorData::zeros::<f32, _>(linear.weight.shape()),
+            Tolerance::default(),
+        );
+    }
+
+    #[test]
+    fn test_linear_forward_no_bias() {
+        let device = Device::default();
+        device.seed(0);
+
+        let value = 2.;
+        let config = LinearConfig::new(2, 3)
+            .with_initializer(Initializer::Constant { value })
+            .with_bias(false);
+        let linear = config.init(&device);
+
+        let input = Tensor::<2>::ones(Shape::new([1, 2]), &device);
+        let result = linear.forward(input);
+        let expected_result = Tensor::<2>::from_data([[4., 4., 4.]], &device);
+
+        assert_eq!(result.into_data(), expected_result.into_data());
+    }
+
+    #[test]
+    fn test_linear_forward_with_bias() {
+        let device = Device::default();
+        device.seed(0);
+
+        let device = Device::default();
+
+        let value = 2.;
+        let config = LinearConfig::new(2, 3).with_initializer(Initializer::Constant { value });
+        let linear = config.init(&device);
+
+        let input = Tensor::<2>::ones(Shape::new([1, 2]), &device);
+        let result = linear.forward(input);
+        let expected_result = Tensor::<2>::from_data([[6., 6., 6.]], &device);
+
+        assert_eq!(result.into_data(), expected_result.into_data());
+    }
+
+    #[test]
+    fn test_linear_1d() {
+        let device = Device::default();
+        device.seed(0);
+
+        let value = 2.;
+        let config = LinearConfig::new(2, 3).with_initializer(Initializer::Constant { value });
+        let linear = config.init(&device);
+
+        let input_1d = Tensor::<1>::ones(Shape::new([2]), &device);
+        let input_2d = Tensor::<2>::ones(Shape::new([1, 2]), &device);
+
+        let result_1d = linear.forward(input_1d).unsqueeze::<2>();
+        let result_2d = linear.forward(input_2d);
+
+        assert_eq!(result_1d.into_data(), result_2d.into_data());
+    }
+
+    #[test]
+    fn display() {
+        let config = LinearConfig::new(3, 5);
+        let linear = config.init(&Default::default());
+
+        assert_eq!(
+            alloc::format!("{linear}"),
+            "Linear {d_input: 3, d_output: 5, bias: true, params: 20}"
+        );
+    }
+
+    #[test]
+    fn layout() {
+        let device = Default::default();
+        // The `Col` layout exposes the weight matrix as `[d_input, d_output]`.
+        let linear = LinearConfig::new(6, 12)
+            .with_layout(LinearLayout::Col)
+            .init(&device);
+        assert_eq!(linear.weight.dims(), [6, 12], "Shape is as configured");
+    }
+
+    #[test]
+    fn round_trip_cortexpack() {
+        let device = Default::default();
+        let linear = LinearConfig::new(6, 12).init(&device);
+
+        let weight_before = linear.weight.val().to_data();
+        let data = linear.into_record().into_bytes().unwrap();
+
+        let linear = LinearConfig::new(6, 12)
+            .init(&device)
+            .load_record(ModuleRecord::from_bytes(data).unwrap());
+
+        linear
+            .weight
+            .val()
+            .to_data()
+            .assert_eq(&weight_before, true);
+    }
+
+    fn assert_col_layout_round_trip(linear: Linear, config: &LinearConfig) {
+        let device = linear.weight.val().device();
+        let weight_before = linear.weight.val().to_data();
+        let data = linear.into_record().into_bytes().unwrap();
+
+        let linear = config
+            .init(&device)
+            .load_record(ModuleRecord::from_bytes(data).unwrap());
+
+        linear
+            .weight
+            .val()
+            .to_data()
+            .assert_eq(&weight_before, true);
+    }
+
+    #[test]
+    fn col_layout_mapper_is_preserved_after_valid() {
+        let device = Device::default();
+        let config = LinearConfig::new(6, 12).with_layout(LinearLayout::Col);
+        let linear = config
+            .init(&device)
+            .to_device(&device.clone().autodiff())
+            .valid();
+
+        assert_col_layout_round_trip(linear, &config);
+    }
+
+    #[test]
+    fn col_layout_mapper_is_preserved_after_train() {
+        let device = Device::default();
+        let config = LinearConfig::new(6, 12).with_layout(LinearLayout::Col);
+        let linear = config.init(&device).train();
+
+        assert_col_layout_round_trip(linear, &config);
+    }
+
+    #[test]
+    fn col_layout_trains_on_an_autodiff_device() {
+        let device = Device::default().autodiff();
+        let linear = LinearConfig::new(6, 12)
+            .with_layout(LinearLayout::Col)
+            .init(&device);
+        let signal = Tensor::<2>::random([8, 6], cortex::tensor::Distribution::Default, &device);
+
+        let grads = linear.forward(signal).sum().backward();
+
+        assert!(linear.weight.grad(&grads).is_some());
+    }
+
+    #[test]
+    fn col_row_same_result() {
+        let device = Default::default();
+        let config_col = LinearConfig::new(6, 12).with_layout(LinearLayout::Col);
+        let linear_col = config_col.init(&device);
+        let signal = Tensor::<2>::random([8, 6], cortex::tensor::Distribution::Default, &device);
+        let value = linear_col.forward(signal.clone());
+
+        let data_1 = value.into_data();
+
+        let weights = linear_col.weight.val().into_data();
+        let weights = Tensor::from_data(weights, &device);
+
+        let linear = Linear {
+            weight: Param::initialized(ParamId::new(), weights),
+            bias: linear_col
+                .bias
+                .map(|b| Param::initialized(ParamId::new(), b.val())),
+        };
+
+        let value = linear.forward(signal);
+        let data_2 = value.into_data();
+
+        data_1.assert_approx_eq::<f32>(&data_2, Default::default());
+    }
+}

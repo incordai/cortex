@@ -1,0 +1,153 @@
+//! Conversion helpers between cortex's [`DType`] and cubecl's
+//! `ElemType` / `StorageType`, and between their `ReduceOperation`s.
+//!
+//! These are exposed as plain named functions (rather than `From`/`Into`
+//! trait impls in `cortex-std`) so that `cortex-std` doesn't need to depend on
+//! `cubecl` and the cubecl type tree doesn't leak into the shared standard
+//! library. Backend implementations that want these conversions depend on
+//! `cortex-backend` (with the `cubecl` feature) and call these functions
+//! explicitly.
+
+use cortex_std::{
+    BoolStore, DType, QuantScheme, QuantStore, QuantValue, distributed::ReduceOperation,
+};
+use cubecl::ir::{ElemType, FloatKind, IntKind, UIntKind};
+
+pub mod autotune;
+mod device;
+mod execution;
+
+pub use cubecl::throughput::{
+    MemoryAccess, ThroughputError, ThroughputKey, ThroughputMode, ThroughputValue,
+};
+
+/// The device of every cubecl runtime, re-exported so a crate routing through
+/// `cortex-backend` — `cortex-dispatch` does — needs no cubecl dependency of its own.
+pub use cubecl::Device;
+/// Which runtime a [`Device`] belongs to. Re-exported alongside it: with one
+/// backend covering every runtime, naming a runtime is how a caller asks for a
+/// subset of the devices.
+pub use cubecl::RuntimeId;
+pub use cubecl::ir::{AdapterLuid, DeviceIdentity, PciAddress, PciVendor, PhysicalDevice};
+pub use cubecl::std::throughput::measure_peak_throughput;
+
+/// What a cubecl device can do, as its runtime states it once the device is
+/// open: the features, limits and memory it reports, its identity, and the
+/// target its kernels compile for. What a kernel written in cubecl selects its
+/// routines by, so a device whose work runs elsewhere — a remote device's
+/// server — answers it from there.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CubeCapabilities {
+    /// The features, limits, memory and identity the runtime reports.
+    pub properties: cubecl::ir::DeviceProperties,
+    /// The target the runtime compiles kernels for.
+    pub target: cubecl::ir::TargetProperties,
+}
+
+/// Convert a cubecl [`ElemType`] into the corresponding cortex [`DType`].
+///
+/// Panics if the cubecl type has no direct cortex equivalent (e.g. `TF32`).
+pub fn elem_type_to_dtype(value: ElemType) -> DType {
+    match value {
+        ElemType::Float(float_kind) => match float_kind {
+            FloatKind::F16 => DType::F16,
+            FloatKind::BF16 => DType::BF16,
+            FloatKind::Flex32 => DType::Flex32,
+            FloatKind::F32 => DType::F32,
+            FloatKind::F64 => DType::F64,
+            FloatKind::TF32 => panic!("Not a valid DType for tensors."),
+            FloatKind::E2M1
+            | FloatKind::E2M1x2
+            | FloatKind::E2M3
+            | FloatKind::E3M2
+            | FloatKind::E4M3
+            | FloatKind::E5M2
+            | FloatKind::UE8M0 => {
+                unimplemented!("Not yet supported, will be used for quantization")
+            }
+        },
+        ElemType::Int(int_kind) => match int_kind {
+            IntKind::I8 => DType::I8,
+            IntKind::I16 => DType::I16,
+            IntKind::I32 => DType::I32,
+            IntKind::I64 => DType::I64,
+        },
+        ElemType::UInt(uint_kind) => match uint_kind {
+            UIntKind::U8 => DType::U8,
+            UIntKind::U16 => DType::U16,
+            UIntKind::U32 => DType::U32,
+            UIntKind::U64 => DType::U64,
+        },
+        _ => panic!("Not a valid DType for tensors."),
+    }
+}
+
+/// Convert a cortex [`DType`] into the corresponding cubecl [`ElemType`].
+///
+/// Sub-byte quantization variants whose storage is `PackedNative` may panic
+/// (see inline `panic!`s) — those configurations are not representable as a
+/// single `ElemType`; use [`dtype_to_storage_type`] instead.
+pub fn dtype_to_elem_type(dtype: DType) -> ElemType {
+    match dtype {
+        DType::F64 => ElemType::Float(FloatKind::F64),
+        DType::F32 => ElemType::Float(FloatKind::F32),
+        DType::Flex32 => ElemType::Float(FloatKind::Flex32),
+        DType::F16 => ElemType::Float(FloatKind::F16),
+        DType::BF16 => ElemType::Float(FloatKind::BF16),
+        DType::I64 => ElemType::Int(IntKind::I64),
+        DType::I32 => ElemType::Int(IntKind::I32),
+        DType::I16 => ElemType::Int(IntKind::I16),
+        DType::I8 => ElemType::Int(IntKind::I8),
+        DType::U64 => ElemType::UInt(UIntKind::U64),
+        DType::U32 => ElemType::UInt(UIntKind::U32),
+        DType::U16 => ElemType::UInt(UIntKind::U16),
+        DType::U8 => ElemType::UInt(UIntKind::U8),
+        DType::Bool(store) => match store {
+            BoolStore::Native => ElemType::Bool,
+            BoolStore::U8 => ElemType::UInt(UIntKind::U8),
+            BoolStore::U32 => ElemType::UInt(UIntKind::U32),
+        },
+        DType::QFloat(scheme) => match scheme.store {
+            QuantStore::Native => match scheme.value {
+                QuantValue::Q8F | QuantValue::Q8S => ElemType::Int(IntKind::I8),
+                QuantValue::E4M3 => ElemType::Float(FloatKind::E4M3),
+                QuantValue::E5M2 => ElemType::Float(FloatKind::E5M2),
+                QuantValue::Q4F
+                | QuantValue::Q4S
+                | QuantValue::Q2F
+                | QuantValue::Q2S
+                | QuantValue::E2M1 => {
+                    panic!("Can't store native sub-byte values")
+                }
+            },
+            QuantStore::PackedU32(_) => ElemType::UInt(UIntKind::U32),
+            QuantStore::PackedNative(_) => match scheme.value {
+                QuantValue::E2M1 => panic!("Can't store native sub-byte values"),
+                other => panic!("{other:?} doesn't support native packing"),
+            },
+        },
+    }
+}
+
+/// Convert a cortex [`DType`] into the corresponding cubecl [`ElemType`].
+///
+/// Handles sub-byte packed quantization configurations that cannot be expressed
+/// as a plain [`ElemType`] by emitting a direct `ElemType`.
+pub fn dtype_to_storage_type(dtype: DType) -> ElemType {
+    match dtype {
+        DType::QFloat(QuantScheme {
+            store: QuantStore::PackedNative(_),
+            value: QuantValue::E2M1,
+            ..
+        }) => ElemType::Float(FloatKind::E2M1x2),
+        _ => dtype_to_elem_type(dtype),
+    }
+}
+
+/// Convert a cortex [`ReduceOperation`] into the cubecl reduction it runs as.
+pub fn reduce_operation_to_cubecl(op: ReduceOperation) -> cubecl::server::ReduceOperation {
+    match op {
+        ReduceOperation::Sum => cubecl::server::ReduceOperation::Sum,
+        ReduceOperation::Mean => cubecl::server::ReduceOperation::Mean,
+    }
+}

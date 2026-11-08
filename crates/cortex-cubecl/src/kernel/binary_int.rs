@@ -1,0 +1,297 @@
+use crate::{
+    kernel::utils::{address_type, broadcast_shape},
+    ops::{max_vector_size, numeric::empty_device_dtype},
+    tensor::CubeTensor,
+};
+use cortex_backend::TensorMetadata;
+use cortex_backend::cubecl::dtype_to_storage_type;
+use cubecl::{
+    calculate_cube_count_elemwise,
+    prelude::{
+        polyfills::{powi_int, powi_unsigned},
+        *,
+    },
+    std::tensor::layout::linear::{LinearView, LinearViewMut},
+};
+
+pub(crate) trait BinaryOpIntFamily: Send + Sync + 'static {
+    type BinaryOp<C: Int, N: Size>: BinaryOpInt<C, N>;
+}
+
+#[cube]
+pub(crate) trait BinaryOpInt<C: Int, N: Size>: 'static + Send + Sync {
+    /// Execute a binary operation.
+    fn execute(lhs: Vector<C, N>, rhs: Vector<C, N>) -> Vector<C, N>;
+}
+
+pub(crate) struct BitwiseAndOp;
+pub(crate) struct BitwiseOrOp;
+pub(crate) struct BitwiseXorOp;
+pub(crate) struct BitwiseShrOp;
+pub(crate) struct BitwiseShlOp;
+pub(crate) struct PowiOp;
+
+impl BinaryOpIntFamily for BitwiseAndOp {
+    type BinaryOp<C: Int, N: Size> = Self;
+}
+
+impl BinaryOpIntFamily for BitwiseOrOp {
+    type BinaryOp<C: Int, N: Size> = Self;
+}
+
+impl BinaryOpIntFamily for BitwiseXorOp {
+    type BinaryOp<C: Int, N: Size> = Self;
+}
+
+impl BinaryOpIntFamily for BitwiseShrOp {
+    type BinaryOp<C: Int, N: Size> = Self;
+}
+
+impl BinaryOpIntFamily for BitwiseShlOp {
+    type BinaryOp<C: Int, N: Size> = Self;
+}
+
+impl BinaryOpIntFamily for PowiOp {
+    type BinaryOp<C: Int, N: Size> = Self;
+}
+
+#[cube]
+impl<T: Int, N: Size> BinaryOpInt<T, N> for BitwiseAndOp {
+    fn execute(lhs: Vector<T, N>, rhs: Vector<T, N>) -> Vector<T, N> {
+        lhs & rhs
+    }
+}
+
+#[cube]
+impl<T: Int, N: Size> BinaryOpInt<T, N> for BitwiseOrOp {
+    fn execute(lhs: Vector<T, N>, rhs: Vector<T, N>) -> Vector<T, N> {
+        lhs | rhs
+    }
+}
+
+#[cube]
+impl<T: Int, N: Size> BinaryOpInt<T, N> for BitwiseXorOp {
+    fn execute(lhs: Vector<T, N>, rhs: Vector<T, N>) -> Vector<T, N> {
+        lhs ^ rhs
+    }
+}
+
+#[cube]
+impl<T: Int, N: Size> BinaryOpInt<T, N> for BitwiseShrOp {
+    fn execute(lhs: Vector<T, N>, rhs: Vector<T, N>) -> Vector<T, N> {
+        lhs >> rhs
+    }
+}
+
+#[cube]
+impl<T: Int, N: Size> BinaryOpInt<T, N> for BitwiseShlOp {
+    fn execute(lhs: Vector<T, N>, rhs: Vector<T, N>) -> Vector<T, N> {
+        lhs << rhs
+    }
+}
+
+#[cube]
+impl<T: Int, N: Size> BinaryOpInt<T, N> for PowiOp {
+    fn execute(lhs: Vector<T, N>, rhs: Vector<T, N>) -> Vector<T, N> {
+        let dtype = elem_type_of::<T>().comptime();
+        if comptime!(dtype.is_signed_int()) {
+            if T::size_bits().comptime() <= 32 {
+                powi_int(lhs, Vector::<i32, N>::cast_from(rhs))
+            } else {
+                powi_wide_signed(lhs, rhs)
+            }
+        } else {
+            // An unsigned exponent is never negative. Reading it as `u32` keeps exponents above
+            // `i32::MAX` as large powers.
+            powi_unsigned(lhs, Vector::<u32, N>::cast_from(rhs))
+        }
+    }
+}
+
+/// Preserves the unsigned power for non-negative lanes and the sign and parity of negative lanes.
+#[cube]
+fn powi_wide_signed<T: Int, N: Size>(base: Vector<T, N>, exp: Vector<T, N>) -> Vector<T, N> {
+    let negative = exp.less_than(&Vector::zero());
+    let mut has_negative = false;
+    let mut has_non_negative = false;
+    #[unroll]
+    for lane in 0..exp.vector_size() {
+        has_negative |= negative.extract(lane);
+        has_non_negative |= !negative.extract(lane);
+    }
+
+    // Vectors with one exponent sign only need one power calculation.
+    if !has_negative {
+        return powi_unsigned(base, Vector::<u32, N>::cast_from(exp));
+    }
+
+    // Negative integer powers depend only on parity, including exponents below i32::MIN.
+    let negative_exp = (exp & Vector::one()) | Vector::new(T::new(-2));
+    let truncated = powi_int(base, Vector::<i32, N>::cast_from(negative_exp));
+    if !has_non_negative {
+        return truncated;
+    }
+
+    let power = powi_unsigned(base, Vector::<u32, N>::cast_from(exp));
+    select_many(negative, truncated, power)
+}
+
+#[cube(launch_unchecked, address_type = "dynamic")]
+pub(crate) fn kernel_scalar_binop_int<C: Int, N: Size, O: BinaryOpIntFamily>(
+    input: LinearView<'_, Vector<C, N>>,
+    scalar: InputScalar,
+    mut output: LinearViewMut<'_, Vector<C, N>>,
+    #[define(C)] _dtype: ElemType,
+) {
+    if !output.is_in_bounds(ABSOLUTE_POS) {
+        terminate!();
+    }
+
+    output.write(
+        ABSOLUTE_POS,
+        O::BinaryOp::<C, N>::execute(input.read(ABSOLUTE_POS), Vector::new(scalar.get::<C>())),
+    );
+}
+
+#[cube(launch_unchecked, address_type = "dynamic")]
+pub(crate) fn kernel_binop_int<C: Int, N: Size, O: BinaryOpIntFamily>(
+    lhs: LinearView<'_, Vector<C, N>>,
+    rhs: LinearView<'_, Vector<C, N>>,
+    mut out: LinearViewMut<'_, Vector<C, N>>,
+    #[define(C)] _dtype: ElemType,
+) {
+    if !out.is_in_bounds(ABSOLUTE_POS) {
+        terminate!();
+    }
+
+    out.write(
+        ABSOLUTE_POS,
+        O::BinaryOp::<C, N>::execute(lhs.read(ABSOLUTE_POS), rhs.read(ABSOLUTE_POS)),
+    );
+}
+
+pub(crate) fn launch_binop_int<O: BinaryOpIntFamily>(
+    lhs: CubeTensor,
+    rhs: CubeTensor,
+) -> CubeTensor {
+    let vector_size_lhs = max_vector_size(&lhs);
+    let vector_size_rhs = max_vector_size(&rhs);
+    let vector_size = Ord::min(vector_size_lhs, vector_size_rhs);
+
+    let shape_out = broadcast_shape(&[&lhs, &rhs]);
+
+    // A zero-sized broadcast output has no elements to compute, and the in-place/kernel paths
+    // below assume a non-empty output. Return the empty output directly.
+    if shape_out.num_elements() == 0 {
+        return empty_device_dtype(lhs.client.clone(), lhs.device.clone(), shape_out, lhs.dtype);
+    }
+
+    let client = lhs.client.clone();
+    let num_elems = shape_out.num_elements();
+
+    let working_units = num_elems / vector_size as usize;
+    let cube_dim = CubeDim::new(&lhs.client, working_units);
+    let cube_count = calculate_cube_count_elemwise(&lhs.client, working_units, cube_dim);
+    let dtype = lhs.dtype;
+
+    unsafe {
+        if lhs.can_mut_broadcast(&rhs) {
+            kernel_binop_int::launch_unchecked::<O>(
+                &client,
+                cube_count,
+                cube_dim,
+                address_type!(lhs, rhs),
+                vector_size,
+                lhs.clone().into_linear_view(),
+                rhs.into_linear_view_like(&lhs),
+                lhs.as_linear_view_alias(0),
+                dtype_to_storage_type(dtype),
+            );
+
+            lhs
+        } else if rhs.can_mut_broadcast(&lhs) {
+            kernel_binop_int::launch_unchecked::<O>(
+                &client,
+                cube_count,
+                cube_dim,
+                address_type!(lhs, rhs),
+                vector_size,
+                lhs.into_linear_view_like(&rhs),
+                rhs.clone().into_linear_view(),
+                rhs.as_linear_view_alias(1),
+                dtype_to_storage_type(dtype),
+            );
+
+            rhs
+        } else {
+            let output =
+                empty_device_dtype(lhs.client.clone(), lhs.device.clone(), shape_out, lhs.dtype);
+
+            kernel_binop_int::launch_unchecked::<O>(
+                &client,
+                cube_count,
+                cube_dim,
+                address_type!(lhs, rhs, output),
+                vector_size,
+                lhs.into_linear_view_like(&output),
+                rhs.into_linear_view_like(&output),
+                output.clone().into_linear_view(),
+                dtype_to_storage_type(dtype),
+            );
+
+            output
+        }
+    }
+}
+
+pub(crate) fn launch_scalar_binop_int<O: BinaryOpIntFamily>(
+    tensor: CubeTensor,
+    scalar: InputScalar,
+) -> CubeTensor {
+    let vector_size = max_vector_size(&tensor);
+    let client = tensor.client.clone();
+    let num_elems = tensor.meta.shape.num_elements();
+
+    let working_units = num_elems / vector_size as usize;
+    let cube_dim = CubeDim::new(&tensor.client, working_units);
+    let cube_count = calculate_cube_count_elemwise(&tensor.client, working_units, cube_dim);
+
+    unsafe {
+        if tensor.can_mut() && tensor.is_nonoverlapping() {
+            kernel_scalar_binop_int::launch_unchecked::<O>(
+                &client,
+                cube_count,
+                cube_dim,
+                address_type!(tensor),
+                vector_size,
+                tensor.clone().into_linear_view(),
+                scalar,
+                tensor.as_linear_view_alias(0),
+                dtype_to_storage_type(tensor.dtype),
+            );
+
+            tensor
+        } else {
+            let output = empty_device_dtype(
+                tensor.client.clone(),
+                tensor.device.clone(),
+                tensor.shape(),
+                tensor.dtype,
+            );
+
+            kernel_scalar_binop_int::launch_unchecked::<O>(
+                &client,
+                cube_count,
+                cube_dim,
+                address_type!(tensor, output),
+                vector_size,
+                tensor.into_linear_view(),
+                scalar,
+                output.clone().into_linear_view(),
+                dtype_to_storage_type(output.dtype),
+            );
+
+            output
+        }
+    }
+}

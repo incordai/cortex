@@ -1,0 +1,37 @@
+# Cortex Neural Networks
+
+> Neural network layers, activations and losses for [Cortex](https://github.com/tracel-ai/burn)
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-nn.svg)](https://crates.io/crates/cortex-nn)
+[![Documentation](https://docs.rs/cortex-nn/badge.svg)](https://docs.rs/cortex-nn)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+Every layer is a module built from a config, and applications use them through `cortex::nn`:
+
+```rust,ignore
+use cortex::nn::{Linear, LinearConfig};
+
+let linear: Linear = LinearConfig::new(784, 128).init(&device);
+let output = linear.forward(input);
+```
+
+- Layers: linear, convolution and transposed convolution (1D to 3D), pooling, normalization (batch,
+  layer, group, instance, RMS), embeddings, dropout, recurrent layers (LSTM, GRU), attention and
+  transformers, positional and rotary encodings, interpolation, and more.
+- `activation`: activation functions as modules.
+- `loss`: loss functions, from mean squared error and cross-entropy to CTC.
+- `Initializer`: weight initialization schemes.
+
+See the [module chapter](https://cortex.dev/books/cortex/building-blocks/module.html) of the Cortex Book.
+
+## Feature Flags
+
+- `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
+- `tracing`: instrument operations with the `tracing` crate.
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

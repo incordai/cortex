@@ -1,0 +1,232 @@
+use alloc::format;
+
+use cortex::tensor::module::interpolate;
+
+use crate::modules::bounds::{self, Windowing};
+use cortex::instrument::{Bounds, compute};
+use cortex::tensor::module::interpolate_output_size;
+use cortex_core as cortex;
+
+use cortex::config::Config;
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use cortex::tensor::Tensor;
+use cortex::tensor::ops::InterpolateOptions;
+
+use super::InterpolateMode;
+
+/// Configuration for the 1D interpolation module.
+///
+/// This struct defines the configuration options for the 1D interpolation operation.
+/// It allows specifying the output size, scale factor, and interpolation mode.
+#[derive(Config, Debug)]
+pub struct Interpolate1dConfig {
+    /// Output size of the interpolated tensor.
+    /// Exactly one of `output_size` or `scale_factor` must be set.
+    #[config(default = "None")]
+    pub output_size: Option<usize>,
+
+    /// Scale factor for resizing the input tensor.
+    /// The output size is `floor(input_size * scale_factor)`.
+    /// Exactly one of `output_size` or `scale_factor` must be set.
+    #[config(default = "None")]
+    pub scale_factor: Option<f32>,
+
+    /// Interpolation mode to use for resizing.
+    /// Determines how the output values are calculated.
+    #[config(default = "InterpolateMode::Nearest")]
+    pub mode: InterpolateMode,
+}
+
+/// Interpolate module for resizing 1D tensors with shape [N, C, L].
+///
+/// This struct represents a 1D interpolation module that can resize tensors
+/// using various interpolation methods. It provides flexibility in specifying
+/// either an output size or a scale factor for resizing, along with options
+/// for the interpolation mode.
+///
+/// The module can be used to upsample or downsample 1D tensors, preserving the
+/// number of channels and batch size while adjusting the length dimension.
+///
+/// The module can be created using the [Interpolate1dConfig] struct and the
+/// `init` method, which returns an instance of the [Interpolate1d] struct.
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct Interpolate1d {
+    /// Output size of the interpolated tensor
+    pub output_size: Option<usize>,
+
+    /// Scale factor for resizing the input tensor
+    pub scale_factor: Option<f32>,
+
+    /// Interpolation mode used for resizing
+    #[module(skip)]
+    pub mode: InterpolateMode,
+}
+
+impl Interpolate1dConfig {
+    /// Initialize the interpolation module
+    pub fn init(self) -> Interpolate1d {
+        Interpolate1d {
+            output_size: self.output_size,
+            scale_factor: self.scale_factor,
+            mode: self.mode,
+        }
+    }
+}
+
+impl Interpolate1d {
+    /// The options the interpolation runs with, over an input given a unit height.
+    fn options(&self) -> InterpolateOptions {
+        let mut options = InterpolateOptions::new(self.mode.clone().into());
+        options.output_size = self.output_size.map(|size| [1, size]);
+        options.scale_factor = self.scale_factor.map(|scale| [1.0, scale]);
+        options
+    }
+
+    /// The floor for an interpolation alone: a resampling to the length it produces. Each output
+    /// element blends a few neighbours, below this model's resolution, and reads at least one
+    /// position of its own where it downsamples.
+    fn bounds(&self, input: &Tensor<3>) -> Bounds {
+        let [length] = bounds::spatial(input);
+        let [_, output_length] = interpolate_output_size([1, length], &self.options());
+        Windowing {
+            output_size: [output_length],
+            read_size: [length.min(output_length)],
+        }
+        .resampling(input)
+    }
+
+    /// Performs the forward pass of the 1D interpolation module
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Input tensor with shape [N, C, L]
+    ///
+    /// # Returns
+    ///
+    /// Resized tensor with shape [N, C, L'], where L' is determined by
+    /// the output_size or scale_factor specified in the module configuration
+    ///
+    /// # Panics
+    ///
+    /// Panics unless exactly one of `output_size` or `scale_factor` is set.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let input = Tensor::<3>::random([1, 3, 64], Distribution::Uniform(0.0, 1.0), &device);
+    /// let interpolate = Interpolate1dConfig::new()
+    ///     .with_output_size(Some(128))
+    ///     .init();
+    /// let output = interpolate.forward(input);
+    /// assert_eq!(output.dims(), [1, 3, 128]);
+    /// ```
+    #[compute(bounds = Self::bounds)]
+    pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
+        // Use the interpolate operation to resize the temporal input tensor
+        // by adding a new dimension for the interpolation axis
+        let input = input.unsqueeze_dim(2);
+
+        let result = interpolate(input, self.options());
+
+        result.squeeze_dims(&[2])
+    }
+}
+
+impl ModuleDisplay for Interpolate1d {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        content
+            .add_debug_attribute("mode", &self.mode)
+            .add("output_size", &format!("{:?}", self.output_size))
+            .add("scale_factor", &self.scale_factor)
+            .optional()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use cortex::tensor::Distribution;
+
+    use super::*;
+    use cortex::tensor::ops::CoordinateTransformMode;
+    #[test]
+    fn test_module() {
+        let input = Tensor::<3>::random(
+            [2, 3, 4],
+            Distribution::Uniform(0.0, 1.0),
+            &Default::default(),
+        );
+
+        // Test with output_size
+        let config = Interpolate1dConfig::new().with_output_size(Some(8));
+        let interpolate = config.init();
+        let output = interpolate.forward(input.clone());
+        assert_eq!(output.dims(), [2, 3, 8]);
+
+        // Test with scale_factor
+        let config = Interpolate1dConfig::new().with_scale_factor(Some(0.5));
+        let interpolate = config.init();
+        let output = interpolate.forward(input.clone());
+        assert_eq!(output.dims(), [2, 3, 2]);
+
+        // Test with different interpolation mode
+        let config = Interpolate1dConfig::new()
+            .with_output_size(Some(6))
+            .with_mode(InterpolateMode::Linear {
+                coordinate_transform: CoordinateTransformMode::AlignCorners,
+            });
+        let interpolate = config.init();
+        let output = interpolate.forward(input);
+        assert_eq!(output.dims(), [2, 3, 6]);
+    }
+
+    #[test]
+    fn linear_coordinate_transform() {
+        let input = Tensor::<3>::from_floats([[[0.0, 6.0]]], &Default::default());
+        for (transform, expected) in [
+            (CoordinateTransformMode::AlignCorners, [0.0, 2.0, 4.0, 6.0]),
+            (CoordinateTransformMode::HalfPixel, [0.0, 1.5, 4.5, 6.0]),
+        ] {
+            let output = Interpolate1dConfig::new()
+                .with_mode(InterpolateMode::Linear {
+                    coordinate_transform: transform,
+                })
+                .with_output_size(Some(4))
+                .init()
+                .forward(input.clone());
+            output
+                .into_data()
+                .assert_eq(&cortex::tensor::TensorData::from([[expected]]), false);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "only one of output_size or scale_factor")]
+    fn test_conflicting_size_and_scale_panics() {
+        let input = Tensor::<3>::zeros([1, 1, 2], &Default::default());
+        let config = Interpolate1dConfig::new()
+            .with_output_size(Some(8))
+            .with_scale_factor(Some(2.0));
+        let interpolate = config.init();
+        let _ = interpolate.forward(input);
+    }
+
+    #[test]
+    fn display() {
+        let config = Interpolate1dConfig::new().with_output_size(Some(20));
+        let layer = config.init();
+
+        assert_eq!(
+            alloc::format!("{layer}"),
+            "Interpolate1d {mode: Nearest, output_size: Some(20), \
+            scale_factor: None}"
+        );
+    }
+}

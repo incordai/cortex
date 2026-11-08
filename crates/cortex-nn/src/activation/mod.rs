@@ -1,0 +1,84 @@
+//! # Activation Layers
+//!
+//! Users who desire a selectable activation function should
+//! consider [`Activation`], which provides an abstraction over:
+//! * [`Relu`] - the default,
+//! * ['PRelu']
+//! * [`Gelu`]
+//! * [`LeakyRelu`]
+//! * [`SwiGlu`]
+//! * [`Selu`]
+//! * [`Sigmoid`]
+//! * [`HardSigmoid`]
+//! * [`HardSwish`]
+//! * [`Softplus`]
+//! * [`Softsign`]
+//! * [`Tanh`]
+//! * [`Elu`]
+//! * [`Celu`]
+//! * [`ThresholdedRelu`]
+//!
+//! The activation layer [`GLU`] has shape-changing behaviors
+//! not compatible with the common API, and is not included
+//! in the abstraction wrappers.
+
+mod activation_wrapper;
+
+// These are pub(crate) for dual-export in `nn` without re-exporting
+// all of `nn.activation`, or manually listing each symbol.
+pub(crate) mod celu;
+pub(crate) mod elu;
+pub(crate) mod gelu;
+pub(crate) mod glu;
+pub(crate) mod hard_shrink;
+pub(crate) mod hard_sigmoid;
+pub(crate) mod hard_swish;
+pub(crate) mod hardtanh;
+pub(crate) mod leaky_relu;
+pub(crate) mod log_sigmoid;
+pub(crate) mod mish;
+pub(crate) mod prelu;
+pub(crate) mod relu;
+pub(crate) mod relu6;
+pub(crate) mod rrelu;
+pub(crate) mod selu;
+pub(crate) mod shrink;
+pub(crate) mod sigmoid;
+pub(crate) mod silu;
+pub(crate) mod soft_shrink;
+pub(crate) mod softplus;
+pub(crate) mod softsign;
+pub(crate) mod swiglu;
+pub(crate) mod tanh;
+pub(crate) mod tanhshrink;
+pub(crate) mod threshold;
+pub(crate) mod thresholded_relu;
+
+pub use activation_wrapper::*;
+pub use celu::*;
+pub use elu::*;
+pub use gelu::*;
+pub use glu::*;
+pub use hard_shrink::*;
+pub use hard_sigmoid::*;
+pub use hard_swish::*;
+pub use hardtanh::*;
+pub use leaky_relu::*;
+pub use log_sigmoid::*;
+pub use mish::*;
+pub use prelu::*;
+pub use relu::*;
+pub use relu6::*;
+pub use rrelu::*;
+pub use selu::*;
+pub use shrink::*;
+pub use sigmoid::*;
+pub use silu::*;
+pub use soft_shrink::*;
+pub use softplus::*;
+pub use softsign::*;
+pub use swiglu::*;
+pub use tanh::*;
+pub use tanhshrink::*;
+pub use threshold::*;
+pub use thresholded_relu::*;

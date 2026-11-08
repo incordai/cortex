@@ -1,0 +1,101 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science"]
+description = "Library with simple dataset APIs for creating ML data pipelines"
+documentation = "https://docs.rs/cortex-dataset"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "data"]
+license.workspace = true
+name = "cortex-dataset"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-dataset"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `sqlite` is opt-in: it pulls the Turso engine and its dependency tree, which a dataset pipeline
+# built on CSV or in-memory sources has no use for.
+default = []
+doc = ["default", "sqlite"]
+tracing = [
+    "cortex-std?/tracing",
+]
+
+audio = ["hound", "sqlite"]
+builtin-sources = ["vision", "dep:tar", "nlp"]
+fake = ["dep:fake"]
+network = ["dep:cortex-std"]
+sqlite = [
+    "dep:turso",
+    "dep:branches",
+    "dep:futures-lite",
+    "dep:r2d2",
+    "dep:image",
+    "dep:gix-tempfile",
+]
+# Deprecated alias for `sqlite`. Turso implements the engine in Rust rather than linking
+# libsqlite3, so there is no longer a bundled-versus-system split to choose between; kept so
+# existing dependents keep building.
+sqlite-bundled = ["sqlite"]
+vision = ["dep:flate2", "dep:globwalk", "dep:image", "network"]
+nlp = ["dep:globwalk", "dep:encoding_rs"]
+dataframe = ["dep:polars-core", "dep:planus"]
+
+[dependencies]
+branches = { workspace = true, optional = true }
+cortex-std = { workspace = true, optional = true, features = [
+    "default",
+    "network",
+] }
+csv = { workspace = true }
+derive-new = { workspace = true }
+dirs = { workspace = true }
+fake = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+futures-lite = { workspace = true, optional = true, features = ["std"] }
+gix-tempfile = { workspace = true, optional = true }
+globwalk = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+planus = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
+# Retain every dtype handled by RowDeserializer without compiling Polars' lazy engine.
+polars-core = { workspace = true, optional = true, features = [
+    "rows",
+    "dtype-date",
+    "dtype-time",
+    "dtype-i8",
+    "dtype-i16",
+    "dtype-u8",
+    "dtype-u16",
+] }
+r2d2 = { workspace = true, optional = true }
+rand = { workspace = true, features = ["std", "sys_rng"] }
+rmp-serde = { workspace = true }
+sanitize-filename = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+strum = { workspace = true }
+tar = { workspace = true, optional = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+turso = { workspace = true, optional = true }
+
+
+[[example]]
+name = "hf_dataset"
+required-features = ["sqlite"]
+
+[dev-dependencies]
+fake = { workspace = true }
+rayon = { workspace = true }
+rstest = { workspace = true }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["strum", "strum_macros"]
+
+[package.metadata.docs.rs]
+features = ["doc"]
+rustdoc-args = ["--cfg", "docsrs"]

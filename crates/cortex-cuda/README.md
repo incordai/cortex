@@ -1,0 +1,43 @@
+# Cortex CUDA Backend
+
+[Cortex](https://github.com/tracel-ai/burn) CUDA backend
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-cuda.svg)](https://crates.io/crates/cortex-cuda)
+[![Documentation](https://docs.rs/cortex-cuda/badge.svg)](https://docs.rs/cortex-cuda)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+This crate provides a CUDA backend for [Cortex](https://github.com/tracel-ai/burn) using the
+[cubecl](https://github.com/tracel-ai/cubecl.git) and [cudarc](https://github.com/coreylowman/cudarc.git)
+crates.
+
+## Usage Example
+
+For application code, enable Cortex's `cuda` feature and select the device at runtime:
+
+```toml
+cortex = { version = "0.22", features = ["cuda"] }
+```
+
+```rust
+use cortex::tensor::{Device, Tensor};
+
+let device = Device::cuda(0);
+let input = Tensor::<2>::ones([2, 3], &device);
+let output = input + 1.0;
+```
+
+For training, enable `autodiff` (also enabled by `train`) and use `device.autodiff()` before
+initializing model parameters and inputs. Tensor and model types have no backend parameter.
+Use `Device::configure` for dtype defaults; the low-level `Cuda` alias no longer takes element
+type parameters.
+
+## Dependencies
+
+Requires CUDA 12.x to be installed and on the `PATH`.
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

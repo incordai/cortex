@@ -1,0 +1,62 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = ["science", "no-std", "embedded", "wasm"]
+description = "Core backend interfaces and data structures for executing tensor operations in Cortex."
+documentation = "https://docs.rs/cortex-backend"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "pytorch"]
+license.workspace = true
+name = "cortex-backend"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-backend"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+doc = ["default"]
+std = ["rand/std", "num-traits/std", "cortex-std/std", "cubecl?/std", "dep:oneshot", "dep:log"]
+
+tracing = ["cortex-std/tracing", "cubecl?/tracing"]
+
+# For DTypeUsage de/serialization
+serde = ["enumset/serde"]
+
+# `stdlib` carries the throughput probes a device measures itself with.
+cubecl = ["dep:cubecl", "cubecl/stdlib"]
+
+# The `DeviceOps` impl for `cubecl::Device`. Separate from `cubecl` because cubecl only implements
+# the `Device` supertrait once it has a runtime compiled in, and it can get one from any crate in
+# the build — so this is asked for rather than inferred from the features named here. Enabling it
+# without a cubecl runtime anywhere in the graph does not compile.
+cubecl-device = ["cubecl"]
+
+cubecl-cuda = ["cubecl-device", "cubecl/cuda"]
+cubecl-hip = ["cubecl-device", "cubecl/hip"]
+cubecl-wgpu = ["cubecl-device", "cubecl/wgpu"]
+cubecl-wgpu-msl = ["cubecl-device", "cubecl/wgpu-msl"]
+cubecl-metal = ["cubecl-device", "cubecl/metal"]
+cubecl-vulkan = ["cubecl-device", "cubecl/vulkan"]
+cubecl-webgpu = ["cubecl-device", "cubecl/webgpu"]
+cubecl-cpu = ["cubecl-device", "cubecl/cpu"]
+
+[dependencies]
+cortex-std = { workspace = true }
+cubecl = { workspace = true, optional = true, default-features = false }
+
+derive-new = { workspace = true }
+enumset = { workspace = true }
+hashbrown = { workspace = true }
+log = { workspace = true, optional = true }
+num-traits = { workspace = true }
+rand = { workspace = true, default-features = false }
+rand_distr = { workspace = true }
+serde = { workspace = true }
+oneshot = { version = "0.2.1", optional = true }
+spin = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true, features = ["thread_rng"] }
+serial_test = { workspace = true }

@@ -1,0 +1,240 @@
+use super::*;
+use cortex_tensor::module::avg_pool2d;
+use cortex_tensor::ops::AvgPoolOptions;
+use cortex_tensor::{Shape, TensorData, Tolerance};
+
+#[test]
+fn test_avg_pool2d_ceil_mode_nonuniform_gradient() {
+    let device = AutodiffDevice::new();
+    for count_include_pad in [true, false] {
+        for (width, kernel, padding, upstream, expected) in [
+            (5, 2, 0, vec![2.0, 4.0, 8.0], vec![1.0, 1.0, 2.0, 2.0, 8.0]),
+            (
+                3,
+                3,
+                1,
+                vec![6.0, 8.0],
+                if count_include_pad {
+                    vec![2.0, 2.0, 4.0]
+                } else {
+                    vec![3.0, 3.0, 8.0]
+                },
+            ),
+            // A 4th window would start in the trailing padding and is dropped
+            (
+                5,
+                2,
+                1,
+                vec![2.0, 4.0, 8.0],
+                if count_include_pad {
+                    vec![1.0, 2.0, 2.0, 4.0, 4.0]
+                } else {
+                    vec![2.0, 2.0, 2.0, 4.0, 4.0]
+                },
+            ),
+            // Kernel larger than the padded input, one window
+            (
+                1,
+                4,
+                1,
+                vec![6.0],
+                if count_include_pad {
+                    vec![2.0]
+                } else {
+                    vec![6.0]
+                },
+            ),
+        ] {
+            let x = TestTensor::<4>::ones([1, 1, 1, width], &device).require_grad();
+            let output = avg_pool2d(
+                x.clone(),
+                AvgPoolOptions::new([1, kernel])
+                    .with_padding([0, padding])
+                    .with_count_include_pad(count_include_pad)
+                    .with_ceil_mode(true),
+            );
+            let upstream =
+                TestTensor::from_data(TensorData::new(upstream, output.shape()), &device);
+            let grads = (output * upstream).backward();
+            x.grad(&grads)
+                .unwrap()
+                .into_data()
+                .assert_approx_eq::<FloatElem>(
+                    &TensorData::new(expected, [1, 1, 1, width]),
+                    Tolerance::default(),
+                );
+        }
+    }
+}
+
+#[test]
+fn test_avg_pool2d_simple() {
+    let test = AvgPool2dTestCase {
+        batch_size: 1,
+        channels: 1,
+        kernel_size_1: 3,
+        kernel_size_2: 3,
+        padding_1: 0,
+        padding_2: 0,
+        stride_1: 1,
+        stride_2: 1,
+        height: 6,
+        width: 6,
+        count_include_pad: true,
+    };
+
+    test.assert_output(TestTensor::from_data(
+        [[[
+            [0.11111, 0.22222, 0.33333, 0.33333, 0.22222, 0.11111],
+            [0.22222, 0.44444, 0.66667, 0.66667, 0.44444, 0.22222],
+            [0.33333, 0.66667, 1.00000, 1.00000, 0.66667, 0.33333],
+            [0.33333, 0.66667, 1.00000, 1.00000, 0.66667, 0.33333],
+            [0.22222, 0.44444, 0.66667, 0.66667, 0.44444, 0.22222],
+            [0.11111, 0.22222, 0.33333, 0.33333, 0.22222, 0.11111],
+        ]]],
+        &AutodiffDevice::new(),
+    ));
+}
+
+#[test]
+fn test_avg_pool2d_complex() {
+    let test = AvgPool2dTestCase {
+        batch_size: 1,
+        channels: 1,
+        kernel_size_1: 3,
+        kernel_size_2: 4,
+        padding_1: 1,
+        padding_2: 2,
+        stride_1: 1,
+        stride_2: 2,
+        height: 4,
+        width: 6,
+        count_include_pad: true,
+    };
+
+    test.assert_output(TestTensor::from_data(
+        [[[
+            [0.33333, 0.33333, 0.33333, 0.33333, 0.33333, 0.33333],
+            [0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000],
+            [0.5000, 0.5000, 0.5000, 0.5000, 0.5000, 0.5000],
+            [0.33333, 0.33333, 0.33333, 0.33333, 0.33333, 0.33333],
+        ]]],
+        &AutodiffDevice::new(),
+    ));
+}
+
+#[test]
+fn test_avg_pool2d_complex_dont_include_pad() {
+    let test = AvgPool2dTestCase {
+        batch_size: 1,
+        channels: 1,
+        kernel_size_1: 3,
+        kernel_size_2: 4,
+        padding_1: 1,
+        padding_2: 2,
+        stride_1: 1,
+        stride_2: 2,
+        height: 4,
+        width: 6,
+        count_include_pad: false,
+    };
+
+    test.assert_output(TestTensor::from_data(
+        [[[
+            [0.6250, 0.6250, 0.41667, 0.41667, 0.6250, 0.6250],
+            [0.8750, 0.8750, 0.58333, 0.58333, 0.8750, 0.8750],
+            [0.8750, 0.8750, 0.58333, 0.58333, 0.8750, 0.8750],
+            [0.6250, 0.6250, 0.41667, 0.41667, 0.6250, 0.6250],
+        ]]],
+        &AutodiffDevice::new(),
+    ));
+}
+
+struct AvgPool2dTestCase {
+    batch_size: usize,
+    channels: usize,
+    kernel_size_1: usize,
+    kernel_size_2: usize,
+    padding_1: usize,
+    padding_2: usize,
+    stride_1: usize,
+    stride_2: usize,
+    height: usize,
+    width: usize,
+    count_include_pad: bool,
+}
+
+impl AvgPool2dTestCase {
+    fn assert_output(self, x_grad: TestTensor<4>) {
+        let shape_x = Shape::new([self.batch_size, self.channels, self.height, self.width]);
+        let device = AutodiffDevice::new();
+        let x = TestTensor::from_data(
+            TestTensorInt::arange(0..shape_x.num_elements() as i64, &device)
+                .reshape::<4, _>(shape_x)
+                .into_data(),
+            &device,
+        )
+        .require_grad();
+        let output = avg_pool2d(
+            x.clone(),
+            AvgPoolOptions::new([self.kernel_size_1, self.kernel_size_2])
+                .with_stride([self.stride_1, self.stride_2])
+                .with_padding([self.padding_1, self.padding_2])
+                .with_count_include_pad(self.count_include_pad),
+        );
+        let grads = output.backward();
+        let x_grad_actual = x.grad(&grads).unwrap();
+
+        x_grad.to_data().assert_approx_eq::<FloatElem>(
+            &x_grad_actual.into_data(),
+            Tolerance::default().set_half_precision_relative(1e-3),
+        );
+    }
+}
+
+#[test]
+fn test_avg_pool2d_dilation_gradient() {
+    // Kernel 2, dilation 2, stride [1, 2], padding 1 over a 4x5 input. With stride 2 and
+    // dilation 2 along the width, the windows only read the odd columns.
+    let device = AutodiffDevice::new();
+    for (count_include_pad, expected) in [
+        (
+            true,
+            [
+                [0.0, 2.25, 0.0, 2.75, 0.0],
+                [0.0, 4.5, 0.0, 5.5, 0.0],
+                [0.0, 7.5, 0.0, 8.5, 0.0],
+                [0.0, 3.75, 0.0, 4.25, 0.0],
+            ],
+        ),
+        (
+            false,
+            [
+                [0.0, 3.25, 0.0, 4.25, 0.0],
+                [0.0, 7.5, 0.0, 10.5, 0.0],
+                [0.0, 18.75, 0.0, 21.75, 0.0],
+                [0.0, 5.5, 0.0, 6.5, 0.0],
+            ],
+        ),
+    ] {
+        let x = TestTensor::<4>::ones([1, 1, 4, 5], &device).require_grad();
+        let output = avg_pool2d(
+            x.clone(),
+            AvgPoolOptions::new([2, 2])
+                .with_stride([1, 2])
+                .with_padding([1, 1])
+                .with_dilation([2, 2])
+                .with_count_include_pad(count_include_pad),
+        );
+        assert_eq!(output.dims(), [1, 1, 4, 3]);
+        let upstream = TestTensor::from_data(
+            TensorData::new((1..=12).map(|v| v as f32).collect(), output.shape()),
+            &device,
+        );
+        let grads = (output * upstream).backward();
+        x.grad(&grads)
+            .unwrap()
+            .into_data()
+            .assert_approx_eq::<FloatElem>(&TensorData::from([[expected]]), Tolerance::default());
+    }
+}

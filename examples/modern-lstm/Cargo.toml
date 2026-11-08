@@ -1,0 +1,25 @@
+[package]
+edition.workspace = true
+name = "modern-lstm"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+cuda = ["cortex/cuda"]
+flex = ["cortex/flex"]
+wgpu = ["cortex/wgpu"]
+
+[dependencies]
+cortex = { workspace = true, features = ["default", "train"] }
+
+# Random number generator
+rand = { workspace = true, features = ["thread_rng"] }
+rand_distr = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["std", "derive"] }
+
+# Organise the results in dataframe
+polars = { workspace = true }

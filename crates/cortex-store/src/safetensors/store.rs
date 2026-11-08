@@ -1,0 +1,1173 @@
+//! SafeTensors store implementation using the official safetensors crate.
+
+use crate::bridge;
+use crate::{ApplyResult, IdentityAdapter, ModuleAdapter, ModuleSnapshot, ModuleStore, PathFilter};
+
+#[cfg(feature = "std")]
+use crate::{KeyRemapper, map_indices_contiguous_except};
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use cortex_core::tensor::{BoolStore, DType, Shape};
+use cortex_pack::Tensor as PackTensor;
+
+use crate::StoreTensor;
+use core::fmt;
+use core::ops::Deref;
+use hashbrown::HashMap;
+
+// `alloc::sync::Arc` needs atomic CAS. A target without it has no threads to share a
+// container across, so `Rc` stands in: the same sharing, without the atomics. `Box` would
+// not do, since every tensor's provider holds its own handle on the container and cloning a
+// `Box` copies the whole buffer.
+#[cfg(not(target_has_atomic = "ptr"))]
+use alloc::rc::Rc as Arc;
+#[cfg(target_has_atomic = "ptr")]
+use alloc::sync::Arc;
+
+/// Errors that can occur during SafeTensors operations.
+#[derive(Debug)]
+pub enum SafetensorsStoreError {
+    /// SafeTensors crate error.
+    Safetensors(safetensors::SafeTensorError),
+
+    /// I/O error.
+    #[cfg(feature = "std")]
+    Io(std::io::Error),
+
+    /// Tensor not found.
+    TensorNotFound(String),
+
+    /// Validation failed.
+    ValidationFailed(String),
+
+    /// Other error.
+    Other(String),
+}
+
+impl fmt::Display for SafetensorsStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Safetensors(e) => write!(f, "SafeTensors error: {}", e),
+            #[cfg(feature = "std")]
+            Self::Io(e) => write!(f, "I/O error: {}", e),
+            Self::TensorNotFound(name) => write!(f, "Tensor not found: {}", name),
+            Self::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+            Self::Other(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl core::error::Error for SafetensorsStoreError {}
+
+impl From<safetensors::SafeTensorError> for SafetensorsStoreError {
+    fn from(e: safetensors::SafeTensorError) -> Self {
+        SafetensorsStoreError::Safetensors(e)
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::io::Error> for SafetensorsStoreError {
+    fn from(e: std::io::Error) -> Self {
+        SafetensorsStoreError::Io(e)
+    }
+}
+
+/// SafeTensors store supporting both file and memory storage.
+pub enum SafetensorsStore {
+    /// File-based storage.
+    #[cfg(feature = "std")]
+    File(FileStore),
+
+    /// Memory-based storage.
+    Memory(MemoryStore),
+}
+
+impl Default for SafetensorsStore {
+    /// Create a default memory-based store.
+    fn default() -> Self {
+        Self::from_bytes(None)
+    }
+}
+
+impl SafetensorsStore {
+    /// Get the default metadata that includes Cortex framework information.
+    ///
+    /// This includes:
+    /// - `format`: "safetensors"
+    /// - `producer`: "cortex"
+    /// - `version`: The version of cortex-store crate (from CARGO_PKG_VERSION)
+    ///
+    /// These metadata fields are automatically added to all saved models.
+    pub fn default_metadata() -> HashMap<String, String> {
+        let mut metadata = HashMap::new();
+        metadata.insert("format".to_string(), "safetensors".to_string());
+        metadata.insert("producer".to_string(), "cortex".to_string());
+        metadata.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
+        metadata
+    }
+
+    /// Create a store for loading from or saving to a file.
+    ///
+    /// Saving is atomic: the container is built in a scratch sibling of `path` and renamed
+    /// into place only once every byte is on disk, so a tensor that fails to materialize
+    /// partway through leaves the checkpoint already at `path` exactly as it was, rather than
+    /// truncated. Without [`overwrite`](Self::overwrite) it is hard-linked into place instead,
+    /// which refuses a file that appeared at `path` while the save was running.
+    ///
+    /// Replacing rather than truncating has consequences worth knowing about. The saved file
+    /// is a new inode, so `path`'s ownership and hard links do not survive a save; its
+    /// permission bits do, on Unix, so a `0600` checkpoint stays `0600`. A symlink at `path`
+    /// is replaced by a regular file rather than followed. Overwriting transiently needs room
+    /// for both copies. And a hard kill (SIGKILL, OOM) mid-save strands the scratch file, a
+    /// `<file_name>.<pid>-<n>.tmp` sibling that is safe to delete once no writer is running.
+    #[cfg(feature = "std")]
+    pub fn from_file(path: impl Into<std::path::PathBuf>) -> Self {
+        Self::File(FileStore {
+            path: path.into(),
+            filter: PathFilter::new(),
+            remapper: KeyRemapper::new(),
+            metadata: Self::default_metadata(),
+            validate: true,
+            allow_partial: false,
+            overwrite: false,
+            skip_enum_variants: false,
+            // Contiguous index mapping is off by default for SafeTensors
+            // (SafeTensors files typically have clean, contiguous indices)
+            map_indices_contiguous: false,
+            keep_indices: PathFilter::new(),
+            from_adapter: Box::new(IdentityAdapter),
+            to_adapter: Box::new(IdentityAdapter),
+            tensors_cache: None,
+        })
+    }
+
+    /// Create a store for working with bytes in memory.
+    pub fn from_bytes(bytes: Option<Vec<u8>>) -> Self {
+        Self::Memory(MemoryStore {
+            data: bytes.map(Arc::new),
+            filter: PathFilter::new(),
+            #[cfg(feature = "std")]
+            remapper: KeyRemapper::new(),
+            metadata: Self::default_metadata(),
+            validate: true,
+            allow_partial: false,
+            skip_enum_variants: false,
+            // Contiguous index mapping is off by default for SafeTensors
+            #[cfg(feature = "std")]
+            map_indices_contiguous: false,
+            #[cfg(feature = "std")]
+            keep_indices: PathFilter::new(),
+            from_adapter: Box::new(IdentityAdapter),
+            to_adapter: Box::new(IdentityAdapter),
+            tensors_cache: None,
+        })
+    }
+
+    /// Filter which tensors to load/save.
+    pub fn filter(mut self, filter: PathFilter) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = filter,
+            Self::Memory(p) => p.filter = filter,
+        }
+        self
+    }
+
+    /// Add a regex pattern to filter tensors.
+    ///
+    /// Multiple patterns can be added and they work with OR logic.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pattern` is not a valid regular expression.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .with_regex(r"^encoder\..*")  // Match all encoder tensors
+    ///     .with_regex(r".*\.weight$");   // OR match any weight tensors
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn with_regex<S: AsRef<str>>(mut self, pattern: S) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().with_regex(pattern),
+            Self::Memory(p) => p.filter = p.filter.clone().with_regex(pattern),
+        }
+        self
+    }
+
+    /// Add multiple regex patterns to filter tensors.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any pattern is not a valid regular expression.
+    #[cfg(feature = "std")]
+    pub fn with_regexes<I, S>(mut self, patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().with_regexes(patterns),
+            Self::Memory(p) => p.filter = p.filter.clone().with_regexes(patterns),
+        }
+        self
+    }
+
+    /// Add an exact full path to match.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .with_full_path("encoder.layer1.weight")
+    ///     .with_full_path("decoder.output.bias");
+    /// ```
+    pub fn with_full_path<S: Into<String>>(mut self, path: S) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().with_full_path(path),
+            Self::Memory(p) => p.filter = p.filter.clone().with_full_path(path),
+        }
+        self
+    }
+
+    /// Add multiple exact full paths to match.
+    pub fn with_full_paths<I, S>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().with_full_paths(paths),
+            Self::Memory(p) => p.filter = p.filter.clone().with_full_paths(paths),
+        }
+        self
+    }
+
+    /// Add a predicate function for custom filtering logic.
+    ///
+    /// The predicate receives the tensor path and container path.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .with_predicate(|path, _| path.starts_with("encoder.") || path.ends_with(".bias"));
+    /// ```
+    pub fn with_predicate(mut self, predicate: fn(&str, &str) -> bool) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().with_predicate(predicate),
+            Self::Memory(p) => p.filter = p.filter.clone().with_predicate(predicate),
+        }
+        self
+    }
+
+    /// Add multiple predicate functions.
+    pub fn with_predicates<I>(mut self, predicates: I) -> Self
+    where
+        I: IntoIterator<Item = fn(&str, &str) -> bool>,
+    {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().with_predicates(predicates),
+            Self::Memory(p) => p.filter = p.filter.clone().with_predicates(predicates),
+        }
+        self
+    }
+
+    /// Set the filter to match all paths (disables filtering).
+    pub fn match_all(mut self) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.filter = p.filter.clone().match_all(),
+            Self::Memory(p) => p.filter = p.filter.clone().match_all(),
+        }
+        self
+    }
+
+    /// Remap tensor names during load/save.
+    #[cfg(feature = "std")]
+    pub fn remap(mut self, remapper: KeyRemapper) -> Self {
+        match &mut self {
+            Self::File(p) => p.remapper = remapper,
+            Self::Memory(p) => p.remapper = remapper,
+        }
+        self.clear_tensors_cache();
+        self
+    }
+
+    /// Add a regex pattern to remap tensor names during load/save.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .with_key_remapping(r"^encoder\.", "transformer.encoder.")  // encoder.X -> transformer.encoder.X
+    ///     .with_key_remapping(r"\.gamma$", ".weight");               // X.gamma -> X.weight
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn with_key_remapping(
+        mut self,
+        from_pattern: impl AsRef<str>,
+        to_pattern: impl Into<String>,
+    ) -> Self {
+        match &mut self {
+            Self::File(p) => {
+                p.remapper = p
+                    .remapper
+                    .clone()
+                    .add_pattern(from_pattern, to_pattern)
+                    .expect("Invalid regex pattern");
+            }
+            Self::Memory(p) => {
+                p.remapper = p
+                    .remapper
+                    .clone()
+                    .add_pattern(from_pattern, to_pattern)
+                    .expect("Invalid regex pattern");
+            }
+        }
+        self.clear_tensors_cache();
+        self
+    }
+
+    /// Add metadata to be saved with the tensors.
+    pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        let key = key.into();
+        let value = value.into();
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => {
+                p.metadata.insert(key, value);
+            }
+            Self::Memory(p) => {
+                p.metadata.insert(key, value);
+            }
+        }
+        self
+    }
+
+    /// Clear all metadata including the default Cortex framework metadata.
+    ///
+    /// This removes the automatic `format`, `producer` and `version` fields.
+    /// Use this when you need complete control over metadata or when
+    /// saving models for use with other frameworks.
+    pub fn clear_metadata(mut self) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => {
+                p.metadata.clear();
+            }
+            Self::Memory(p) => {
+                p.metadata.clear();
+            }
+        }
+        self
+    }
+
+    /// Set whether to validate tensors during loading (default: true).
+    pub fn validate(mut self, validate: bool) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.validate = validate,
+            Self::Memory(p) => p.validate = validate,
+        }
+        self
+    }
+
+    /// Allow partial loading of tensors (continue even if some tensors are missing).
+    pub fn allow_partial(mut self, allow: bool) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.allow_partial = allow,
+            Self::Memory(p) => p.allow_partial = allow,
+        }
+        self
+    }
+
+    /// Skip enum variant names when loading or saving tensor paths.
+    ///
+    /// When enabled during **loading**, tensor paths from the source that don't include enum variants
+    /// can be matched against Cortex module paths that do include them.
+    /// For example, source path "feature.weight" can match Cortex path "feature.BaseConv.weight".
+    ///
+    /// When enabled during **saving**, enum variant names are omitted from the exported tensor paths,
+    /// making them compatible with PyTorch naming conventions.
+    /// For example, "feature.BaseConv.weight" becomes "feature.weight" in the exported file.
+    ///
+    /// This is useful when working with models from/to formats that don't include enum variant
+    /// names in their parameter paths (like PyTorch models).
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// // For PyTorch compatibility
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .skip_enum_variants(true);
+    /// ```
+    pub fn skip_enum_variants(mut self, skip: bool) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.skip_enum_variants = skip,
+            Self::Memory(p) => p.skip_enum_variants = skip,
+        }
+        self
+    }
+
+    /// Enable or disable automatic contiguous mapping of layer indices (default: false).
+    ///
+    /// When enabled, non-contiguous numeric indices in tensor paths are renumbered
+    /// to be contiguous. This is useful when loading models that have gaps
+    /// in layer numbering, such as PyTorch models using `nn.Sequential` with mixed
+    /// layer types (e.g., Conv2d layers at indices 0, 2, 4 with ReLU layers at 1, 3, 5).
+    ///
+    /// # Example
+    ///
+    /// With index mapping enabled:
+    /// - `fc.0.weight` → `fc.0.weight`
+    /// - `fc.2.weight` → `fc.1.weight` (gap filled)
+    /// - `fc.4.weight` → `fc.2.weight` (gap filled)
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - `true` to enable contiguous index mapping, `false` to disable
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// // Enable contiguous index mapping for PyTorch-exported safetensors
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .map_indices_contiguous(true);
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn map_indices_contiguous(mut self, map: bool) -> Self {
+        match &mut self {
+            Self::File(p) => p.map_indices_contiguous = map,
+            Self::Memory(p) => p.map_indices_contiguous = map,
+        }
+        self.clear_tensors_cache();
+        self
+    }
+
+    /// Leave the indices under prefixes matching `pattern` untouched when contiguous
+    /// index mapping is enabled.
+    ///
+    /// The regex is matched against the prefix before a numeric segment (`flows` for
+    /// `flows.2.weight`), so anchor it to keep exactly one list. Can be called multiple
+    /// times. See [`map_indices_contiguous_except`](crate::map_indices_contiguous_except)
+    /// for the prefix rules.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// // flows.{0,2,4} stay as-is, every other list is renumbered
+    /// let store = SafetensorsStore::from_file("model.safetensors")
+    ///     .map_indices_contiguous(true)
+    ///     .map_indices_contiguous_except(r"^model_g\.flow\.flows$");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pattern` is not a valid regular expression.
+    #[cfg(feature = "std")]
+    pub fn map_indices_contiguous_except<S: AsRef<str>>(mut self, pattern: S) -> Self {
+        match &mut self {
+            Self::File(p) => p.keep_indices = p.keep_indices.clone().with_regex(pattern),
+            Self::Memory(p) => p.keep_indices = p.keep_indices.clone().with_regex(pattern),
+        }
+        self.clear_tensors_cache();
+        self
+    }
+
+    /// Set whether to overwrite existing files when saving (default: false).
+    ///
+    /// When set to `false`, attempting to save to an existing file will result in an error.
+    /// When set to `true`, existing files will be overwritten without warning.
+    ///
+    /// This setting only applies to file-based stores.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// let mut store = SafetensorsStore::from_file("model.safetensors")
+    ///     .overwrite(true);
+    /// // Will overwrite if file exists when saving
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn overwrite(mut self, overwrite: bool) -> Self {
+        match &mut self {
+            Self::File(p) => p.overwrite = overwrite,
+            Self::Memory(_) => {
+                // Memory stores don't have overwrite semantics, ignore
+            }
+        }
+        self
+    }
+
+    /// Set the adapter for loading tensors (converting from source format to Cortex).
+    pub fn with_from_adapter(mut self, adapter: impl ModuleAdapter + 'static) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.from_adapter = Box::new(adapter),
+            Self::Memory(p) => p.from_adapter = Box::new(adapter),
+        }
+        self
+    }
+
+    /// Set the adapter for saving tensors (converting from Cortex to target format).
+    pub fn with_to_adapter(mut self, adapter: impl ModuleAdapter + 'static) -> Self {
+        match &mut self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.to_adapter = Box::new(adapter),
+            Self::Memory(p) => p.to_adapter = Box::new(adapter),
+        }
+        self
+    }
+
+    /// Get saved bytes from memory-based store.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use cortex_store::SafetensorsStore;
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut store = SafetensorsStore::from_bytes(None);
+    /// // After saving model with collect_to()...
+    /// let bytes = store.get_bytes()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_bytes(&self) -> Result<Vec<u8>, SafetensorsStoreError> {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(_) => Err(SafetensorsStoreError::Other(
+                "Cannot get bytes from file-based store".to_string(),
+            )),
+            Self::Memory(p) => p
+                .data()
+                .map(|arc| arc.as_ref().clone())
+                .ok_or_else(|| SafetensorsStoreError::Other("No data available".to_string())),
+        }
+    }
+}
+
+/// File-based store.
+#[cfg(feature = "std")]
+pub struct FileStore {
+    path: std::path::PathBuf,
+    filter: PathFilter,
+    remapper: KeyRemapper,
+    metadata: HashMap<String, String>,
+    validate: bool,
+    allow_partial: bool,
+    overwrite: bool,
+    skip_enum_variants: bool,
+    /// Enable contiguous mapping of layer indices (default: false)
+    map_indices_contiguous: bool,
+    /// Prefixes whose indices contiguous mapping leaves untouched
+    keep_indices: PathFilter,
+    from_adapter: Box<dyn ModuleAdapter>,
+    to_adapter: Box<dyn ModuleAdapter>,
+    /// Cached tensors (parsed once, reused)
+    tensors_cache: Option<BTreeMap<String, StoreTensor>>,
+}
+
+/// Memory-based store.
+pub struct MemoryStore {
+    data: Option<Arc<Vec<u8>>>,
+    filter: PathFilter,
+    #[cfg(feature = "std")]
+    remapper: KeyRemapper,
+    metadata: HashMap<String, String>,
+    validate: bool,
+    allow_partial: bool,
+    skip_enum_variants: bool,
+    /// Enable contiguous mapping of layer indices (default: false)
+    #[cfg(feature = "std")]
+    map_indices_contiguous: bool,
+    /// Prefixes whose indices contiguous mapping leaves untouched
+    #[cfg(feature = "std")]
+    keep_indices: PathFilter,
+    from_adapter: Box<dyn ModuleAdapter>,
+    to_adapter: Box<dyn ModuleAdapter>,
+    /// Cached tensors (parsed once, reused)
+    tensors_cache: Option<BTreeMap<String, StoreTensor>>,
+}
+
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self {
+            data: None,
+            filter: PathFilter::new(),
+            #[cfg(feature = "std")]
+            remapper: KeyRemapper::new(),
+            metadata: HashMap::new(),
+            validate: true,
+            allow_partial: false,
+            skip_enum_variants: false,
+            #[cfg(feature = "std")]
+            map_indices_contiguous: false,
+            #[cfg(feature = "std")]
+            keep_indices: PathFilter::new(),
+            from_adapter: Box::new(IdentityAdapter),
+            to_adapter: Box::new(IdentityAdapter),
+            tensors_cache: None,
+        }
+    }
+}
+
+impl MemoryStore {
+    #[cfg(test)]
+    pub(crate) fn data(&self) -> Option<Arc<Vec<u8>>> {
+        self.data.clone()
+    }
+
+    #[cfg(not(test))]
+    fn data(&self) -> Option<Arc<Vec<u8>>> {
+        self.data.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_data(&mut self, data: Vec<u8>) {
+        self.data = Some(Arc::new(data));
+    }
+}
+
+// Adapter to write a tensor through safetensors' `View`
+#[derive(Debug)]
+struct PackTensorView(PackTensor);
+
+impl safetensors::View for PackTensorView {
+    fn dtype(&self) -> safetensors::Dtype {
+        // Convert from cortex dtype to safetensors dtype
+        dtype_to_safetensors(self.0.dtype).unwrap_or(safetensors::Dtype::F32)
+    }
+
+    fn shape(&self) -> &[usize] {
+        &self.0.shape
+    }
+
+    fn data(&self) -> alloc::borrow::Cow<'_, [u8]> {
+        // Only materialize data when actually needed for serialization
+        // `View::data` has no error channel, so this is the one place a materialization
+        // failure cannot be returned. Name the tensor at least, since the writer's own
+        // annotation is not reached from here.
+        let bytes = self
+            .0
+            .to_bytes()
+            .unwrap_or_else(|e| panic!("Failed to get data for tensor '{}': {:?}", self.0.name, e));
+        alloc::borrow::Cow::Owned(bytes.deref().to_vec())
+    }
+
+    fn data_len(&self) -> usize {
+        // Known from the descriptor, without drawing the bytes
+        self.0.byte_len()
+    }
+}
+
+impl ModuleStore for SafetensorsStore {
+    type Error = SafetensorsStoreError;
+
+    fn collect_from<M: ModuleSnapshot>(&mut self, module: &M) -> Result<(), Self::Error> {
+        // Invalidate cache since we're writing new data
+        self.clear_tensors_cache();
+
+        // Collect the module's tensors with the adapter applied
+        // The to_adapter converts from Cortex format to target format for saving
+        let to_adapter = match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.to_adapter.clone(),
+            Self::Memory(p) => p.to_adapter.clone(),
+        };
+        let mut tensors: Vec<StoreTensor> = module
+            .collect(None, Some(to_adapter), self.get_skip_enum_variants())
+            .into_iter()
+            .map(StoreTensor::from)
+            .collect();
+
+        // Apply filtering
+        tensors = apply_filter(tensors, self.get_filter());
+
+        // Apply remapping
+        #[cfg(feature = "std")]
+        {
+            tensors = apply_remapping(tensors, self.get_remapper());
+        }
+
+        // Get metadata (already includes format, producer and version from default_metadata)
+        let metadata = self.get_metadata().clone();
+
+        #[cfg(feature = "std")]
+        let std_metadata: std::collections::HashMap<String, String> = metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        // Write to storage
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => {
+                // Fail fast before any tensor is read back. This check alone is racy; the
+                // no-clobber commit below is what enforces `overwrite` (apart from filesystems
+                // without hard links, see `AtomicFile::commit_new`). `symlink_metadata` rather
+                // than `exists` so a dangling symlink is caught here too, not after the save.
+                if !p.overwrite && std::fs::symlink_metadata(&p.path).is_ok() {
+                    return Err(pack(cortex_pack::Error::AlreadyExists(
+                        p.path.display().to_string(),
+                    )));
+                }
+
+                // Convert to safetensors format
+                let tensors = to_safetensors_views(tensors)?;
+
+                // Tensors materialize during the write (`PackTensorView::data` draws them one
+                // at a time), so a device readback that fails partway must not truncate
+                // whatever was already at this path: `serialize_to_file` opens with
+                // `File::create`, which empties the destination before the first tensor is
+                // even asked for. Build the container beside it and publish it once complete,
+                // the way `CortexpackStore` does. See #5479.
+                //
+                // The reserved handle is dropped because `serialize_to_file` opens the path
+                // itself; the exclusive create has already ruled out a pre-existing file or a
+                // symlink planted at the scratch name. It must be closed before the write:
+                // `serialize_to_file` renames its own tempfile onto the scratch path, which
+                // Windows refuses while a handle to it is still open.
+                let (scratch, reserved) = cortex_pack::AtomicFile::create(&p.path).map_err(pack)?;
+                drop(reserved);
+                let scratch_path = scratch.path().to_path_buf();
+
+                // serialize_to_file streams directly to disk, calling the lazy closures
+                // on-demand without buffering everything.
+                caught(move || {
+                    safetensors::serialize_to_file(tensors, Some(std_metadata), &scratch_path)
+                })??;
+
+                if p.overwrite {
+                    scratch.commit().map_err(pack)?;
+                } else {
+                    scratch.commit_new().map_err(pack)?;
+                }
+                Ok(())
+            }
+            Self::Memory(p) => {
+                // For memory, we need to serialize to bytes
+                let tensors = to_safetensors_views(tensors)?;
+                // For no-std, serialize still needs std HashMap when std feature is enabled
+                #[cfg(feature = "std")]
+                let data = caught(move || safetensors::serialize(tensors, Some(std_metadata)))??;
+
+                #[cfg(not(feature = "std"))]
+                let data = safetensors::serialize(tensors, Some(metadata))?;
+                p.data = Some(Arc::new(data));
+                Ok(())
+            }
+        }
+    }
+
+    fn apply_to<M: ModuleSnapshot>(&mut self, module: &mut M) -> Result<ApplyResult, Self::Error> {
+        // Get tensors from cache
+        let tensors: Vec<StoreTensor> = self.get_all_tensors()?.values().cloned().collect();
+
+        // Get the adapter
+        let adapter: Box<dyn ModuleAdapter> = match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.from_adapter.clone(),
+            Self::Memory(p) => p.from_adapter.clone(),
+        };
+
+        // Get filter (cloned to Option for apply)
+        let filter = self.get_filter();
+        let filter_opt = if filter.is_empty() {
+            None
+        } else {
+            Some(filter.clone())
+        };
+
+        // Apply to module with adapter
+        // The adapter will be applied during module traversal with proper container info
+        // Filter is applied here during apply, not during cache population
+        let result = module.apply(
+            tensors,
+            filter_opt,
+            Some(adapter),
+            self.get_skip_enum_variants(),
+        );
+
+        // Validate if needed
+        if self.get_validate() && !result.errors.is_empty() {
+            return Err(SafetensorsStoreError::ValidationFailed(format!(
+                "Import errors: {:?}",
+                result.errors
+            )));
+        }
+
+        if !self.get_allow_partial() && !result.missing.is_empty() {
+            return Err(SafetensorsStoreError::TensorNotFound(format!(
+                "\n{}\n\nHint: Use `.allow_partial(true)` on the store to get an `ApplyResult` \
+                with structured missing/error info instead of a hard failure.",
+                result
+            )));
+        }
+
+        Ok(result)
+    }
+
+    fn get_tensor(&mut self, name: &str) -> Result<Option<&StoreTensor>, Self::Error> {
+        // Ensure cache is populated
+        self.ensure_tensors_cache()?;
+        let cache = match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.tensors_cache.as_ref().unwrap(),
+            Self::Memory(p) => p.tensors_cache.as_ref().unwrap(),
+        };
+        Ok(cache.get(name))
+    }
+
+    fn get_all_tensors(&mut self) -> Result<&BTreeMap<String, StoreTensor>, Self::Error> {
+        // Ensure cache is populated
+        self.ensure_tensors_cache()?;
+        let cache = match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.tensors_cache.as_ref().unwrap(),
+            Self::Memory(p) => p.tensors_cache.as_ref().unwrap(),
+        };
+        Ok(cache)
+    }
+
+    fn keys(&mut self) -> Result<Vec<String>, Self::Error> {
+        // Always use the cache to ensure remapping is applied consistently
+        Ok(self.get_all_tensors()?.keys().cloned().collect())
+    }
+}
+
+impl SafetensorsStore {
+    fn get_filter(&self) -> &PathFilter {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => &p.filter,
+            Self::Memory(p) => &p.filter,
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn get_remapper(&self) -> &KeyRemapper {
+        match self {
+            Self::File(p) => &p.remapper,
+            Self::Memory(p) => &p.remapper,
+        }
+    }
+
+    fn get_metadata(&self) -> &HashMap<String, String> {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => &p.metadata,
+            Self::Memory(p) => &p.metadata,
+        }
+    }
+
+    fn get_validate(&self) -> bool {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.validate,
+            Self::Memory(p) => p.validate,
+        }
+    }
+
+    fn get_allow_partial(&self) -> bool {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.allow_partial,
+            Self::Memory(p) => p.allow_partial,
+        }
+    }
+
+    fn get_skip_enum_variants(&self) -> bool {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.skip_enum_variants,
+            Self::Memory(p) => p.skip_enum_variants,
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn get_map_indices_contiguous(&self) -> bool {
+        match self {
+            Self::File(p) => p.map_indices_contiguous,
+            Self::Memory(p) => p.map_indices_contiguous,
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn get_keep_indices(&self) -> &PathFilter {
+        match self {
+            Self::File(p) => &p.keep_indices,
+            Self::Memory(p) => &p.keep_indices,
+        }
+    }
+
+    /// Drop the cached tensors so the next access rebuilds them with the current settings
+    fn clear_tensors_cache(&mut self) {
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.tensors_cache = None,
+            Self::Memory(p) => p.tensors_cache = None,
+        }
+    }
+
+    /// Ensure the tensors cache is populated
+    fn ensure_tensors_cache(&mut self) -> Result<(), SafetensorsStoreError> {
+        // Check if cache exists
+        let has_cache = match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.tensors_cache.is_some(),
+            Self::Memory(p) => p.tensors_cache.is_some(),
+        };
+
+        if has_cache {
+            return Ok(());
+        }
+
+        // Load tensors
+        #[allow(unused_mut)]
+        let mut tensors: Vec<StoreTensor> = match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => lazy_tensors_from_file(&p.path)?,
+            Self::Memory(p) => {
+                let data_arc = p
+                    .data
+                    .clone()
+                    .ok_or_else(|| SafetensorsStoreError::Other("No data loaded".to_string()))?;
+                lazy_tensors(data_arc)?
+            }
+        }
+        .into_iter()
+        .map(StoreTensor::from)
+        .collect();
+
+        // Apply remapping (but NOT filtering - that's done at apply time)
+        #[cfg(feature = "std")]
+        {
+            tensors = match self {
+                Self::File(p) => apply_remapping(tensors, &p.remapper),
+                Self::Memory(p) => apply_remapping(tensors, &p.remapper),
+            };
+        }
+
+        // Apply contiguous index mapping if enabled
+        // This must be done after remapping so that remapped paths are mapped
+        #[cfg(feature = "std")]
+        if self.get_map_indices_contiguous() {
+            let keep = self.get_keep_indices();
+            let (mapped, _) = map_indices_contiguous_except(tensors, |prefix| keep.matches(prefix));
+            tensors = mapped;
+        }
+
+        // Build cache as BTreeMap
+        let cache: BTreeMap<String, StoreTensor> = tensors
+            .into_iter()
+            .map(|t| (t.name().to_string(), t))
+            .collect();
+
+        // Store cache
+        match self {
+            #[cfg(feature = "std")]
+            Self::File(p) => p.tensors_cache = Some(cache),
+            Self::Memory(p) => p.tensors_cache = Some(cache),
+        }
+
+        Ok(())
+    }
+}
+
+/// Carry a cortex-pack error through as a store error.
+///
+/// Only the atomic-write helper produces these here; the messages already name the file and
+/// what went wrong, so there is nothing to add beyond the change of type.
+#[cfg(feature = "std")]
+fn pack(e: cortex_pack::Error) -> SafetensorsStoreError {
+    SafetensorsStoreError::Other(e.to_string())
+}
+
+/// Run a serialization step, turning a panic escaping it into an error.
+///
+/// [`safetensors::View::data`] has no error channel, so [`PackTensorView`] can only report a
+/// failed materialization by panicking. That would unwind out of `collect_from`, which
+/// declares a `Result`, and past a half-written file. Catching it here is what keeps the
+/// declared contract honest: the typed error `bridge::guarded` produced is handed back as one
+/// instead of being re-raised.
+#[cfg(feature = "std")]
+fn caught<T>(f: impl FnOnce() -> T) -> Result<T, SafetensorsStoreError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|payload| {
+        let cause = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic payload".to_string());
+
+        SafetensorsStoreError::Other(cause)
+    })
+}
+
+/// Apply filter to tensors.
+fn apply_filter(mut tensors: Vec<StoreTensor>, filter: &PathFilter) -> Vec<StoreTensor> {
+    if filter.is_empty() {
+        return tensors;
+    }
+
+    tensors.retain(|tensor| filter.matches(tensor.name()));
+
+    tensors
+}
+
+/// Apply remapping to tensors.
+#[cfg(feature = "std")]
+fn apply_remapping(tensors: Vec<StoreTensor>, remapper: &KeyRemapper) -> Vec<StoreTensor> {
+    if remapper.is_empty() {
+        return tensors;
+    }
+
+    let (remapped, _) = remapper.remap(tensors);
+    remapped
+}
+
+/// Wrap tensors as safetensors views, still without materializing any data.
+fn to_safetensors_views(
+    tensors: Vec<StoreTensor>,
+) -> Result<Vec<(String, PackTensorView)>, SafetensorsStoreError> {
+    tensors
+        .into_iter()
+        .map(|tensor| {
+            let tensor = tensor.into_pack();
+            // `View::dtype` has no error channel, so a dtype the format cannot represent has
+            // to be refused here. Letting it through would write a header claiming F32 over
+            // bytes that are nothing of the sort, and the file would only be found broken on
+            // load.
+            dtype_to_safetensors(tensor.dtype).map_err(|e| {
+                SafetensorsStoreError::Other(format!("tensor '{}': {e}", tensor.name))
+            })?;
+
+            Ok((tensor.name.clone(), PackTensorView(tensor)))
+        })
+        .collect()
+}
+
+/// Read a safetensors container into lazily-loading tensors.
+///
+/// Only the header is parsed here; each tensor's bytes are copied out when its data is asked
+/// for. `source` is whatever holds the container bytes - an in-memory buffer, or a memory map
+/// of a file - which is why this is generic rather than written once per source.
+fn lazy_tensors<S>(source: Arc<S>) -> Result<Vec<PackTensor>, SafetensorsStoreError>
+where
+    S: Deref<Target = [u8]> + Send + Sync + 'static,
+{
+    // Parse and validate the header once. Tensor offsets are relative to the data section,
+    // whose start can be derived from the validated metadata length.
+    let (_, metadata) = safetensors::SafeTensors::read_metadata(&source)?;
+    let data_start = source.len() - metadata.data_len();
+    let mut loaded = Vec::new();
+
+    for (name, info) in metadata.tensors() {
+        let dtype = safetensor_dtype_to_cortex(info.dtype)?;
+        let shape: Shape = info.shape.as_slice().into();
+        let (start, end) = info.data_offsets;
+        let tensor_start = data_start + start;
+        let tensor_end = data_start + end;
+
+        // Capture the validated byte range so drawing this tensor does not parse the header
+        // again or look up its name in the metadata index.
+        let source = source.clone();
+        let tensor_shape = shape.clone();
+
+        // Safetensors carries no parameter identity, so `param_id` stays empty and loading
+        // keeps the target module's ids rather than randomizing them (the PyTorch store does
+        // the same).
+        loaded.push(bridge::deferred(
+            name.to_string(),
+            dtype,
+            shape,
+            None,
+            move || {
+                let bytes = cortex_core::tensor::Bytes::from_bytes_vec(
+                    source[tensor_start..tensor_end].to_vec(),
+                );
+                bridge::tensor_data(bytes, tensor_shape.clone(), dtype)
+            },
+        ));
+    }
+
+    Ok(loaded)
+}
+
+/// Memory map a safetensors file and read it into lazily-loading tensors.
+#[cfg(feature = "std")]
+fn lazy_tensors_from_file(
+    path: &std::path::Path,
+) -> Result<Vec<PackTensor>, SafetensorsStoreError> {
+    // Always use memory mapping for the most efficient access
+    use memmap2::MmapOptions;
+
+    let file = std::fs::File::open(path)?;
+    let mmap = unsafe { MmapOptions::new().map(&file)? };
+
+    lazy_tensors(Arc::new(mmap))
+}
+
+/// Helper to convert safetensors Dtype to cortex DType.
+fn safetensor_dtype_to_cortex(dtype: safetensors::Dtype) -> Result<DType, SafetensorsStoreError> {
+    use safetensors::Dtype;
+
+    match dtype {
+        Dtype::F64 => Ok(DType::F64),
+        Dtype::F32 => Ok(DType::F32),
+        Dtype::F16 => Ok(DType::F16),
+        Dtype::BF16 => Ok(DType::BF16),
+        Dtype::I64 => Ok(DType::I64),
+        Dtype::I32 => Ok(DType::I32),
+        Dtype::I16 => Ok(DType::I16),
+        Dtype::I8 => Ok(DType::I8),
+        Dtype::U64 => Ok(DType::U64),
+        Dtype::U32 => Ok(DType::U32),
+        Dtype::U8 => Ok(DType::U8),
+        Dtype::BOOL => Ok(DType::Bool(BoolStore::Native)),
+        _ => Err(SafetensorsStoreError::Other(format!(
+            "Unsupported dtype: {:?}",
+            dtype
+        ))),
+    }
+}
+
+/// Helper to convert DType to safetensors Dtype.
+fn dtype_to_safetensors(dtype: DType) -> Result<safetensors::Dtype, SafetensorsStoreError> {
+    use safetensors::Dtype;
+
+    match dtype {
+        DType::F64 => Ok(Dtype::F64),
+        DType::F32 | DType::Flex32 => Ok(Dtype::F32), // Flex32 is stored as F32
+        DType::F16 => Ok(Dtype::F16),
+        DType::BF16 => Ok(Dtype::BF16),
+        DType::I64 => Ok(Dtype::I64),
+        DType::I32 => Ok(Dtype::I32),
+        DType::I16 => Ok(Dtype::I16),
+        DType::I8 => Ok(Dtype::I8),
+        DType::U64 => Ok(Dtype::U64),
+        DType::U32 => Ok(Dtype::U32),
+        DType::U16 => Err(SafetensorsStoreError::Other(
+            "U16 dtype not yet supported in safetensors".to_string(),
+        )),
+        DType::U8 => Ok(Dtype::U8),
+        DType::Bool(BoolStore::Native) => Ok(Dtype::BOOL),
+        DType::Bool(BoolStore::U32) => Ok(Dtype::U32),
+        DType::Bool(BoolStore::U8) => Ok(Dtype::U8),
+        DType::QFloat(_) => Err(SafetensorsStoreError::Other(
+            "Quantized tensors not yet supported in safetensors".to_string(),
+        )),
+    }
+}

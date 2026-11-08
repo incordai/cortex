@@ -1,0 +1,28 @@
+// Cortex backend tensor tests, reusable with element types.
+
+pub use super::*;
+
+#[path = "../tensor/clone_invariance.rs"]
+mod clone_invariance;
+
+#[path = "../tensor/collective.rs"]
+mod collective;
+
+#[cfg(feature = "std")]
+#[path = "../tensor/multi_threads.rs"]
+mod multi_threads;
+
+#[path = "../tensor/extract_inplace.rs"]
+mod extract_inplace;
+
+// Default float dtype
+#[path = "../tensor/float/mod.rs"]
+mod float;
+
+// Default integer dtype
+#[path = "../tensor/int/mod.rs"]
+mod int;
+
+// Default bool dtype
+#[path = "../tensor/bool/mod.rs"]
+mod bool;

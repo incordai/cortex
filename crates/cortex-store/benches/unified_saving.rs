@@ -1,0 +1,168 @@
+//! Unified benchmark comparing all saving methods:
+//! - CortexpackStore (streaming cortexpack writer)
+//! - ModuleRecord (the record API, writing the same cortexpack format)
+//! - SafetensorsStore
+//!
+//! Before running this benchmark, ensure the directory exists:
+//! ```bash
+//! mkdir -p /tmp/simple_bench_models
+//! ```
+//!
+//! Then run the benchmark:
+//! ```bash
+//! cargo bench --bench unified_saving
+//! ```
+use cortex_core as cortex;
+
+use cortex_core::module::Module;
+use cortex_core::prelude::*;
+use cortex_nn as nn;
+use cortex_store::{CortexpackStore, ModuleSnapshot, SafetensorsStore};
+use divan::{AllocProfiler, Bencher};
+use std::fs;
+use std::path::PathBuf;
+
+#[global_allocator]
+static ALLOC: AllocProfiler = AllocProfiler::system();
+
+// Use the same LargeModel as other benchmarks for fair comparison
+#[derive(Module, Debug)]
+struct LargeModel {
+    layers: Vec<nn::Linear>,
+}
+
+impl LargeModel {
+    fn new(device: &Device) -> Self {
+        let mut layers = Vec::new();
+        // Create a model with 20 layers - same as loading benchmarks
+        for i in 0..20 {
+            let in_size = if i == 0 { 1024 } else { 2048 };
+            layers.push(nn::LinearConfig::new(in_size, 2048).init(device));
+        }
+        Self { layers }
+    }
+}
+
+/// Get the path to the output directory
+fn get_output_dir() -> PathBuf {
+    std::env::temp_dir().join("simple_bench_models_saving")
+}
+
+/// Ensure output directory exists
+fn ensure_output_dir() -> Result<(), String> {
+    let dir = get_output_dir();
+    if !dir.exists() {
+        fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+    Ok(())
+}
+
+fn main() {
+    match ensure_output_dir() {
+        Ok(()) => {
+            println!("✅ Output directory ready: {}", get_output_dir().display());
+            println!();
+            println!("🚀 Running unified saving benchmarks...");
+            println!();
+            println!("Comparing 3 saving methods:");
+            println!("  1. CortexpackStore (streaming cortexpack writer)");
+            println!("  2. ModuleRecord (record API, same cortexpack format)");
+            println!("  3. SafetensorsStore");
+            println!();
+            println!("Available backends:");
+            println!("  - Flex (CPU)");
+            #[cfg(feature = "wgpu")]
+            println!("  - WGPU (GPU)");
+            #[cfg(feature = "cuda")]
+            println!("  - CUDA (NVIDIA GPU)");
+            #[cfg(feature = "wgpu-msl")]
+            println!("  - Metal (Apple GPU)");
+            println!();
+
+            divan::main();
+        }
+        Err(msg) => {
+            eprintln!("❌ {}", msg);
+            std::process::exit(1);
+        }
+    }
+}
+
+// Macro to generate benchmarks for each backend
+macro_rules! bench_backend {
+    ($device:expr, $mod_name:ident, $backend_name:literal) => {
+        #[divan::bench_group(name = $backend_name, sample_count = 10)]
+        mod $mod_name {
+            use super::*;
+
+            #[divan::bench]
+            fn cortexpack_store(bencher: Bencher) {
+                bencher.bench(|| {
+                    let device = $device;
+                    let model = LargeModel::new(&device);
+                    let output_path = get_output_dir().join("test_cortexpack.bpk");
+                    let mut store = CortexpackStore::from_file(output_path.clone()).overwrite(true);
+                    model
+                        .save_into(&mut store)
+                        .expect("Failed to save with CortexpackStore");
+                    // Clean up
+                    let _ = fs::remove_file(output_path);
+                });
+            }
+
+            #[divan::bench]
+            fn module_record(bencher: Bencher) {
+                bencher.bench(|| {
+                    let device = $device;
+                    let model = LargeModel::new(&device);
+                    let output_path = get_output_dir().join("test_module_record.bpk");
+                    model
+                        .save_file(output_path.clone())
+                        .expect("Failed to save with ModuleRecord");
+                    // Clean up
+                    let _ = fs::remove_file(output_path);
+                });
+            }
+
+            #[divan::bench]
+            fn safetensors_store(bencher: Bencher) {
+                bencher.bench(|| {
+                    let device = $device;
+                    let model = LargeModel::new(&device);
+                    let output_path = get_output_dir().join("test_safetensors_store.safetensors");
+                    let mut store = SafetensorsStore::from_file(output_path.clone());
+                    model
+                        .save_into(&mut store)
+                        .expect("Failed to save with SafetensorsStore");
+                    // Clean up
+                    let _ = fs::remove_file(output_path);
+                });
+            }
+        }
+    };
+}
+
+// Generate benchmarks for each backend
+bench_backend!(Device::flex(), flex_backend, "Flex Backend (CPU)");
+
+#[cfg(feature = "wgpu")]
+bench_backend!(
+    Device::wgpu(Default::default()),
+    wgpu_backend,
+    "WGPU Backend (GPU)"
+);
+
+#[cfg(feature = "cuda")]
+bench_backend!(
+    CudaDevice::default(),
+    cuda_backend,
+    "CUDA Backend (NVIDIA GPU)"
+);
+
+#[cfg(feature = "wgpu-msl")]
+bench_backend!(
+    Device::wgpu(Default::default()),
+    metal_backend,
+    "Metal Backend (Apple GPU)"
+);

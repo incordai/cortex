@@ -1,0 +1,379 @@
+use crate::module::{
+    Content, Module, ModuleDisplay, ModuleDisplayDefault, ModuleMapper, ModuleVisitor,
+};
+
+use alloc::{
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+
+use cortex_tensor::Device;
+use core::fmt::Debug;
+
+// Box is transparent to module paths, like Option: owning a child on the heap
+// must not change the child's checkpoint keys or parameter-group paths.
+impl<T: Module> Module for Box<T> {
+    fn num_params(&self) -> usize {
+        (**self).num_params()
+    }
+
+    fn visit<V: ModuleVisitor>(&self, visitor: &mut V) {
+        (**self).visit(visitor)
+    }
+
+    fn map<M: ModuleMapper>(self, mapper: &mut M) -> Self {
+        Box::new((*self).map(mapper))
+    }
+
+    fn collect_devices(&self, devices: Vec<Device>) -> Vec<Device> {
+        (**self).collect_devices(devices)
+    }
+
+    fn to_device(self, device: &Device) -> Self {
+        Box::new((*self).to_device(device))
+    }
+
+    fn fork(self, device: &Device) -> Self {
+        Box::new((*self).fork(device))
+    }
+
+    fn valid(&self) -> Self {
+        Box::new((**self).valid())
+    }
+
+    fn train(self) -> Self {
+        Box::new((*self).train())
+    }
+
+    fn materialize(self) -> Self {
+        Box::new((*self).materialize())
+    }
+}
+
+impl<T: ModuleDisplay + ?Sized> ModuleDisplayDefault for Box<T> {
+    fn content(&self, content: Content) -> Option<Content> {
+        (**self).content(content)
+    }
+
+    fn num_params(&self) -> usize {
+        (**self).num_params()
+    }
+}
+
+impl<T: ModuleDisplay + ?Sized> ModuleDisplay for Box<T> {
+    fn format(&self, settings: crate::module::DisplaySettings) -> String {
+        (**self).format(settings)
+    }
+
+    fn custom_settings(&self) -> Option<crate::module::DisplaySettings> {
+        (**self).custom_settings()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        (**self).custom_content(content)
+    }
+}
+
+impl<T> Module for Option<T>
+where
+    T: Module + Debug + Send + Clone,
+{
+    fn visit<V: ModuleVisitor>(&self, visitor: &mut V) {
+        if let Some(module) = self {
+            module.visit(visitor)
+        }
+    }
+
+    fn map<M: ModuleMapper>(self, mapper: &mut M) -> Self {
+        self.map(|module| module.map(mapper))
+    }
+
+    fn to_device(self, device: &Device) -> Self {
+        self.map(|module| module.to_device(device))
+    }
+
+    fn fork(self, device: &Device) -> Self {
+        self.map(|module| module.fork(device))
+    }
+
+    fn collect_devices(&self, mut devices: Vec<Device>) -> Vec<Device> {
+        if let Some(module) = self.as_ref() {
+            devices = module.collect_devices(devices);
+        }
+
+        devices
+    }
+
+    fn valid(&self) -> Self {
+        self.as_ref().map(|module| module.valid())
+    }
+
+    fn train(self) -> Self {
+        self.map(Module::train)
+    }
+
+    fn materialize(self) -> Self {
+        self.map(Module::materialize)
+    }
+}
+
+impl<T: ModuleDisplay> ModuleDisplayDefault for Option<T> {
+    fn content(&self, content: Content) -> Option<Content> {
+        match self {
+            Some(module) => content.add_single(module).optional(),
+            None => content.add_single("None").optional(),
+        }
+    }
+}
+
+impl<T: ModuleDisplay> ModuleDisplay for Option<T> {}
+
+impl<T> Module for Vec<T>
+where
+    T: Module + Debug + Send + Clone,
+{
+    fn num_params(&self) -> usize {
+        let mut num_params = 0;
+        for module in self.iter() {
+            num_params += module.num_params();
+        }
+
+        num_params
+    }
+
+    fn visit<V: ModuleVisitor>(&self, visitor: &mut V) {
+        for (i, module) in self.iter().enumerate() {
+            let index_str = alloc::format!("{}", i);
+            visitor.enter_module(&index_str, "Vec");
+            module.visit(visitor);
+            visitor.exit_module(&index_str, "Vec");
+        }
+    }
+
+    fn map<M: ModuleMapper>(self, mapper: &mut M) -> Self {
+        self.into_iter()
+            .enumerate()
+            .map(|(i, module)| {
+                let index_str = alloc::format!("{}", i);
+                mapper.enter_module(&index_str, "Vec");
+                let mapped = module.map(mapper);
+                mapper.exit_module(&index_str, "Vec");
+                mapped
+            })
+            .collect()
+    }
+
+    fn to_device(self, device: &Device) -> Self {
+        self.into_iter()
+            .map(|module| module.to_device(device))
+            .collect()
+    }
+
+    fn fork(self, device: &Device) -> Self {
+        self.into_iter().map(|module| module.fork(device)).collect()
+    }
+
+    fn collect_devices(&self, mut devices: Vec<Device>) -> Vec<Device> {
+        for module in self.iter() {
+            devices = module.collect_devices(devices);
+        }
+
+        devices
+    }
+
+    fn valid(&self) -> Self {
+        self.iter().map(|module| module.valid()).collect()
+    }
+
+    fn train(self) -> Self {
+        self.into_iter().map(Module::train).collect()
+    }
+
+    fn materialize(self) -> Self {
+        self.into_iter().map(Module::materialize).collect()
+    }
+}
+
+impl<T: ModuleDisplay> ModuleDisplayDefault for Vec<T> {
+    fn content(&self, content: Content) -> Option<Content> {
+        self.iter()
+            .enumerate()
+            .fold(content, |acc, (i, module)| {
+                let index = format!("{i}");
+                acc.add(&index, module)
+            })
+            .set_top_level_type(format!("Vec<0..{}>", self.len()).as_str())
+            .optional()
+    }
+}
+
+impl<T: ModuleDisplay> ModuleDisplay for Vec<T> {}
+
+impl<const N: usize, T> Module for [T; N]
+where
+    T: Module + Debug + Send + Clone,
+{
+    fn collect_devices(&self, mut devices: Vec<Device>) -> Vec<Device> {
+        for module in self.iter() {
+            devices = module.collect_devices(devices);
+        }
+
+        devices
+    }
+
+    fn num_params(&self) -> usize {
+        let mut num_params = 0;
+        for module in self.iter() {
+            num_params += module.num_params();
+        }
+
+        num_params
+    }
+
+    fn visit<V: ModuleVisitor>(&self, visitor: &mut V) {
+        for (i, module) in self.iter().enumerate() {
+            let index_str = alloc::format!("{}", i);
+            visitor.enter_module(&index_str, "Array");
+            module.visit(visitor);
+            visitor.exit_module(&index_str, "Array");
+        }
+    }
+
+    fn map<M: ModuleMapper>(self, mapper: &mut M) -> Self {
+        let mut result = Vec::with_capacity(N);
+        for (i, module) in IntoIterator::into_iter(self).enumerate() {
+            let index_str = alloc::format!("{}", i);
+            mapper.enter_module(&index_str, "Array");
+            let mapped = module.map(mapper);
+            mapper.exit_module(&index_str, "Array");
+            result.push(mapped);
+        }
+        result
+            .try_into()
+            .unwrap_or_else(|v: Vec<T>| panic!("Expected array of length {}, got {}", N, v.len()))
+    }
+
+    fn to_device(self, device: &Device) -> Self {
+        self.map(|module| module.to_device(device))
+    }
+
+    fn fork(self, device: &Device) -> Self {
+        self.map(|module| module.fork(device))
+    }
+
+    fn valid(&self) -> Self {
+        self.clone().map(|module| module.valid())
+    }
+
+    fn train(self) -> Self {
+        self.map(Module::train)
+    }
+
+    fn materialize(self) -> Self {
+        self.map(Module::materialize)
+    }
+}
+
+impl<const N: usize, T: ModuleDisplay> ModuleDisplayDefault for [T; N] {
+    fn content(&self, content: Content) -> Option<Content> {
+        self.iter()
+            .enumerate()
+            .fold(content, |acc, (i, module)| {
+                let index = format!("{i}");
+                acc.add(&index, module)
+            })
+            .set_top_level_type(format!("[0..{}]", self.len()).as_str())
+            .optional()
+    }
+}
+
+impl<const N: usize, T: ModuleDisplay> ModuleDisplay for [T; N] {}
+
+/// A macro for generating implementations for tuple modules of different sizes.
+/// For example: `impl_module_tuple!([L0, L1][0, 1])`.
+/// Would generate an implementation for a tuple of size 2.
+/// For this macro to work properly, please adhere to the convention:
+/// `impl_module_tuple!([L0, L1, ..., Ln][0, 1, ..., n])`.
+macro_rules! impl_module_tuple {
+    // `$l` represents the generic modules.
+    // `$i` represents the indices of the modules in the tuple.
+    ([$($l:ident),*][$($i:tt),*]) => {
+        impl<$($l,)*> Module for ($($l,)*)
+        where
+            $($l: Module + Debug + Send + Clone,)*
+        {
+            fn collect_devices(&self, mut devices: Vec<Device>) -> Vec<Device> {
+                $(devices = self.$i.collect_devices(devices);)*
+                devices
+            }
+
+            fn fork(self, device: &Device) -> Self {
+                ($(self.$i.fork(device),)*)
+            }
+
+            fn to_device(self, device: &Device) -> Self {
+                ($(self.$i.to_device(device),)*)
+            }
+
+            fn visit<V: ModuleVisitor>(&self, visitor: &mut V) {
+                $(
+                    let index_str = $i.to_string();
+                    visitor.enter_module(&index_str, "Tuple");
+                    self.$i.visit(visitor);
+                    visitor.exit_module(&index_str, "Tuple");
+                )*
+            }
+
+            fn map<M: ModuleMapper>(self, mapper: &mut M) -> Self {
+                ($(
+                    {
+                        let index_str = $i.to_string();
+                        mapper.enter_module(&index_str, "Tuple");
+                        let mapped = self.$i.map(mapper);
+                        mapper.exit_module(&index_str, "Tuple");
+                        mapped
+                    }
+                ,)*)
+            }
+
+            fn valid(&self) -> Self {
+                ($(self.$i.valid(),)*)
+            }
+
+            fn train(self) -> Self {
+                ($(self.$i.train(),)*)
+            }
+
+            fn materialize(self) -> Self {
+                ($(self.$i.materialize(),)*)
+            }
+        }
+
+        impl<$($l,)*> ModuleDisplayDefault for ($($l,)*)
+        where
+            $($l: ModuleDisplay,)*
+        {
+            fn content(&self, content: Content) -> Option<Content> {
+                let content = content
+                    $(.add(&format!("{}", $i), &self.$i))*
+                    .set_top_level_type(format!("({})", stringify!($($l),*)).as_str());
+                content.optional()
+            }
+        }
+
+        impl<$($l,)*> ModuleDisplay for ($($l,)*) where $($l: ModuleDisplay,)* {}
+
+    };
+}
+
+impl_module_tuple!([L0, L1][0, 1]);
+impl_module_tuple!([L0, L1, L2][0, 1, 2]);
+impl_module_tuple!([L0, L1, L2, L3][0, 1, 2, 3]);
+impl_module_tuple!([L0, L1, L2, L3, L4][0, 1, 2, 3, 4]);
+impl_module_tuple!([L0, L1, L2, L3, L4, L5][0, 1, 2, 3, 4, 5]);
+impl_module_tuple!([L0, L1, L2, L3, L4, L5, L6][0, 1, 2, 3, 4, 5, 6]);
+impl_module_tuple!([L0, L1, L2, L3, L4, L5, L6, L7][0, 1, 2, 3, 4, 5, 6, 7]);
+impl_module_tuple!([L0, L1, L2, L3, L4, L5, L6, L7, L8][0, 1, 2, 3, 4, 5, 6, 7, 8]);
+impl_module_tuple!([L0, L1, L2, L3, L4, L5, L6, L7, L8, L9][0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);

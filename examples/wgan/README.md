@@ -1,0 +1,29 @@
+# Wasserstein Generative Adversarial Network
+
+A cortex implementation of an example WGAN model to generate MNIST digits inspired by
+[the PyTorch implementation](https://bytepawn.com/training-a-pytorch-wasserstain-mnist-gan-on-google-colab.html).
+Please note that better performance maybe gained by adopting a convolution layer in
+[some other models](https://github.com/Lornatang/WassersteinGAN-PyTorch).
+
+## Usage
+
+## Training
+
+```sh
+# Cuda backend
+cargo run -p wgan --example wgan-mnist --release --features cuda
+
+# Wgpu backend
+cargo run -p wgan --example wgan-mnist --release --features wgpu
+
+# Flex backend (CPU)
+cargo run -p wgan --example wgan-mnist --release --features flex                   # f32
+```
+
+### Generating
+
+To generate a sample of images, you can use `wgan-generate`. The same feature flags are used to select a backend.
+
+```sh
+cargo run -p wgan --example wgan-generate --release --features cuda
+```

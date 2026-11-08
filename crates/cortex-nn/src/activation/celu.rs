@@ -1,0 +1,139 @@
+use cortex_core as cortex;
+
+use cortex::config::Config;
+use cortex::module::Module;
+use cortex::module::{Content, DisplaySettings, ModuleDisplay};
+use cortex::tensor::Tensor;
+use cortex::tensor::activation::celu;
+
+/// CELU (Continuously Differentiable Exponential Linear Unit) layer.
+///
+/// Applies the CELU function element-wise:
+/// `celu(x) = max(0, x) + min(0, alpha * (exp(x / alpha) - 1))`
+///
+/// Should be created with [CeluConfig](CeluConfig).
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct Celu {
+    /// The alpha value for the CELU formulation.
+    pub alpha: f64,
+}
+
+/// Configuration to create a [Celu](Celu) layer using the [init function](CeluConfig::init).
+#[derive(Config, Debug)]
+pub struct CeluConfig {
+    /// The finite, non-zero alpha value for the CELU formulation. Default is 1.0.
+    #[config(default = "1.0")]
+    pub alpha: f64,
+}
+
+impl CeluConfig {
+    /// Initialize a new [Celu](Celu) Layer
+    pub fn init(&self) -> Celu {
+        if !self.alpha.is_finite() || self.alpha == 0.0 {
+            panic!(
+                "CELU alpha must be finite and non-zero, but got {}",
+                self.alpha
+            );
+        }
+
+        Celu { alpha: self.alpha }
+    }
+}
+
+impl ModuleDisplay for Celu {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        content.add("alpha", &self.alpha).optional()
+    }
+}
+
+impl Celu {
+    /// Forward pass for the Celu layer.
+    ///
+    /// See [celu](cortex::tensor::activation::celu) for more information.
+    ///
+    /// # Shapes
+    /// - input: `[..., any]`
+    /// - output: `[..., any]`
+    pub fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
+        celu(input, self.alpha)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cortex::tensor::TensorData;
+    use cortex::tensor::Tolerance;
+    type FT = f32;
+
+    #[test]
+    fn test_celu_forward() {
+        let device = Default::default();
+        let model = CeluConfig::new().init();
+        let input = Tensor::<2>::from_data(TensorData::from([[0.5, -0.5, -1.0]]), &device);
+        let out = model.forward(input);
+        // celu(0.5, 1) = 0.5
+        // celu(-0.5, 1) = 1 * (exp(-0.5) - 1) = -0.393469
+        // celu(-1.0, 1) = 1 * (exp(-1) - 1) = -0.632121
+        let expected = TensorData::from([[0.5, -0.393469, -0.632121]]);
+        out.to_data()
+            .assert_approx_eq::<FT>(&expected, Tolerance::default());
+    }
+
+    #[test]
+    fn test_celu_with_alpha() {
+        let device = Default::default();
+        let model = CeluConfig::new().with_alpha(2.0).init();
+        let input = Tensor::<2>::from_data(TensorData::from([[0.0, -2.0]]), &device);
+        let out = model.forward(input);
+        // celu(0, 2) = 0
+        // celu(-2, 2) = 2 * (exp(-1) - 1) = -1.264241
+        let expected = TensorData::from([[0.0, -1.264241]]);
+        out.to_data()
+            .assert_approx_eq::<FT>(&expected, Tolerance::default());
+    }
+
+    #[test]
+    fn display() {
+        let config = CeluConfig::new().init();
+        assert_eq!(alloc::format!("{config}"), "Celu {alpha: 1}");
+    }
+
+    #[test]
+    #[should_panic(expected = "CELU alpha must be finite and non-zero")]
+    fn zero_alpha_should_panic() {
+        CeluConfig::new().with_alpha(0.0).init();
+    }
+
+    #[test]
+    fn negative_alpha_is_valid() {
+        let device = Default::default();
+        let model = CeluConfig::new().with_alpha(-1.0).init();
+        let input = Tensor::<2>::from_data(TensorData::from([[-1.0, 0.0, 1.0]]), &device);
+        let expected = TensorData::from([[-1.7182819, 0.0, 1.0]]);
+
+        model
+            .forward(input)
+            .to_data()
+            .assert_approx_eq::<FT>(&expected, Tolerance::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "CELU alpha must be finite and non-zero")]
+    fn nan_alpha_should_panic() {
+        CeluConfig::new().with_alpha(f64::NAN).init();
+    }
+
+    #[test]
+    #[should_panic(expected = "CELU alpha must be finite and non-zero")]
+    fn infinite_alpha_should_panic() {
+        CeluConfig::new().with_alpha(f64::INFINITY).init();
+    }
+}

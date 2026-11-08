@@ -1,0 +1,227 @@
+use alloc::format;
+
+use cortex::tensor::module::interpolate;
+
+use crate::modules::bounds::{self, Windowing};
+use cortex::instrument::{Bounds, compute};
+use cortex::tensor::module::interpolate_output_size;
+use cortex_core as cortex;
+
+use cortex::config::Config;
+use cortex::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use cortex::tensor::Tensor;
+use cortex::tensor::ops::InterpolateOptions;
+
+use super::InterpolateMode;
+
+/// Configuration for the 2D interpolation module.
+///
+/// This struct defines the configuration options for the 2D interpolation operation.
+/// It allows specifying the output size, scale factor, and interpolation mode.
+#[derive(Config, Debug)]
+pub struct Interpolate2dConfig {
+    /// Output size of the interpolated tensor.
+    /// Exactly one of `output_size` or `scale_factor` must be set.
+    #[config(default = "None")]
+    pub output_size: Option<[usize; 2]>,
+
+    /// Scale factor for resizing the input tensor.
+    /// The output size is `floor(input_size * scale_factor)`.
+    /// Exactly one of `output_size` or `scale_factor` must be set.
+    #[config(default = "None")]
+    pub scale_factor: Option<[f32; 2]>,
+
+    /// Interpolation mode to use for resizing.
+    /// Determines how the output values are calculated.
+    #[config(default = "InterpolateMode::Nearest")]
+    pub mode: InterpolateMode,
+}
+
+/// Interpolate module for resizing tensors with shape [N, C, H, W].
+///
+/// This struct represents an interpolation module that can resize tensors
+/// using various interpolation methods. It provides flexibility in specifying
+/// either an output size or a scale factor for resizing, along with options
+/// for the interpolation mode.
+///
+/// The module can be used to upsample or downsample tensors, preserving the
+/// number of channels and batch size while adjusting the height and width
+/// dimensions.
+///
+/// The module can be created using the [Interpolate2dConfig] struct and the
+/// `init` method, which returns an instance of the [Interpolate2d] struct.
+#[derive(Module, Debug)]
+#[module(custom_display)]
+pub struct Interpolate2d {
+    /// Output size of the interpolated tensor
+    pub output_size: Option<[usize; 2]>,
+
+    /// Scale factor for resizing the input tensor
+    pub scale_factor: Option<[f32; 2]>,
+
+    /// Interpolation mode used for resizing
+    #[module(skip)]
+    pub mode: InterpolateMode,
+}
+
+impl Interpolate2dConfig {
+    /// Initialize the interpolation module
+    pub fn init(self) -> Interpolate2d {
+        Interpolate2d {
+            output_size: self.output_size,
+            scale_factor: self.scale_factor,
+            mode: self.mode,
+        }
+    }
+}
+impl Interpolate2d {
+    /// The options the interpolation runs with.
+    fn options(&self) -> InterpolateOptions {
+        let mut options = InterpolateOptions::new(self.mode.clone().into());
+        options.output_size = self.output_size;
+        options.scale_factor = self.scale_factor;
+        options
+    }
+
+    /// The floor for an interpolation alone: a resampling to the size it produces. Each output
+    /// element blends a few neighbours, below this model's resolution, and reads at least one
+    /// position of its own along each dimension a downsampling shrinks.
+    fn bounds(&self, input: &Tensor<4>) -> Bounds {
+        let input_size = bounds::spatial(input);
+        let output_size = interpolate_output_size(input_size, &self.options());
+        Windowing {
+            output_size,
+            read_size: core::array::from_fn(|i| input_size[i].min(output_size[i])),
+        }
+        .resampling(input)
+    }
+
+    /// Performs the forward pass of the interpolation module
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Input tensor with shape [N, C, H, W]
+    ///
+    /// # Returns
+    ///
+    /// Resized tensor with shape [N, C, H', W'], where H' and W' are determined by
+    /// the output_size or scale_factor specified in the module configuration
+    ///
+    /// # Panics
+    ///
+    /// Panics unless exactly one of `output_size` or `scale_factor` is set.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let input = Tensor::<4>::random([1, 3, 64, 64], Distribution::Uniform(0.0, 1.0), &device);
+    /// let interpolate = Interpolate2dConfig::new()
+    ///     .with_output_size(Some([128, 128]))
+    ///     .init();
+    /// let output = interpolate.forward(input);
+    /// assert_eq!(output.dims(), [1, 3, 128, 128]);
+    /// ```
+    #[compute(bounds = Self::bounds)]
+    pub fn forward(&self, input: Tensor<4>) -> Tensor<4> {
+        interpolate(input, self.options())
+    }
+}
+
+impl ModuleDisplay for Interpolate2d {
+    fn custom_settings(&self) -> Option<DisplaySettings> {
+        DisplaySettings::new()
+            .with_new_line_after_attribute(false)
+            .optional()
+    }
+
+    fn custom_content(&self, content: Content) -> Option<Content> {
+        content
+            .add_debug_attribute("mode", &self.mode)
+            .add("output_size", &format!("{:?}", self.output_size))
+            .add("scale_factor", &self.scale_factor)
+            .optional()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use cortex::tensor::Distribution;
+
+    use super::*;
+    use cortex::tensor::ops::CoordinateTransformMode;
+
+    #[test]
+    fn test_module() {
+        let input = Tensor::<4>::random(
+            [2, 3, 4, 4],
+            Distribution::Uniform(0.0, 1.0),
+            &Default::default(),
+        );
+
+        // Test with output_size
+        let config = Interpolate2dConfig::new().with_output_size(Some([8, 8]));
+        let interpolate = config.init();
+        let output = interpolate.forward(input.clone());
+        assert_eq!(output.dims(), [2, 3, 8, 8]);
+
+        // Test with scale_factor on a non-square input to catch swapped axes
+        let non_square = Tensor::<4>::random(
+            [2, 3, 4, 6],
+            Distribution::Uniform(0.0, 1.0),
+            &Default::default(),
+        );
+        let config = Interpolate2dConfig::new().with_scale_factor(Some([0.5, 2.0]));
+        let interpolate = config.init();
+        let output = interpolate.forward(non_square);
+        assert_eq!(output.dims(), [2, 3, 2, 12]);
+
+        // Test with different interpolation mode
+        let config = Interpolate2dConfig::new()
+            .with_output_size(Some([6, 6]))
+            .with_mode(InterpolateMode::Linear {
+                coordinate_transform: CoordinateTransformMode::AlignCorners,
+            });
+        let interpolate = config.init();
+        let output = interpolate.forward(input);
+        assert_eq!(output.dims(), [2, 3, 6, 6]);
+    }
+
+    #[test]
+    fn test_nearest_default_mapping() {
+        let input = Tensor::<4>::from_floats([[[[10.0, 20.0, 30.0, 40.0]]]], &Default::default());
+        let config = Interpolate2dConfig::new().with_output_size(Some([1, 2]));
+        let interpolate = config.init();
+        let output = interpolate.forward(input);
+        assert_eq!(output.into_data().as_slice::<f32>().unwrap(), &[10.0, 30.0]);
+    }
+
+    #[test]
+    fn linear_coordinate_transform() {
+        let input = Tensor::<4>::from_floats([[[[0.0, 6.0], [12.0, 18.0]]]], &Default::default());
+        let output = Interpolate2dConfig::new()
+            .with_mode(InterpolateMode::Linear {
+                coordinate_transform: CoordinateTransformMode::HalfPixel,
+            })
+            .with_output_size(Some([4, 4]))
+            .init()
+            .forward(input);
+        let expected = cortex::tensor::TensorData::from([[[
+            [0.0, 1.5, 4.5, 6.0],
+            [3.0, 4.5, 7.5, 9.0],
+            [9.0, 10.5, 13.5, 15.0],
+            [12.0, 13.5, 16.5, 18.0],
+        ]]]);
+        output.into_data().assert_eq(&expected, false);
+    }
+
+    #[test]
+    fn display() {
+        let config = Interpolate2dConfig::new().with_output_size(Some([20, 20]));
+        let layer = config.init();
+
+        assert_eq!(
+            alloc::format!("{layer}"),
+            "Interpolate2d {mode: Nearest, output_size: Some([20, 20]), \
+            scale_factor: None}"
+        );
+    }
+}

@@ -1,0 +1,33 @@
+use crate::{checkpoint::base::Checkpointer, grads::Gradients, graph::Parent};
+use alloc::boxed::Box;
+
+use cortex_backend::distributed::DistributedParams;
+
+/// Backward step for reverse mode autodiff.
+pub trait Step: Send + core::fmt::Debug {
+    /// Executes the step and consumes it.
+    fn step(self: Box<Self>, grads: &mut Gradients, checkpointer: &mut Checkpointer);
+    /// Depth of the operation relative to the first node added to a graph.
+    fn depth(&self) -> usize;
+    /// The parents of the node associated to the step.
+    fn parents(&self) -> &[Parent];
+
+    /// Returns the [`DistributedParams`] of the node's tensor associated to the step.
+    ///
+    /// Defaults to `None`; steps that carry distributed parameters override this.
+    #[cfg_attr(
+        not(feature = "std"),
+        allow(dead_code, reason = "distributed backward requires std")
+    )]
+    fn distributed_params(&self) -> Option<DistributedParams> {
+        None
+    }
+
+    /// Backend owning this step's distributed parameter, when present.
+    #[cfg(feature = "std")]
+    fn distributed_backend(&self) -> Option<core::any::TypeId> {
+        None
+    }
+}
+
+pub type StepBoxed = Box<dyn Step>;

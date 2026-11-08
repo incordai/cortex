@@ -1,0 +1,31 @@
+[package]
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+edition.workspace = true
+license.workspace = true
+name = "mnist"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex/default", "cortex/tui"]
+flex = ["cortex/flex"]
+wgpu = ["cortex/wgpu"]
+metal = ["cortex/metal"]
+cuda = ["cortex/cuda"]
+vulkan = ["cortex/vulkan"]
+rocm = ["cortex/rocm"]
+
+[dependencies]
+cortex = { workspace = true, features = [
+    "train",
+    "vision",
+    "metrics",
+    "fusion",
+    "flex",
+] }
+
+log = { workspace = true }
+rand.workspace = true

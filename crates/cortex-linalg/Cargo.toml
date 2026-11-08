@@ -1,0 +1,55 @@
+[package]
+authors = ["laggui <lagrange.guillaume.1@gmail.com>"]
+categories = ["science", "mathematics", "no-std"]
+description = "Linear algebra operations for Cortex tensors"
+documentation = "https://docs.rs/cortex-linalg"
+edition.workspace = true
+keywords = ["deep-learning", "machine-learning", "tensor", "linear-algebra"]
+license.workspace = true
+name = "cortex-linalg"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-linalg"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex-core/default", "fusion", "std"]
+std = ["cortex-core/std", "cortex-std/std", "cortex-fusion?/std", "gemm?/std"]
+autodiff = ["cortex-core/autodiff", "dep:cortex-autodiff"]
+tracing = ["cortex-core/tracing", "cortex-fusion?/tracing"]
+autotune = ["cortex-core/autotune", "cortex-cubecl?/autotune"]
+
+cubecl-backend = ["cortex-cubecl"]
+fusion = ["cortex-fusion", "cortex-core/fusion"]
+
+cuda = ["cubecl-backend", "cortex-core/cuda"]
+rocm = ["cubecl-backend", "cortex-core/rocm"]
+wgpu = ["cubecl-backend", "cortex-core/wgpu"]
+vulkan = ["cubecl-backend", "cortex-core/vulkan"]
+webgpu = ["cubecl-backend", "cortex-core/webgpu"]
+wgpu-msl = ["cubecl-backend", "cortex-core/wgpu-msl"]
+metal = ["cubecl-backend", "cortex-core/metal"]
+cpu = ["cubecl-backend", "cortex-core/cpu"]
+flex = ["cortex-core/flex", "dep:gemm"]
+remote = ["cortex-core/remote", "router"]
+capture = ["cortex-core/capture", "router"]
+router = ["cortex-router"]
+
+[dependencies]
+cortex-autodiff = { workspace = true, optional = true }
+cortex-core = { workspace = true, features = ["extension"] }
+cortex-cubecl = { workspace = true, optional = true, default-features = false }
+cortex-fusion = { workspace = true, optional = true, default-features = false }
+cortex-router = { workspace = true, optional = true, default-features = false }
+cortex-std = { workspace = true }
+gemm = { workspace = true, optional = true }
+num-traits = { workspace = true }
+
+[package.metadata.docs.rs]
+features = ["default", "flex"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dev-dependencies]
+ctor = "1.0.13"

@@ -1,0 +1,21 @@
+[package]
+authors = ["Dilshod Tadjibaev (@antimora)"]
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+name = "import-model-weights"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+cortex = { workspace = true, features = [
+    "default",
+    "flex",
+    "dataset",
+    "vision",
+] }
+
+cortex-store = { workspace = true, features = ["std", "pytorch", "safetensors"] }

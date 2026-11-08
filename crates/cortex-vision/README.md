@@ -1,0 +1,54 @@
+# Cortex Vision
+
+> Computer vision operations for [Cortex](https://github.com/tracel-ai/burn), with GPU acceleration where possible
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-vision.svg)](https://crates.io/crates/cortex-vision)
+[![Documentation](https://docs.rs/cortex-vision/badge.svg)](https://docs.rs/cortex-vision)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+Operation names follow OpenCV wherever applicable:
+
+- `connected_components` and `connected_components_with_stats`
+- morphology: `dilate` and `erode`, with `create_structuring_element`
+- `nms` (non-maximum suppression)
+- `filter2d` (depthwise 2D correlation)
+- color conversion: `rgb2gray`, `gray2rgb`, `rgb2hsv` and `hsv2rgb`
+- 2D affine transforms with `Transform2D`: rotation, scale, shear and translation
+- with the `loss` feature, a VGG19-based Gram matrix (style) loss
+
+## Usage
+
+Enable both `vision` and a backend feature on `cortex`, and use the operations through
+`cortex::vision`:
+
+```toml
+cortex = { version = "0.22", features = ["vision", "flex"] }
+```
+
+No execution backend is enabled by default when depending on this crate directly; select `flex`,
+`wgpu` or another backend feature on it. Enabling only `cortex/flex` does not enable this crate's
+backend implementations.
+
+### Median blur on CPU
+
+`median` and `MedianBlur` accept float and integer images in `[N, C, H, W]` layout.
+Flex accelerates F16, BF16, F32, F64, and signed/unsigned integer dtypes, including
+floating-point autodiff. Filtering preserves the input dtype and replicates edge pixels.
+
+```rust
+use cortex::tensor::{DType, Device, Int, Tensor};
+use cortex::vision::median;
+
+let images = Tensor::<4, Int>::from_data(
+    [[[[1, 255], [3, 2]]]],
+    (&Device::flex(), DType::U8),
+);
+let blurred = median(images, 3);
+```
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

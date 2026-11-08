@@ -1,0 +1,305 @@
+# Metric
+
+When working with the learner, you have the option to record metrics that will be monitored
+throughout the training process. We currently offer a restricted range of metrics.
+
+| Metric              | Description                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| Accuracy            | Calculate the accuracy in percentage                                                        |
+| TopKAccuracy        | Calculate the top-k accuracy in percentage                                                  |
+| Precision           | Calculate precision in percentage                                                           |
+| Recall              | Calculate recall in percentage                                                              |
+| MatthewsCorrelationCoefficient | Calculate binary or single-label multiclass MCC in [-1, 1]                        |
+| FBetaScore          | Calculate F<sub>β </sub>score in percentage                                                 |
+| AUROC               | Calculate the area under curve of ROC in percentage                                         |
+| AUC-PR              | Calculate the area under the precision-recall curve (average precision) in percentage       |
+| MSE                 | Calculate the Mean Squared Error for regression tasks                                       |
+| MAE                 | Calculate the Mean Absolute Error for regression tasks                                      |
+| R2Score             | Calculate the Coefficient of Determination (R²) for regression tasks                        |
+| Loss                | Output the loss used for the backward pass                                                  |
+| CharErrorRate (CER) | Calculate Character Error Rate in percentage                                                |
+| WordErrorRate (WER) | Calculate Word Error Rate in percentage                                                     |
+| HammingScore        | Calculate hamming score (also known as multi-label or label-based accuracy) in percentage   |
+| Perplexity          | Calculate perplexity which is a measure of how well a probability model predicts samples    |
+| IterationSpeed      | Tracks the training iteration speed, measuring how many iterations are completed per second |
+| CPU Temperature     | Fetch the temperature of CPUs                                                               |
+| CPU Usage           | Fetch the CPU utilization                                                                   |
+| CPU Memory Usage    | Fetch the CPU RAM usage                                                                     |
+| Learning Rate       | Fetch the current learning rate for each optimizer step                                     |
+| CUDA                | Fetch general CUDA metrics such as utilization                                              |
+
+| Vision Metric | Description                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| A-FINE        | Computes the Adaptive Fidelity-Naturalness Evaluator (A-FINE) full-reference perceptual quality metric built on CLIP ViT-B/32 features |
+| Dice          | Computes the Dice-Sorenson coefficient (DSC) for evaluating overlap between binary masks             |
+| DISTS         | Computes the Deep Image Structure and Texture Similarity (DISTS) metric for image quality assessment |
+| FID           | Computes the Frechet Inception Distance (FID) for evaluating generative model quality                |
+| LPIPS         | Computes the Learned Perceptual Image Patch Similarity (LPIPS) for image quality assessment          |
+| MS-SSIM       | Computes the Multi-scale Structural Similarity index measure (MS-SSIM) for image quality assessment  |
+| PSNR          | Computes the Peak Signal-to-Noise Ratio (PSNR) for image quality assessment                          |
+| SSIM          | Computes the Structural Similarity index measure (SSIM) for image quality assessment                 |
+
+## Optimizer-step metrics
+
+Register `LearningRateMetric` with `.metrics(LearningRateMetric::new())` to record each applied
+update, including partial accumulation windows, with one series per scheduler parameter group.
+Epoch summaries use the last applied rate.
+
+Custom metrics use the standard `Metric` and `Numeric` traits. Associate one metric or a tuple
+with `OnOptimizerStep::with(...)`, then register through `.metrics(...)` or `.metrics_text(...)`.
+Implement `Adaptor<YourInput>` for `OptimizerStepOutput` to supply their inputs.
+
+Custom strategies emit `LearnerEvent::OptimizerStep(OptimizerStepOutput::new(rates))` after each
+update.
+
+## Using Metrics with the Learner
+
+For metrics that consume model outputs, the output of your training step must implement the
+`Adaptor` trait from `cortex-train::metric` for each metric's corresponding input type. The `Adaptor`
+trait simply converts your output struct into the input type the metric expects.
+
+Cortex provides four built-in output structs that cover common tasks. Each one already implements 
+`Adaptor` for a set of metrics, so in many cases you can use them directly without writing any 
+adaptor code yourself.
+
+- `ClassificationOutput`:
+    - Use case: Single-label classification
+    - Fields: `loss: Tensor<1>`, `output: Tensor<2>`, `targets: Tensor<1, Int>`
+    - Adapted metrics: Accuracy, TopKAccuracy, Perplexity, Precision\*, Recall\*, FBetaScore\*, MatthewsCorrelationCoefficient\*, AUROC\*, AUC-PR\*, Loss
+- `MultiLabelClassificationOutput`:
+    - Use case: Multi-label classification
+    - Fields: `loss: Tensor<1>`, `output: Tensor<2>`, `targets: Tensor<2, Int>`
+    - Adapted metrics: HammingScore, Precision\*, Recall\*, FBetaScore\*, AUROC\*, AUC-PR\*, Loss
+- `RegressionOutput`:
+    - Use case: Regression tasks
+    - Fields: `loss: Tensor<1>`, `output: Tensor<2>`, `targets: Tensor<2>`
+    - Adapted metrics: MSE, MAE, R2Score, Loss
+- `SequenceOutput`:
+    - Use case: Sequence prediction
+    - Fields: `loss: Tensor<1>`, `logits: Tensor<3>`, `predictions: Option<Tensor<2, Int>>`, `targets: Tensor<2, Int>`
+    - Adapted metrics: Accuracy, TopKAccuracy, Perplexity, CER, WER, Loss
+
+MSE and MAE average errors across all samples and target columns. R² computes a
+score per target column and averages those scores uniformly, using statistics
+accumulated over the whole epoch rather than averaging batch scores.
+
+\* Precision, Recall, FBetaScore, AUROC, and AUC-PR all use `ConfusionStatsInput` as their input type so these 
+metrics are automatically (implicitly) adapted since `ConfusionStatsInput` is adapted.
+
+`MatthewsCorrelationCoefficientMetric` also uses `ConfusionStatsInput`. Use
+`MatthewsCorrelationCoefficientMetric::binary(0.5)` for one positive-class probability
+column, or `MatthewsCorrelationCoefficientMetric::multiclass()` for class scores with
+one-hot targets. MCC accumulates counts across batches and returns `0` when its
+denominator is zero. It does not support multi-label classification.
+Updates require non-empty, finite predictions and one-hot multiclass targets. The
+number of classes must stay fixed across batches until the metric is cleared.
+The batch size and number of classes must each be at most `i32::MAX`.
+Multiclass score ties select the first class. Counts are reduced as int32 on the
+input device, then accumulated in double precision on CPU to preserve accuracy
+for imbalanced classes without requiring device support for 64-bit integers.
+
+If your metric isn't already adapted for the appropriate output struct, you can implement `Adaptor` yourself. 
+For example, here is how `ClassificationOutput` adapts to `AccuracyInput`:
+
+```rust,ignore
+impl Adaptor<AccuracyInput> for ClassificationOutput {
+    fn adapt(&self) -> AccuracyInput {
+        AccuracyInput::new(self.output.clone(), self.targets.clone())
+    }
+}
+```
+
+If your task type is not covered by the built-in output structs, you can create an output struct for your data
+and then adapt your metric for the output struct:
+
+```rust,ignore
+#[derive(new)]
+pub struct ClassificationOutput {
+    /// The loss.
+    pub loss: Tensor<1>,
+
+    /// The output.
+    pub output: Tensor<2>,
+
+    /// The targets.
+    pub targets: Tensor<1, Int>,
+}
+
+impl Adaptor<AccuracyInput> for ClassificationOutput {
+    fn adapt(&self) -> AccuracyInput {
+        AccuracyInput::new(self.output.clone(), self.targets.clone())
+    }
+}
+```
+
+You can also open an issue on the [GitHub repository](https://github.com/tracel-ai/burn) when your task type is 
+not covered by the built-in output structs. However, since creating an output struct for your data is simple, 
+it is recommended to try creating your own output struct first. 
+
+# Custom Metric
+
+Generating your own custom metrics is done by implementing the `Metric` trait.
+
+```rust , ignore
+
+/// Metric trait.
+///
+/// # Notes
+///
+/// Implementations should define their own input type only used by the metric.
+/// This is important since some conflict may happen when the model output is adapted for each
+/// metric's input type.
+pub trait Metric: Send + Sync + Clone {
+    /// The input type of the metric.
+    type Input;
+
+    /// The parameterized name of the metric.
+    ///
+    /// This should be unique, so avoid using short generic names, prefer using the long name.
+    ///
+    /// For a metric that can exist at different parameters (e.g., top-k accuracy for different
+    /// values of k), the name should be unique for each instance.
+    fn name(&self) -> MetricName;
+
+    /// A short description of the metric.
+    fn description(&self) -> Option<String> {
+        None
+    }
+
+    /// Attributes of the metric.
+    ///
+    /// By default, metrics have no attributes.
+    fn attributes(&self) -> MetricAttributes {
+        MetricAttributes::None
+    }
+
+    /// Update the metric state and returns the current metric entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TensorReadError`] when a tensor read fails. In that case, the metric state
+    /// could hold part or none of this update.
+    fn update(
+        &mut self,
+        item: &Self::Input,
+        metadata: &MetricMetadata,
+    ) -> Result<SerializedEntry, TensorReadError>;
+
+    /// Compute the final metric value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TensorReadError`] when a tensor read fails.
+    fn compute(&mut self) -> Result<SerializedEntry, TensorReadError>;
+
+    /// Clear the metric state.
+    fn clear(&mut self);
+}
+```
+
+In `update` and `compute`, read tensors with the fallible methods (`try_into_data`, `try_into_scalar`)
+and propagate the error with `?` to keep the event processor reporting errors to the learner. The
+processor still updates the other metrics, and reports every metric that failed, each with its
+name and split, as a `EventProcessorError`. When `update` fails, the metric state could hold part or none of that update.
+This includes tensors the metric keeps across batches, such as running totals: once one of them was computed from
+a failed input, reading it fails too, until `clear` resets the state at the end of the epoch.
+
+As an example, let's see how the loss metric is implemented.
+
+```rust, ignore
+/// The loss metric.
+#[derive(Clone)]
+pub struct LossMetric {
+    name: Arc<String>,
+    state: NumericMetricState,
+}
+
+/// The [loss metric](LossMetric) input type.
+#[derive(new)]
+pub struct LossInput {
+    tensor: Tensor<1>,
+}
+
+impl Default for LossMetric {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LossMetric {
+    /// Create the metric.
+    pub fn new() -> Self {
+        Self {
+            name: Arc::new("Loss".to_string()),
+            state: NumericMetricState::default(),
+        }
+    }
+}
+
+
+impl Metric for LossMetric {
+    type Input = LossInput;
+
+    fn update(
+        &mut self,
+        loss: &Self::Input,
+        _metadata: &MetricMetadata,
+    ) -> Result<SerializedEntry, TensorReadError> {
+        let [batch_size] = loss.tensor.dims();
+        let loss = loss
+            .tensor
+            .clone()
+            .mean()
+            .try_into_data()?
+            .iter::<f64>()
+            .next()
+            .unwrap();
+
+        self.state.update(loss, batch_size);
+        Ok(self
+            .state
+            .compute_update(FormatOptions::new(self.name()).precision(2)))
+    }
+
+    fn compute(&mut self) -> Result<SerializedEntry, TensorReadError> {
+        Ok(self
+            .state
+            .compute_final(FormatOptions::new(self.name()).precision(2)))
+    }
+
+    fn clear(&mut self) {
+        self.state.reset()
+    }
+
+    fn name(&self) -> MetricName {
+        self.name.clone()
+    }
+
+    fn attributes(&self) -> MetricAttributes {
+        NumericAttributes {
+            unit: None,
+            higher_is_better: false,
+        }
+        .into()
+    }
+}
+```
+
+When the metric you are implementing is numeric in nature, you may want to also implement the
+`Numeric` trait. This will allow your metric to be plotted.
+
+```rust, ignore
+impl Numeric for LossMetric {
+    fn value(&self) -> Option<NumericEntry> {
+        Some(self.state.current_value())
+    }
+
+    fn running_value(&self) -> Option<NumericEntry> {
+        Some(self.state.running_value())
+    }
+
+    fn final_value(&self) -> NumericEntry {
+        self.state.final_value()
+    }
+}
+```

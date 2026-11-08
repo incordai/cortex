@@ -1,0 +1,75 @@
+# Data
+
+Typically, one trains a model on some dataset. Cortex provides a library of very useful dataset
+sources and transformations, such as Hugging Face dataset utilities that allow to download and store
+data into an SQLite database for extremely efficient data streaming and storage. For this guide
+though, we will use the MNIST dataset from `cortex::data::dataset::vision` which requires no external
+dependency.
+
+To iterate over a dataset efficiently, we will define a struct which will implement the `Batcher`
+trait. The goal of a batcher is to map individual dataset items into a batched tensor that can be
+used as input to our previously defined model.
+
+Let us start by defining our dataset functionalities in a file `src/data.rs`. The snippets below are
+included from the maintained
+[guide example](https://github.com/tracel-ai/burn/tree/main/examples/guide).
+
+```rust,ignore
+{{#include ../../../examples/guide/src/data.rs:batcher}}
+```
+
+This batcher is pretty straightforward, as it only defines a struct that will implement the
+`Batcher` trait. Its batching method receives Cortex's runtime `Device`, so the tensors it creates are
+placed on the device selected by the caller.
+
+Next, we need to actually implement the batching logic.
+
+```rust,ignore
+{{#include ../../../examples/guide/src/data.rs:batch}}
+```
+
+<details>
+<summary><strong>🦀 Iterators and Closures</strong></summary>
+
+The iterator pattern allows you to perform some tasks on a sequence of items in turn.
+
+In this example, an iterator is created over the `MnistItem`s in the vector `items` by calling the
+`iter` method.
+
+_Iterator adaptors_ are methods defined on the `Iterator` trait that produce different iterators by
+changing some aspect of the original iterator. Here, the `map` method is called in a chain to
+transform the original data before consuming the final iterator with `collect` to obtain the
+`images` and `targets` vectors. Both vectors are then concatenated into a single tensor for the
+current batch.
+
+You probably noticed that each call to `map` is different, as it defines a function to execute on
+the iterator items at each step. These anonymous functions are called
+[_closures_](https://doc.rust-lang.org/book/ch13-01-closures.html) in Rust. They're easy to
+recognize due to their syntax which uses vertical bars `||`. The vertical bars capture the input
+variables (if applicable) while the rest of the expression defines the function to execute.
+
+If we go back to the example, we can break down and comment the expression used to process the
+images.
+
+```rust, ignore
+let images = items                                                       // take items Vec<MnistItem>
+    .iter()                                                              // create an iterator over it
+    .map(|item| TensorData::from(item.image))                         // for each item, create tensor data
+    .map(|data| Tensor::<2>::from_data(data, device))                 // for each data struct, create a tensor on the device
+    .map(|tensor| tensor.reshape([1, 28, 28]))                           // for each tensor, reshape to the image dimensions [C, H, W]
+    .map(|tensor| ((tensor / 255) - 0.1307) / 0.3081)                    // for each image tensor, apply normalization
+    .collect();                                                          // consume the resulting iterator & collect the values into a new vector
+```
+
+For more information on iterators and closures, be sure to check out the
+[corresponding chapter](https://doc.rust-lang.org/book/ch13-00-functional-features.html) in the Rust
+Book.
+
+</details><br>
+
+In the previous example, we implement the `Batcher` trait with a list of `MnistItem` as input and a
+single `MnistBatch` as output. The batch contains the images in the form of a 3D tensor, along with
+a targets tensor that contains the indexes of the correct digit class. The first step is to parse
+the image array into a `TensorData` struct. Cortex provides the `TensorData` struct to encapsulate
+tensor storage information without being specific to a backend. When creating a tensor,
+`Tensor::from_data` converts the data to the kind and dtype requested by the device.

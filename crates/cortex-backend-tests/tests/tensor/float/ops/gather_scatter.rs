@@ -1,0 +1,456 @@
+use super::*;
+use cortex_tensor::{IndexingUpdateOp, TensorData};
+
+#[test]
+fn should_gather_1d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([0.0, 1.0, 2.0], &device);
+    let indices = TestTensorInt::from_ints([1, 1, 0, 1, 2], &device);
+
+    let output = tensor.gather(0, indices);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([1.0, 1.0, 0.0, 1.0, 2.0]), false);
+}
+
+#[test]
+fn should_gather_2d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], &device);
+    let indices = TestTensorInt::from_ints([[0, 1, 0], [1, 0, 1]], &device);
+
+    let output = tensor.gather(0, indices);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[0.0, 4.0, 2.0], [3.0, 1.0, 5.0]]), false);
+}
+
+#[test]
+fn should_gather_2d_dim1() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], &device);
+    let indices = TestTensorInt::from_ints([[2, 1, 0, 0], [2, 0, 1, 2]], &device);
+
+    let output = tensor.gather(1, indices);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[2.0, 1.0, 0.0, 0.0], [5.0, 3.0, 4.0, 5.0]]),
+        false,
+    );
+}
+
+#[test]
+fn should_gather_3d_dim1() {
+    let device = Default::default();
+    let tensor = TestTensor::<3>::from_data(
+        [
+            [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]],
+            [[6.0, 7.0, 8.0], [9.0, 10.0, 11.0]],
+        ],
+        &device,
+    );
+    let indices =
+        TestTensorInt::from_ints([[[1, 0, 0], [0, 1, 0]], [[0, 0, 1], [0, 1, 1]]], &device);
+
+    let output = tensor.gather(1, indices);
+    let expected = TensorData::from([
+        [[3.0, 1.0, 2.0], [0.0, 4.0, 2.0]],
+        [[6.0, 7.0, 11.0], [6.0, 10.0, 11.0]],
+    ]);
+
+    output.into_data().assert_eq(&expected, false);
+}
+
+#[test]
+fn should_gather_2d_only_1dim() {
+    let device = Default::default();
+    let tensor = TestTensor::from_data([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], &device);
+    let indices = TestTensorInt::<2>::from_ints([[1, 2]], &device).reshape([2, 1]);
+
+    let output = tensor.gather(1, indices);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[1.0], [5.0]]), false);
+}
+
+#[test]
+fn should_scatter_add_1d() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([0.0, 0.0, 0.0], &device);
+    let values = TestTensor::from_data([5.0, 4.0, 3.0], &device);
+    let indices = TestTensorInt::from_ints([1, 0, 2], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Add);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([4.0, 5.0, 3.0]), false);
+}
+
+#[test]
+fn should_scatter_assign_1d() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([10.0, 20.0, 30.0, 40.0], &device);
+    let values = TestTensor::from_data([7.0, 50.0], &device);
+    let indices = TestTensorInt::from_ints([1, 3], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Assign);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([10.0, 7.0, 30.0, 50.0]), false);
+}
+
+#[test]
+fn should_scatter_assign_2d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], &device);
+    let values = TestTensor::from_data([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], &device);
+    let indices = TestTensorInt::from_ints([[1, 0, 1], [0, 1, 0]], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Assign);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[4.0, 2.0, 6.0], [1.0, 5.0, 3.0]]), false);
+}
+
+#[test]
+fn should_scatter_mul_1d() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([10.0, 20.0, 30.0, 40.0], &device);
+    let values = TestTensor::from_data([7.0, 50.0], &device);
+    let indices = TestTensorInt::from_ints([1, 3], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Mul);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([10.0, 140.0, 30.0, 2000.0]), false);
+}
+
+#[test]
+fn should_scatter_min_1d() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([10.0, 20.0, 30.0, 40.0], &device);
+    let values = TestTensor::from_data([7.0, 50.0], &device);
+    let indices = TestTensorInt::from_ints([1, 3], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Min);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([10.0, 7.0, 30.0, 40.0]), false);
+}
+
+#[test]
+fn should_scatter_max_1d() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([10.0, 20.0, 30.0, 40.0], &device);
+    let values = TestTensor::from_data([7.0, 50.0], &device);
+    let indices = TestTensorInt::from_ints([1, 3], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Max);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([10.0, 20.0, 30.0, 50.0]), false);
+}
+
+#[test]
+fn should_scatter_min_1d_repeated_indices() {
+    let device = Default::default();
+    // index 1 receives 7 then 50 (keeps 7); index 0 receives 100 then 3 (keeps 3).
+    let tensor = TestTensor::<1>::from_data([10.0, 20.0, 30.0, 40.0], &device);
+    let values = TestTensor::from_data([7.0, 50.0, 100.0, 3.0], &device);
+    let indices = TestTensorInt::from_ints([1, 1, 0, 0], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Min);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([3.0, 7.0, 30.0, 40.0]), false);
+}
+
+#[test]
+fn should_scatter_max_1d_repeated_indices() {
+    let device = Default::default();
+    // index 1 receives 7 then 50 (keeps 50); index 0 receives 100 then 3 (keeps 100).
+    let tensor = TestTensor::<1>::from_data([10.0, 20.0, 30.0, 40.0], &device);
+    let values = TestTensor::from_data([7.0, 50.0, 100.0, 3.0], &device);
+    let indices = TestTensorInt::from_ints([1, 1, 0, 0], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Max);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([100.0, 50.0, 30.0, 40.0]), false);
+}
+
+#[test]
+fn should_scatter_mul_2d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], &device);
+    let values = TestTensor::from_data([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], &device);
+    let indices = TestTensorInt::from_ints([[1, 0, 1], [0, 1, 0]], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Mul);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[40.0, 40.0, 180.0], [40.0, 250.0, 180.0]]),
+        false,
+    );
+}
+
+#[test]
+fn should_scatter_min_2d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], &device);
+    let values = TestTensor::from_data([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], &device);
+    let indices = TestTensorInt::from_ints([[1, 0, 1], [0, 1, 0]], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Min);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[4.0, 2.0, 6.0], [1.0, 5.0, 3.0]]), false);
+}
+
+#[test]
+fn should_scatter_max_2d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], &device);
+    let values = TestTensor::from_data([[100.0, 1.0, 100.0], [1.0, 100.0, 1.0]], &device);
+    let indices = TestTensorInt::from_ints([[1, 0, 1], [0, 1, 0]], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Max);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[10.0, 20.0, 30.0], [100.0, 100.0, 100.0]]),
+        false,
+    );
+}
+
+#[test]
+fn should_scatter_add_2d_dim0() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], &device);
+    let values = TestTensor::from_data([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], &device);
+    let indices = TestTensorInt::from_ints([[1, 0, 1], [1, 1, 0]], &device);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Add);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[0.0, 2.0, 6.0], [5.0, 5.0, 3.0]]), false);
+}
+
+#[test]
+fn should_scatter_add_many_values_into_few_slots() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::zeros([2, 4], &device);
+    let indices: Vec<i32> = (0..2 * 1000).map(|position| position % 4).collect();
+    let indices = TestTensorInt::<2>::from_data(TensorData::new(indices, [2, 1000]), &device);
+    let values = TestTensor::<2>::ones([2, 1000], &device);
+
+    let output = tensor.scatter(1, indices, values, IndexingUpdateOp::Add);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[250.0, 250.0, 250.0, 250.0], [250.0, 250.0, 250.0, 250.0]]),
+        false,
+    );
+}
+
+#[test]
+fn should_scatter_add_2d_dim1() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], &device);
+    let values = TestTensor::from_data([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], &device);
+    let indices = TestTensorInt::from_ints([[1, 0, 2], [1, 2, 0]], &device);
+
+    let output = tensor.scatter(1, indices, values, IndexingUpdateOp::Add);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[2.0, 1.0, 3.0], [6.0, 4.0, 5.0]]), false);
+}
+
+#[test]
+fn should_scatter_add_3d_dim1() {
+    let device = Default::default();
+    let tensor = TestTensor::<3>::from_data(
+        [
+            [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]],
+            [[6.0, 7.0, 8.0], [9.0, 10.0, 11.0]],
+        ],
+        &device,
+    );
+    let values = TestTensor::from_data(
+        [
+            [[12.0, 13.0, 14.0], [15.0, 16.0, 17.0]],
+            [[18.0, 19.0, 20.0], [21.0, 22.0, 23.0]],
+        ],
+        &device,
+    );
+    let indices =
+        TestTensorInt::from_ints([[[1, 0, 0], [0, 1, 0]], [[0, 0, 1], [0, 1, 1]]], &device);
+
+    let output = tensor.scatter(1, indices, values, IndexingUpdateOp::Add);
+    let expected = TensorData::from([
+        [[15.0, 14.0, 33.0], [15.0, 20.0, 5.0]],
+        [[45.0, 26.0, 8.0], [9.0, 32.0, 54.0]],
+    ]);
+
+    output.into_data().assert_eq(&expected, false);
+}
+
+#[test]
+fn should_scatter_add_2d_dim1_diff_shape() {
+    let device = Default::default();
+    let tensor = TestTensor::<2>::from_data([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], &device);
+    let values = TestTensor::from_data([[1.0], [4.0]], &device);
+    let indices = TestTensorInt::from_ints([[1], [2]], &device);
+
+    let output = tensor.scatter(1, indices, values, IndexingUpdateOp::Add);
+
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[0.0, 1.0, 0.0], [0.0, 0.0, 4.0]]), false);
+}
+
+#[test]
+#[should_panic(expected = "Indices tensor shape should be the same as the value tensor shape")]
+fn scatter_should_panic_on_mismatch_of_shapes() {
+    let device = Default::default();
+    let tensor = TestTensor::<1>::from_data([0.0, 0.0, 0.0], &device);
+    let values = TestTensor::from_data([5.0, 4.0], &device);
+    let indices = TestTensorInt::from_ints([1, 0, 2], &device);
+
+    tensor.scatter(0, indices, values, IndexingUpdateOp::Add);
+}
+
+#[test]
+fn should_scatter_add_3d_dim0_with_index_view() {
+    // Index tensor expanded from 1D via unsqueeze + repeat_dim — a common
+    // pattern to scatter whole rows along dim 0. The repeat of a unit dim
+    // is a broadcast view; reshaping it must keep stride 1 on dim 0,
+    // otherwise every iteration reads `indices[0]` and all updates pile
+    // onto one row while the other rows get none.
+    let device = Default::default();
+    let tensor = TestTensor::<3>::from_data([[[1.0]], [[2.0]], [[3.0]], [[4.0]]], &device);
+    let values = TestTensor::<3>::from_data([[[10.0]], [[20.0]]], &device);
+    let indices = TestTensorInt::<1>::from_ints([2, 0], &device);
+    let indices: TestTensorInt<2> = indices.unsqueeze_dim(1).repeat_dim(1, 1);
+    let indices: TestTensorInt<3> = indices.unsqueeze_dim(2).repeat_dim(2, 1);
+
+    let output = tensor.scatter(0, indices, values, IndexingUpdateOp::Add);
+
+    output.into_data().assert_eq(
+        &TensorData::from([[[21.0]], [[2.0]], [[13.0]], [[4.0]]]),
+        false,
+    );
+}
+
+// Indices smaller than the tensor on a non-axis dim: [2, 2] indices into a [3, 4] tensor. Each
+// index coordinate maps onto the same coordinate of the tensor, so reading the tensor with the
+// index tensor's strides, or looping over the tensor's shape, gives different values.
+// Expected values from PyTorch.
+fn smaller_indices_tensor() -> TestTensor<2> {
+    TestTensor::from_data(
+        [
+            [0.0, 1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0, 7.0],
+            [8.0, 9.0, 10.0, 11.0],
+        ],
+        &Default::default(),
+    )
+}
+
+#[test]
+fn should_gather_with_smaller_indices() {
+    let device = Default::default();
+    let tensor = smaller_indices_tensor();
+
+    let output = tensor
+        .clone()
+        .gather(0, TestTensorInt::from_ints([[2, 0], [1, 2]], &device));
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[8.0, 1.0], [4.0, 9.0]]), false);
+
+    let output = tensor.gather(1, TestTensorInt::from_ints([[3, 0], [1, 2]], &device));
+    output
+        .into_data()
+        .assert_eq(&TensorData::from([[3.0, 0.0], [5.0, 6.0]]), false);
+}
+
+#[test]
+fn should_scatter_assign_with_smaller_indices() {
+    let device = Default::default();
+    let indices = TestTensorInt::from_ints([[2, 0], [1, 2]], &device);
+    let values = TestTensor::from_data([[100.0, 101.0], [102.0, 103.0]], &device);
+
+    let output = smaller_indices_tensor().scatter(0, indices, values, IndexingUpdateOp::Assign);
+
+    output.into_data().assert_eq(
+        &TensorData::from([
+            [0.0, 101.0, 2.0, 3.0],
+            [102.0, 5.0, 6.0, 7.0],
+            [100.0, 103.0, 10.0, 11.0],
+        ]),
+        false,
+    );
+}
+
+#[test]
+fn should_scatter_add_with_smaller_indices() {
+    let device = Default::default();
+    let values = TestTensor::<2>::from_data([[100.0, 101.0], [102.0, 103.0]], &device);
+
+    let indices = TestTensorInt::from_ints([[2, 0], [1, 2]], &device);
+    let output =
+        smaller_indices_tensor().scatter(0, indices, values.clone(), IndexingUpdateOp::Add);
+    output.into_data().assert_eq(
+        &TensorData::from([
+            [0.0, 102.0, 2.0, 3.0],
+            [106.0, 5.0, 6.0, 7.0],
+            [108.0, 112.0, 10.0, 11.0],
+        ]),
+        false,
+    );
+
+    let indices = TestTensorInt::from_ints([[3, 0], [1, 2]], &device);
+    let output = smaller_indices_tensor().scatter(1, indices, values, IndexingUpdateOp::Add);
+    output.into_data().assert_eq(
+        &TensorData::from([
+            [101.0, 1.0, 2.0, 103.0],
+            [4.0, 107.0, 109.0, 7.0],
+            [8.0, 9.0, 10.0, 11.0],
+        ]),
+        false,
+    );
+}
+
+#[test]
+#[should_panic(expected = "The index tensor must not be larger than the tensor")]
+fn gather_should_panic_on_larger_indices() {
+    let device = Default::default();
+    // Dim 1 is not the gather axis and has 5 indices for 4 tensor columns
+    let indices = TestTensorInt::from_ints([[0, 0, 0, 0, 0]], &device);
+
+    smaller_indices_tensor().gather(0, indices);
+}
+
+#[test]
+#[should_panic(expected = "The index tensor must not be larger than the tensor")]
+fn scatter_should_panic_on_larger_indices() {
+    let device = Default::default();
+    // Dim 0 is not the scatter axis and has 4 indices for 3 tensor rows
+    let indices = TestTensorInt::from_ints([[0], [0], [0], [0]], &device);
+    let values = TestTensor::from_data([[1.0], [1.0], [1.0], [1.0]], &device);
+
+    smaller_indices_tensor().scatter(1, indices, values, IndexingUpdateOp::Add);
+}

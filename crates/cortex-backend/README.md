@@ -1,0 +1,40 @@
+# Cortex Backend
+
+> The contract between [Cortex](https://github.com/tracel-ai/burn)'s tensor API and the backends that execute it
+
+[![Current Crates.io Version](https://img.shields.io/crates/v/cortex-backend.svg)](https://crates.io/crates/cortex-backend)
+[![Documentation](https://docs.rs/cortex-backend/badge.svg)](https://docs.rs/cortex-backend)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](https://github.com/tracel-ai/burn/blob/main/LICENSE-MIT)
+
+Application code does not use this crate directly: it works with `cortex::tensor::Tensor` and
+`Device`, and Cortex dispatches each operation to a backend at runtime. This crate is for code below
+that boundary: backend implementations, backend decorators such as autodiff and fusion, and
+backend extensions.
+
+It defines:
+
+- `BackendTypes`, which names a backend's tensor primitives and device type.
+- `Backend` and the operation traits in `ops`, every tensor operation a backend implements.
+  `AutodiffBackend` adds gradient support.
+- `DeviceOps`, a backend device and its default dtypes.
+- `TensorData`, `DType`, `Shape` and the element traits, which describe tensor data
+  independently of any backend.
+
+Operations report device failures as `ExecutionError` instead of panicking.
+
+## Feature Flags
+
+- `std` (default): standard library support. Without it the crate is `no_std` with `alloc`.
+- `cubecl`: conversions between Cortex and [CubeCL](https://github.com/tracel-ai/cubecl) types.
+- `cubecl-device` and `cubecl-<runtime>`: implement `DeviceOps` for `cubecl::Device`.
+- `tracing`: instrument operations with the `tracing` crate.
+
+See the [contributor book](https://cortex.dev/books/contributor/project-architecture/backend.html)
+for how backends fit into Cortex's architecture.
+
+<!-- cortex-crate-footer -->
+
+---
+
+Part of the [Cortex](https://github.com/tracel-ai/burn) deep learning framework. See the
+[Cortex Book](https://cortex.dev/books/cortex/) and the [API documentation](https://docs.rs/cortex).

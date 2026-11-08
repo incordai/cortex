@@ -1,0 +1,887 @@
+//! Configuration types for tensor operations.
+
+use crate::ElementConversion;
+use core::num::NonZeroUsize;
+
+/// Check that the parameter value is non-zero.
+// NOTE: for now we keep usize but we could refactor the parameters to hold `NonZeroUsize`.
+pub(crate) fn check_nonzero(value: usize, msg: &str) -> usize {
+    NonZeroUsize::new(value).expect(msg);
+    value
+}
+
+/// Convolution options.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ConvOptions<const N: usize> {
+    /// Stride (non-zero).
+    pub stride: [usize; N],
+
+    /// Padding as `(begin, end)` pairs for each spatial dimension.
+    pub padding: [(usize, usize); N],
+
+    /// Dilation (non-zero).
+    pub dilation: [usize; N],
+
+    /// Groups (non-zero).
+    pub groups: usize,
+}
+
+impl<const N: usize> ConvOptions<N> {
+    /// Constructs a new `ConvOptions`.
+    pub fn new(
+        stride: [usize; N],
+        padding: [usize; N],
+        dilation: [usize; N],
+        groups: usize,
+    ) -> Self {
+        Self {
+            stride: stride.map(|s| check_nonzero(s, "stride must be non-zero")),
+            padding: padding.map(|padding| (padding, padding)),
+            dilation: dilation.map(|d| check_nonzero(d, "dilation must be non-zero")),
+            groups: check_nonzero(groups, "groups must be non-zero"),
+        }
+    }
+
+    /// Constructs convolution options with explicit per-side padding.
+    pub fn new_with_padding(
+        stride: [usize; N],
+        padding: [(usize, usize); N],
+        dilation: [usize; N],
+        groups: usize,
+    ) -> Self {
+        Self {
+            stride: stride.map(|s| check_nonzero(s, "stride must be non-zero")),
+            padding,
+            dilation: dilation.map(|d| check_nonzero(d, "dilation must be non-zero")),
+            groups: check_nonzero(groups, "groups must be non-zero"),
+        }
+    }
+
+    /// Returns true if padding is asymmetric.
+    pub fn is_asymmetric(&self) -> bool {
+        self.padding.iter().any(|(begin, end)| begin != end)
+    }
+
+    /// Returns the padding at the beginning of every spatial dimension.
+    pub fn padding_begin(&self) -> [usize; N] {
+        self.padding.map(|(begin, _)| begin)
+    }
+
+    /// Returns the padding at the end of every spatial dimension.
+    pub fn padding_end(&self) -> [usize; N] {
+        self.padding.map(|(_, after)| after)
+    }
+
+    /// Returns symmetric padding values.
+    ///
+    /// # Panics
+    /// Panics when any spatial dimension has asymmetric padding.
+    pub fn symmetric_padding(&self) -> [usize; N] {
+        assert!(
+            !self.is_asymmetric(),
+            "expected symmetric convolution padding"
+        );
+        self.padding_begin()
+    }
+}
+
+/// Convolution options with optional asymmetric end padding.
+///
+/// Deprecated compatibility wrapper for the convolution options API shipped in
+/// Cortex 0.22. Use [`ConvOptions::new_with_padding`] instead.
+#[deprecated(since = "0.22.0", note = "Use `ConvOptions::new_with_padding` instead")]
+#[derive(Debug, Clone)]
+pub struct PaddedConvOptions<const N: usize> {
+    /// The underlying convolution options.
+    pub options: ConvOptions<N>,
+    /// Padding at the end of each spatial dimension.
+    ///
+    /// When `None`, the padding stored in [`Self::options`] is used unchanged.
+    pub padding_end: Option<[usize; N]>,
+}
+
+#[allow(deprecated)]
+impl<const N: usize> PaddedConvOptions<N> {
+    /// Creates options with explicit begin and end padding.
+    pub fn asymmetric(
+        stride: [usize; N],
+        padding_begin: [usize; N],
+        padding_end: [usize; N],
+        dilation: [usize; N],
+        groups: usize,
+    ) -> Self {
+        let options = ConvOptions::new(stride, padding_begin, dilation, groups);
+        let padding_end = (padding_begin != padding_end).then_some(padding_end);
+        Self {
+            options,
+            padding_end,
+        }
+    }
+
+    /// Returns true if explicit asymmetric end padding is present.
+    pub fn is_asymmetric(&self) -> bool {
+        self.padding_end.is_some()
+    }
+}
+
+#[allow(deprecated)]
+impl<const N: usize> From<PaddedConvOptions<N>> for ConvOptions<N> {
+    fn from(value: PaddedConvOptions<N>) -> Self {
+        let Some(padding_end) = value.padding_end else {
+            return value.options;
+        };
+        let padding_begin = value.options.padding_begin();
+        let padding = core::array::from_fn(|i| (padding_begin[i], padding_end[i]));
+
+        ConvOptions::new_with_padding(
+            value.options.stride,
+            padding,
+            value.options.dilation,
+            value.options.groups,
+        )
+    }
+}
+
+#[allow(deprecated)]
+impl<const N: usize> From<ConvOptions<N>> for PaddedConvOptions<N> {
+    fn from(options: ConvOptions<N>) -> Self {
+        if options.is_asymmetric() {
+            let padding_begin = options.padding_begin();
+            let padding_end = options.padding_end();
+            Self {
+                options: ConvOptions::new(
+                    options.stride,
+                    padding_begin,
+                    options.dilation,
+                    options.groups,
+                ),
+                padding_end: Some(padding_end),
+            }
+        } else {
+            Self {
+                options,
+                padding_end: None,
+            }
+        }
+    }
+}
+
+/// Max pooling options.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct MaxPoolOptions<const N: usize> {
+    /// Kernel size (non-zero).
+    pub kernel_size: [usize; N],
+
+    /// Stride (non-zero).
+    pub stride: [usize; N],
+
+    /// Padding as `(begin, end)` pairs for each spatial dimension.
+    pub padding: [(usize, usize); N],
+
+    /// Dilation (non-zero).
+    pub dilation: [usize; N],
+
+    /// If true, use ceiling instead of floor for output size calculation.
+    pub ceil_mode: bool,
+}
+
+impl<const N: usize> MaxPoolOptions<N> {
+    /// Constructs max pooling options with the given kernel size.
+    ///
+    /// Defaults to a stride equal to the kernel size, no padding, a dilation
+    /// of 1 and floor mode.
+    pub fn new(kernel_size: [usize; N]) -> Self {
+        let kernel_size = kernel_size.map(|k| check_nonzero(k, "kernel size must be non-zero"));
+        Self {
+            kernel_size,
+            stride: kernel_size,
+            padding: [(0, 0); N],
+            dilation: [1; N],
+            ceil_mode: false,
+        }
+    }
+
+    /// Sets the stride.
+    pub fn with_stride(mut self, stride: [usize; N]) -> Self {
+        self.stride = stride.map(|s| check_nonzero(s, "stride must be non-zero"));
+        self
+    }
+
+    /// Sets symmetric padding for every spatial dimension.
+    pub fn with_padding(mut self, padding: [usize; N]) -> Self {
+        self.padding = padding.map(|padding| (padding, padding));
+        self
+    }
+
+    /// Sets explicit `(begin, end)` padding for every spatial dimension.
+    pub fn with_padding_pairs(mut self, padding: [(usize, usize); N]) -> Self {
+        self.padding = padding;
+        self
+    }
+
+    /// Sets the dilation.
+    pub fn with_dilation(mut self, dilation: [usize; N]) -> Self {
+        self.dilation = dilation.map(|d| check_nonzero(d, "dilation must be non-zero"));
+        self
+    }
+
+    /// Sets whether to use ceiling instead of floor for output size calculation.
+    pub fn with_ceil_mode(mut self, ceil_mode: bool) -> Self {
+        self.ceil_mode = ceil_mode;
+        self
+    }
+
+    /// Returns true if padding is asymmetric.
+    pub fn is_asymmetric(&self) -> bool {
+        self.padding.iter().any(|(begin, end)| begin != end)
+    }
+}
+
+/// Average pooling options.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct AvgPoolOptions<const N: usize> {
+    /// Kernel size (non-zero).
+    pub kernel_size: [usize; N],
+
+    /// Stride (non-zero).
+    pub stride: [usize; N],
+
+    /// Padding as `(begin, end)` pairs for each spatial dimension.
+    pub padding: [(usize, usize); N],
+
+    /// Dilation (non-zero).
+    pub dilation: [usize; N],
+
+    /// If true, padded values are counted in the denominator of the average.
+    pub count_include_pad: bool,
+
+    /// If true, use ceiling instead of floor for output size calculation.
+    pub ceil_mode: bool,
+}
+
+impl<const N: usize> AvgPoolOptions<N> {
+    /// Constructs average pooling options with the given kernel size.
+    ///
+    /// Defaults to a stride equal to the kernel size, no padding, a dilation
+    /// of 1, counting padded values in the average and floor mode.
+    pub fn new(kernel_size: [usize; N]) -> Self {
+        let kernel_size = kernel_size.map(|k| check_nonzero(k, "kernel size must be non-zero"));
+        Self {
+            kernel_size,
+            stride: kernel_size,
+            padding: [(0, 0); N],
+            dilation: [1; N],
+            count_include_pad: true,
+            ceil_mode: false,
+        }
+    }
+
+    /// Sets the stride.
+    pub fn with_stride(mut self, stride: [usize; N]) -> Self {
+        self.stride = stride.map(|s| check_nonzero(s, "stride must be non-zero"));
+        self
+    }
+
+    /// Sets symmetric padding for every spatial dimension.
+    pub fn with_padding(mut self, padding: [usize; N]) -> Self {
+        self.padding = padding.map(|padding| (padding, padding));
+        self
+    }
+
+    /// Sets explicit `(begin, end)` padding for every spatial dimension.
+    pub fn with_padding_pairs(mut self, padding: [(usize, usize); N]) -> Self {
+        self.padding = padding;
+        self
+    }
+
+    /// Sets the dilation.
+    ///
+    /// Window element `k` reads input position `start + k * dilation`, as in max pooling.
+    pub fn with_dilation(mut self, dilation: [usize; N]) -> Self {
+        self.dilation = dilation.map(|d| check_nonzero(d, "dilation must be non-zero"));
+        self
+    }
+
+    /// Sets whether padded values are counted in the denominator of the average.
+    pub fn with_count_include_pad(mut self, count_include_pad: bool) -> Self {
+        self.count_include_pad = count_include_pad;
+        self
+    }
+
+    /// Sets whether to use ceiling instead of floor for output size calculation.
+    pub fn with_ceil_mode(mut self, ceil_mode: bool) -> Self {
+        self.ceil_mode = ceil_mode;
+        self
+    }
+
+    /// Returns true if padding is asymmetric.
+    pub fn is_asymmetric(&self) -> bool {
+        self.padding.iter().any(|(begin, end)| begin != end)
+    }
+}
+
+/// Deformable convolution options.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct DeformConvOptions<const N: usize> {
+    /// Stride (non-zero).
+    pub stride: [usize; N],
+
+    /// Padding.
+    pub padding: [usize; N],
+
+    /// Dilation (non-zero).
+    pub dilation: [usize; N],
+
+    /// Weight Groups (non-zero).
+    pub weight_groups: usize,
+
+    /// Offset Groups (non-zero).
+    pub offset_groups: usize,
+}
+
+impl<const N: usize> DeformConvOptions<N> {
+    /// Constructs a new `DeformConvOptions`.
+    pub fn new(
+        stride: [usize; N],
+        padding: [usize; N],
+        dilation: [usize; N],
+        weight_groups: usize,
+        offset_groups: usize,
+    ) -> Self {
+        Self {
+            stride: stride.map(|s| check_nonzero(s, "stride must be non-zero")),
+            padding,
+            dilation: dilation.map(|d| check_nonzero(d, "dilation must be non-zero")),
+            weight_groups: check_nonzero(weight_groups, "weight groups must be non-zero"),
+            offset_groups: check_nonzero(offset_groups, "offset groups must be non-zero"),
+        }
+    }
+}
+
+/// Transposed convolution options.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ConvTransposeOptions<const N: usize> {
+    /// Stride (non-zero).
+    pub stride: [usize; N],
+
+    /// Padding.
+    pub padding: [usize; N],
+
+    /// Padding out.
+    pub padding_out: [usize; N],
+
+    /// Dilation (non-zero).
+    pub dilation: [usize; N],
+
+    /// Groups (non-zero).
+    pub groups: usize,
+}
+
+impl<const N: usize> ConvTransposeOptions<N> {
+    /// Constructs a new `ConvTransposeOptions`.
+    pub fn new(
+        stride: [usize; N],
+        padding: [usize; N],
+        padding_out: [usize; N],
+        dilation: [usize; N],
+        groups: usize,
+    ) -> Self {
+        Self {
+            stride: stride.map(|s| check_nonzero(s, "stride must be non-zero")),
+            padding,
+            padding_out,
+            dilation: dilation.map(|d| check_nonzero(d, "dilation must be non-zero")),
+            groups: check_nonzero(groups, "groups must be non-zero"),
+        }
+    }
+}
+
+/// Unfold operation options.
+#[derive(Debug, Clone)]
+pub struct UnfoldOptions {
+    /// The number of positions to slide over the input tensor in each dimension.
+    /// A stride of `[1, 1]` will slide the kernel one pixel at a time.
+    pub stride: [usize; 2],
+
+    /// The number of zero-padding pixels added to each side of the input tensor in each dimension.
+    pub padding: [usize; 2],
+
+    /// The spacing between the blocks (patches) in the original input tensor.
+    pub dilation: [usize; 2],
+}
+
+impl UnfoldOptions {
+    /// Constructs a new `UnfoldOptions`.
+    pub fn new(stride: [usize; 2], padding: [usize; 2], dilation: [usize; 2]) -> Self {
+        Self {
+            stride: stride.map(|s| check_nonzero(s, "stride must be non-zero")),
+            padding,
+            dilation: dilation.map(|d| check_nonzero(d, "dilation must be non-zero")),
+        }
+    }
+}
+
+/// Algorithm used.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum InterpolateMode {
+    /// Nearest neighbor with asymmetric coordinates and floor rounding.
+    Nearest,
+    /// Nearest neighbor with half-pixel coordinates and rounding ties upward.
+    NearestExact,
+    /// Bilinear interpolation.
+    Bilinear {
+        /// Mapping from output coordinates to input coordinates.
+        coordinate_transform: CoordinateTransformMode,
+    },
+    /// Bicubic interpolation with edge clamping.
+    Bicubic {
+        /// Mapping from output coordinates to input coordinates.
+        coordinate_transform: CoordinateTransformMode,
+        /// Cubic convolution coefficient. The conventional Cortex value is `-0.75`.
+        a: f32,
+    },
+    /// Lanczos interpolation with a radius of three pixels.
+    Lanczos3 {
+        /// Mapping from output coordinates to input coordinates.
+        coordinate_transform: CoordinateTransformMode,
+    },
+}
+
+/// Coordinate transformation mode for bilinear, bicubic and Lanczos3 interpolation.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CoordinateTransformMode {
+    /// Half-pixel coordinate mapping: `(x_out + 0.5) / scale - 0.5`.
+    HalfPixel,
+    /// Align corners coordinate mapping: `x_out * (l_in - 1) / (l_out - 1)`.
+    AlignCorners,
+}
+
+/// Interpolation options.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InterpolateOptions {
+    /// Algorithm used.
+    pub mode: InterpolateMode,
+    /// Output spatial size `[height, width]`.
+    ///
+    /// Exactly one of `output_size` or `scale_factor` must be set when calling
+    /// `cortex_tensor::module::interpolate`.
+    pub output_size: Option<[usize; 2]>,
+    /// Scale factor `[scale_height, scale_width]` applied to the input spatial size.
+    /// The output size is `floor(input_size * scale_factor)`.
+    /// Scale-dependent transforms use these supplied factors for coordinates rather
+    /// than recomputing the output/input ratio. `AlignCorners` maps coordinates
+    /// from the resolved sizes instead.
+    pub scale_factor: Option<[f32; 2]>,
+}
+
+impl InterpolateOptions {
+    /// Create interpolation options for the selected algorithm and its settings.
+    pub fn new(mode: InterpolateMode) -> Self {
+        Self {
+            mode,
+            output_size: None,
+            scale_factor: None,
+        }
+    }
+
+    /// Set the output size `[height, width]`, clearing any scale factor.
+    pub fn with_output_size(mut self, output_size: [usize; 2]) -> Self {
+        self.output_size = Some(output_size);
+        self.scale_factor = None;
+        self
+    }
+
+    /// Set the scale factor `[scale_height, scale_width]`, clearing any output size.
+    pub fn with_scale_factor(mut self, scale_factor: [f32; 2]) -> Self {
+        self.scale_factor = Some(scale_factor);
+        self.output_size = None;
+        self
+    }
+}
+
+/// Interpolation algorithm for sampling an explicit coordinate grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum GridSampleMode {
+    /// Nearest-neighbor sampling.
+    Nearest,
+    /// Bilinear sampling.
+    Bilinear,
+}
+
+/// Padding mode for grid sampling when coordinates are out of bounds.
+///
+/// Matches PyTorch's `padding_mode` parameter in `grid_sample`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+pub enum GridSamplePaddingMode {
+    /// Fill with zeros for out-of-bounds coordinates.
+    #[default]
+    Zeros,
+    /// Clamp coordinates to the border (use nearest edge value).
+    Border,
+    /// Reflect coordinates at the boundary.
+    Reflection,
+}
+
+/// Options for grid sampling operations.
+#[derive(Debug, Clone)]
+pub struct GridSampleOptions {
+    /// Interpolation mode (bilinear or nearest).
+    pub mode: GridSampleMode,
+    /// Padding mode for out-of-bounds coordinates.
+    pub padding_mode: GridSamplePaddingMode,
+    /// If `true`, grid values of -1 and 1 correspond to the corner pixels.
+    /// If `false`, they correspond to the corner points of the corner pixels
+    /// (i.e., -1 maps to -0.5 and 1 maps to size - 0.5 in pixel coordinates).
+    pub align_corners: bool,
+}
+
+impl Default for GridSampleOptions {
+    fn default() -> Self {
+        Self {
+            mode: GridSampleMode::Bilinear,
+            padding_mode: GridSamplePaddingMode::Zeros,
+            align_corners: false,
+        }
+    }
+}
+
+impl From<GridSampleMode> for GridSampleOptions {
+    fn from(value: GridSampleMode) -> Self {
+        GridSampleOptions::new(value)
+    }
+}
+
+impl GridSampleOptions {
+    /// Create new grid sample options with the given interpolation mode.
+    ///
+    /// Uses default values for padding_mode (Zeros) and align_corners (false).
+    pub fn new(mode: GridSampleMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    /// Set the padding mode.
+    pub fn with_padding_mode(mut self, padding_mode: GridSamplePaddingMode) -> Self {
+        self.padding_mode = padding_mode;
+        self
+    }
+
+    /// Set align_corners.
+    pub fn with_align_corners(mut self, align_corners: bool) -> Self {
+        self.align_corners = align_corners;
+        self
+    }
+}
+
+/// Padding mode for tensor pad operations.
+///
+/// Defines how values are filled when padding a tensor beyond its original boundaries.
+/// Padding can be applied to any dimension of a tensor.
+///
+/// # Modes
+///
+/// - [`Constant`](PadMode::Constant): Fill with a specified value (default: 0.0)
+/// - [`Reflect`](PadMode::Reflect): Mirror values at boundary, excluding edge (requires padding < dim_size)
+/// - [`Edge`](PadMode::Edge): Replicate boundary values
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum PadMode {
+    /// Fill padded regions with a constant value.
+    ///
+    /// # Example
+    /// For tensor `[1, 2, 3]` with padding 2 on the left and value 0:
+    /// Result: `[0, 0, 1, 2, 3]`
+    Constant(f32),
+
+    /// Reflect values at the boundary, excluding the edge value.
+    ///
+    /// Padding must be less than the dimension size (i.e., `padding < dim_size`).
+    ///
+    /// # Example
+    /// For tensor `[1, 2, 3, 4]` with padding 2 on the left:
+    /// Result: `[3, 2, 1, 2, 3, 4]` (reflects from index 1, not 0)
+    Reflect,
+
+    /// Replicate the edge values.
+    ///
+    /// # Example
+    /// For tensor `[1, 2, 3, 4]` with padding 2 on the left:
+    /// Result: `[1, 1, 1, 2, 3, 4]`
+    Edge,
+}
+
+impl Default for PadMode {
+    fn default() -> Self {
+        PadMode::Constant(0.0)
+    }
+}
+
+impl<E: ElementConversion> From<E> for PadMode {
+    fn from(value: E) -> Self {
+        PadMode::Constant(value.elem())
+    }
+}
+
+/// Options for the attention module.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct AttentionModuleOptions {
+    /// Custom scale factor applied to QK^T. When `None`, defaults to `1/sqrt(head_dim)`.
+    pub scale: Option<f64>,
+
+    /// Soft capping applied before softmax: `softcap * tanh(scores / softcap)`.
+    /// Used by Gemma-2 and similar models. Must be positive when set.
+    pub softcap: Option<f64>,
+
+    /// When `true`, applies causal (autoregressive) masking so that each query position
+    /// can only attend to key positions at or before it. This is more efficient than
+    /// passing an explicit lower-triangular bool mask because backends can use optimized
+    /// kernel paths (e.g. flash attention with causal mode).
+    ///
+    /// When `seq_q != seq_k`, [`causal_alignment`](Self::causal_alignment) decides which
+    /// query row lines up with which key column.
+    pub is_causal: bool,
+
+    /// Where the causal diagonal is anchored when `seq_q != seq_k`. Ignored unless
+    /// `is_causal` is set. Both alignments agree when `seq_q == seq_k`.
+    ///
+    /// Options serialized before this field existed deserialize as
+    /// [`BottomRight`](CausalAlignment::BottomRight), the alignment cortex used until then.
+    #[serde(default)]
+    pub causal_alignment: CausalAlignment,
+
+    /// Sliding window over the key axis: each query attends to at most this many keys,
+    /// ending at its own position. `None` disables the window; `Some(0)` is invalid.
+    ///
+    /// The window is always bottom-right aligned: query `i` sees the keys in
+    /// `[i + seq_kv - seq_q - (w - 1), i + seq_kv - seq_q]`. This alignment does not depend on
+    /// [`causal_alignment`](Self::causal_alignment), which only places the causal edge.
+    ///
+    /// With [`CausalAlignment::BottomRight`], the window subsumes the causal edge, so enabling
+    /// `is_causal` does not change the visible set. With [`CausalAlignment::TopLeft`] and
+    /// `seq_q != seq_k`, the masks intersect: the causal edge can hide keys the window keeps and,
+    /// when the window starts after the query's own position, every key of a row.
+    #[serde(default)]
+    pub sliding_window: Option<u32>,
+}
+
+/// Anchor of the causal diagonal for [`AttentionModuleOptions::is_causal`].
+///
+/// Query `i` may attend key `j` iff `j <= i + offset`, where `offset` is `0` for
+/// [`TopLeft`](Self::TopLeft) and `seq_k - seq_q` for [`BottomRight`](Self::BottomRight).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize,
+)]
+pub enum CausalAlignment {
+    /// The last query row sees every key: `offset = seq_k - seq_q`. This is the
+    /// KV-cache convention (the queries are the newest `seq_q` positions), used by
+    /// FlashAttention 2.1+ and by ONNX `Attention` when a `past_key` is supplied.
+    #[default]
+    BottomRight,
+    /// The first query row sees the first key: `offset = 0` (`tril` on `[seq_q, seq_k]`).
+    /// This is PyTorch's `scaled_dot_product_attention(is_causal=True)` and ONNX
+    /// `Attention` without a KV cache.
+    TopLeft,
+}
+
+impl CausalAlignment {
+    /// The offset of the causal diagonal: query `i` may attend key `j` iff `j <= i + offset`.
+    pub fn offset(self, seq_q: usize, seq_k: usize) -> i64 {
+        match self {
+            CausalAlignment::BottomRight => seq_k as i64 - seq_q as i64,
+            CausalAlignment::TopLeft => 0,
+        }
+    }
+}
+
+/// Computation to be used to update the existing values in indexed assignment operations (scatter/select).
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum IndexingUpdateOp {
+    /// Overwrite existing values.
+    Assign,
+    /// Performs an addition.
+    Add,
+    /// Multiply existing values.
+    Mul,
+    /// Take element-wise minimum.
+    Min,
+    /// Take element-wise maximum.
+    Max,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conv_options_symmetric_constructor() {
+        let options = ConvOptions::new([1, 2], [3, 4], [5, 6], 7);
+
+        assert_eq!(options.padding, [(3, 3), (4, 4)]);
+        assert_eq!(options.padding_begin(), [3, 4]);
+        assert_eq!(options.padding_end(), [3, 4]);
+        assert_eq!(options.symmetric_padding(), [3, 4]);
+        assert!(!options.is_asymmetric());
+    }
+
+    #[test]
+    fn conv_options_explicit_padding_constructor() {
+        let options = ConvOptions::new_with_padding([1, 2], [(3, 4), (5, 6)], [7, 8], 9);
+
+        assert_eq!(options.padding, [(3, 4), (5, 6)]);
+        assert_eq!(options.padding_begin(), [3, 5]);
+        assert_eq!(options.padding_end(), [4, 6]);
+        assert!(options.is_asymmetric());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn padded_conv_options_convert_to_conv_options() {
+        let options: ConvOptions<2> =
+            PaddedConvOptions::asymmetric([1, 2], [3, 5], [4, 6], [7, 8], 9).into();
+
+        assert_eq!(options.padding, [(3, 4), (5, 6)]);
+        assert_eq!(options.stride, [1, 2]);
+        assert_eq!(options.dilation, [7, 8]);
+        assert_eq!(options.groups, 9);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn asymmetric_conv_options_roundtrip_through_padded_options() {
+        let expected = ConvOptions::new_with_padding([1, 2], [(3, 4), (5, 6)], [7, 8], 9);
+        let padded: PaddedConvOptions<2> = expected.clone().into();
+        let actual: ConvOptions<2> = padded.into();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic = "expected symmetric convolution padding"]
+    fn conv_options_symmetric_padding_with_asymmetric_options() {
+        let options = ConvOptions::new_with_padding([1], [(1, 2)], [1], 1);
+        let _ = options.symmetric_padding();
+    }
+
+    #[test]
+    #[should_panic = "stride must be non-zero"]
+    fn conv_options_stride_zero() {
+        let _opt = ConvOptions::new([0, 1], [0, 0], [1, 1], 1);
+    }
+
+    #[test]
+    #[should_panic = "dilation must be non-zero"]
+    fn conv_options_dilation_zero() {
+        let _opt = ConvOptions::new([1, 1], [0, 0], [0, 0], 1);
+    }
+
+    #[test]
+    #[should_panic = "groups must be non-zero"]
+    fn conv_options_groups_zero() {
+        let _opt = ConvOptions::new([1, 1], [0, 0], [1, 1], 0);
+    }
+
+    #[test]
+    fn pool_options_defaults() {
+        let max = MaxPoolOptions::new([2, 3]);
+        let avg = AvgPoolOptions::new([2, 3]);
+
+        assert_eq!(max.stride, [2, 3]);
+        assert_eq!(max.padding, [(0, 0), (0, 0)]);
+        assert_eq!(max.dilation, [1, 1]);
+        assert!(!max.ceil_mode);
+        assert_eq!(avg.stride, [2, 3]);
+        assert_eq!(avg.padding, [(0, 0), (0, 0)]);
+        assert_eq!(avg.dilation, [1, 1]);
+        assert!(avg.count_include_pad);
+        assert!(!avg.ceil_mode);
+    }
+
+    #[test]
+    fn pool_options_padding() {
+        let symmetric = MaxPoolOptions::new([2, 2]).with_padding([0, 1]);
+        let asymmetric = AvgPoolOptions::new([2]).with_padding_pairs([(0, 1)]);
+
+        assert_eq!(symmetric.padding, [(0, 0), (1, 1)]);
+        assert!(!symmetric.is_asymmetric());
+        assert!(asymmetric.is_asymmetric());
+    }
+
+    #[test]
+    #[should_panic = "kernel size must be non-zero"]
+    fn max_pool_options_kernel_size_zero() {
+        let _opt = MaxPoolOptions::new([0, 1]);
+    }
+
+    #[test]
+    #[should_panic = "dilation must be non-zero"]
+    fn max_pool_options_dilation_zero() {
+        let _opt = MaxPoolOptions::new([1, 1]).with_dilation([0, 1]);
+    }
+
+    #[test]
+    #[should_panic = "dilation must be non-zero"]
+    fn avg_pool_options_dilation_zero() {
+        let _opt = AvgPoolOptions::new([1, 1]).with_dilation([0, 1]);
+    }
+
+    #[test]
+    #[should_panic = "stride must be non-zero"]
+    fn avg_pool_options_stride_zero() {
+        let _opt = AvgPoolOptions::new([1, 1]).with_stride([0, 1]);
+    }
+
+    #[test]
+    #[should_panic = "stride must be non-zero"]
+    fn conv_transpose_options_stride_zero() {
+        let _opt = ConvTransposeOptions::new([0, 1], [0, 0], [0, 0], [1, 1], 1);
+    }
+
+    #[test]
+    #[should_panic = "dilation must be non-zero"]
+    fn conv_transpose_options_dilation_zero() {
+        let _opt = ConvTransposeOptions::new([1, 1], [0, 0], [0, 0], [0, 0], 1);
+    }
+
+    #[test]
+    #[should_panic = "groups must be non-zero"]
+    fn conv_transpose_options_groups_zero() {
+        let _opt = ConvTransposeOptions::new([1, 1], [0, 0], [0, 0], [1, 1], 0);
+    }
+
+    #[test]
+    #[should_panic = "stride must be non-zero"]
+    fn deform_conv_options_stride_zero() {
+        let _opt = DeformConvOptions::new([0, 1], [0, 0], [1, 1], 1, 1);
+    }
+
+    #[test]
+    #[should_panic = "dilation must be non-zero"]
+    fn deform_conv_options_dilation_zero() {
+        let _opt = DeformConvOptions::new([1, 1], [0, 0], [0, 0], 1, 1);
+    }
+
+    #[test]
+    #[should_panic = "weight groups must be non-zero"]
+    fn deform_conv_options_weights_groups_zero() {
+        let _opt = DeformConvOptions::new([1, 1], [0, 0], [1, 1], 0, 1);
+    }
+
+    #[test]
+    #[should_panic = "offset groups must be non-zero"]
+    fn deform_conv_options_offset_groups_zero() {
+        let _opt = DeformConvOptions::new([1, 1], [0, 0], [1, 1], 1, 0);
+    }
+
+    #[test]
+    #[should_panic = "stride must be non-zero"]
+    fn unfold_options_stride_zero() {
+        let _opt = UnfoldOptions::new([0, 1], [0, 0], [1, 1]);
+    }
+
+    #[test]
+    #[should_panic = "dilation must be non-zero"]
+    fn unfold_options_dilation_zero() {
+        let _opt = UnfoldOptions::new([1, 1], [0, 0], [0, 0]);
+    }
+}

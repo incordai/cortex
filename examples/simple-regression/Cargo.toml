@@ -1,0 +1,27 @@
+[package]
+authors = ["aasheeshsingh <aasheeshdtu@gmail.com>"]
+edition.workspace = true
+license.workspace = true
+name = "simple-regression"
+publish = false
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["cortex/dataset", "cortex/sqlite"]
+flex = ["cortex/flex"]
+wgpu = ["cortex/wgpu"]
+remote = ["cortex/remote-websocket"]
+
+[dependencies]
+cortex = { workspace = true, features = ["default", "train"] }
+
+# Serialization
+log = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+
+# Displaying results
+textplots = "0.8.7"
+rgb = "0.8.53"

@@ -1,0 +1,105 @@
+use std::sync::Arc;
+
+use super::MetricMetadata;
+use super::SerializedEntry;
+use super::state::FormatOptions;
+use super::state::NumericMetricState;
+use crate::metric::MetricName;
+use crate::metric::Numeric;
+use crate::metric::{Metric, MetricAttributes, NumericAttributes, NumericEntry};
+use cortex_core::tensor::TensorReadError;
+
+/// The loss metric.
+#[derive(Clone)]
+pub struct IterationSpeedMetric {
+    name: MetricName,
+    state: NumericMetricState,
+    instant: Option<std::time::Instant>,
+}
+
+impl Default for IterationSpeedMetric {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IterationSpeedMetric {
+    /// Create the metric.
+    pub fn new() -> Self {
+        Self {
+            name: Arc::new("Iteration Speed".to_string()),
+            state: Default::default(),
+            instant: Default::default(),
+        }
+    }
+}
+
+impl Metric for IterationSpeedMetric {
+    type Input = ();
+
+    fn update(
+        &mut self,
+        _: &Self::Input,
+        metadata: &MetricMetadata,
+    ) -> Result<SerializedEntry, TensorReadError> {
+        let raw = match self.instant {
+            Some(val) => {
+                // If iteration is not logged, compute the speed over the number of items processed.
+                // 1 iteration should equal 1 item when iteration is not logged.
+                metadata
+                    .iteration
+                    .unwrap_or(metadata.progress.items_processed) as f64
+                    / val.elapsed().as_secs_f64()
+            }
+            None => {
+                self.instant = Some(std::time::Instant::now());
+                0.0
+            }
+        };
+
+        self.state.update(raw, 1);
+        Ok(self.state.compute_update(
+            FormatOptions::new(self.name())
+                .unit("iter/sec")
+                .precision(2),
+        ))
+    }
+
+    fn compute(&mut self) -> Result<SerializedEntry, TensorReadError> {
+        Ok(self.state.compute_final(
+            FormatOptions::new(self.name())
+                .unit("iter/sec")
+                .precision(2),
+        ))
+    }
+
+    fn clear(&mut self) {
+        self.instant = None;
+    }
+
+    fn name(&self) -> MetricName {
+        self.name.clone()
+    }
+
+    fn attributes(&self) -> MetricAttributes {
+        NumericAttributes {
+            unit: Some("iter/sec".to_string()),
+            higher_is_better: true,
+        }
+        .into()
+    }
+}
+
+impl Numeric for IterationSpeedMetric {
+    fn value(&self) -> Option<NumericEntry> {
+        Some(self.state.current_value())
+    }
+
+    fn running_value(&self) -> Option<NumericEntry> {
+        Some(self.state.running_value())
+    }
+
+    fn final_value(&self) -> NumericEntry {
+        self.state.final_value()
+    }
+}

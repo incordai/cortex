@@ -1,0 +1,388 @@
+use alloc::string::String;
+use cortex_backend::RandomKey;
+use cortex_std::{BoolStore, DeviceSettings, QuantConfig, QuantMode, QuantScheme, QuantStore};
+
+use cortex_backend::{
+    Backend, BackendTypes, DType, DTypeUsage, DTypeUsageSet, DeviceId, DeviceOps, ExecutionError,
+};
+use cortex_ir::{BackendIr, HandleKind, TensorHandle};
+use cortex_std::device::Device;
+use cortex_std::rand::{SeedableRng, StdRng};
+use cortex_std::sync::Mutex;
+
+use crate::qtensor::FlexQTensor;
+use crate::tensor::FlexTensor;
+
+/// Type alias for the RNG used by Flex.
+pub type FlexRng = StdRng;
+
+/// Global seed storage for reproducible random number generation.
+/// Uses Mutex for thread-safe RNG state management.
+pub(crate) static SEED: Mutex<Option<FlexRng>> = Mutex::new(None);
+
+/// Initializes the generator used to reserve per-operation keys before explicit seeding.
+pub(crate) fn get_seeded_rng() -> FlexRng {
+    cortex_std::rand::get_seeded_rng()
+}
+
+/// CPU device for the Flex backend.
+///
+/// Unit struct since there's only one CPU device.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct FlexDevice;
+
+impl Device for FlexDevice {
+    fn to_id(&self) -> DeviceId {
+        DeviceId::new(0, 0)
+    }
+
+    fn from_id(_id: DeviceId) -> Self {
+        Self
+    }
+}
+
+impl DeviceOps for FlexDevice {
+    fn defaults(&self) -> DeviceSettings {
+        DeviceSettings::new(
+            DType::F32,
+            DType::I32,
+            DType::Bool(BoolStore::Native),
+            QuantConfig::new(
+                QuantScheme::default().with_store(QuantStore::Native),
+                Default::default(),
+            ),
+        )
+    }
+}
+
+impl core::fmt::Display for FlexDevice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Cpu")
+    }
+}
+
+impl core::fmt::Debug for FlexDevice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
+
+/// The Flex backend, a fast, portable CPU backend for Cortex.
+///
+/// The `E` and `I` type parameters are phantom. The body of `Flex` uses runtime
+/// `DType` dispatch, so both are unused at runtime.
+///
+/// # Limitations of the phantom generics
+///
+/// The `Backend` impl is provided only for the default instantiation
+/// `Flex<f32, i32>`. Writing `Flex` (with no arguments) resolves to the default
+/// and works exactly as before. Writing `Flex<f64, i64>` or any other non-default
+/// combination is a valid Rust type but will not satisfy trait bounds requiring
+/// `Backend`, producing errors like:
+///
+/// ```text
+/// the trait bound `Flex<f64, i64>: Backend` is not satisfied
+/// ```
+///
+/// This is a deliberate compromise for the initial migration: making `Flex`
+/// generic over element types at the trait-impl level is a follow-up that would
+/// require rewriting all `impl FooOps<Flex> for Flex` blocks plus internal
+/// `Flex::method()` calls (tracked in
+/// [#4762](https://github.com/tracel-ai/burn/issues/4762)). Until then, treat
+/// the generic parameters as opaque shape placeholders; real element-type
+/// selection happens at runtime via `DType`.
+///
+/// The bound is locked in by a compile-fail doctest so that if someone later
+/// makes the `Backend` impl generic over `E`/`I`, this documentation gets
+/// flagged as out of date:
+///
+/// ```compile_fail
+/// use cortex_backend::Backend;
+/// use cortex_flex::Flex;
+/// fn requires_backend<B: Backend>() {}
+/// requires_backend::<Flex<f64, i64>>();
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Flex {}
+
+impl BackendTypes for Flex {
+    type Device = FlexDevice;
+
+    type FloatTensorPrimitive = FlexTensor;
+    type IntTensorPrimitive = FlexTensor;
+    type BoolTensorPrimitive = FlexTensor;
+    type QuantizedTensorPrimitive = FlexQTensor;
+
+    type GraphPrimitive = cortex_backend::GraphUnsupported;
+}
+
+impl Backend for Flex {
+    fn name(_device: &Self::Device) -> String {
+        "flex".into()
+    }
+
+    fn seed(_device: &Self::Device, seed: u64) {
+        let rng = FlexRng::seed_from_u64(seed);
+        let mut seed_lock = SEED.lock();
+        *seed_lock = Some(rng);
+    }
+
+    fn next_random_key(_device: &Self::Device) -> RandomKey {
+        use cortex_std::rand::RngExt;
+        RandomKey::new(SEED.lock().get_or_insert_with(get_seeded_rng).random())
+    }
+
+    fn device_count(_type_id: u16) -> usize {
+        1
+    }
+
+    fn dtype_usage(_device: &Self::Device, dtype: DType) -> DTypeUsageSet {
+        match dtype {
+            // Full support for standard types
+            DType::F64 | DType::F32 | DType::F16 | DType::BF16 => {
+                DTypeUsage::Storage | DTypeUsage::Arithmetic
+            }
+            DType::I64 | DType::I32 | DType::I16 | DType::I8 => {
+                DTypeUsage::Storage | DTypeUsage::Arithmetic
+            }
+            DType::U64 | DType::U32 | DType::U16 | DType::U8 => {
+                DTypeUsage::Storage | DTypeUsage::Arithmetic
+            }
+            // Bool storage: flex stores bools as 1 byte per element, so Native and
+            // U8 are both supported (they share the same layout, only the tag
+            // differs). Bool(U32) would require 4-byte-per-element storage
+            // throughout the backend and is not yet implemented.
+            DType::Bool(cortex_std::BoolStore::Native | cortex_std::BoolStore::U8) => {
+                DTypeUsage::Storage | DTypeUsage::Arithmetic
+            }
+            DType::Bool(cortex_std::BoolStore::U32) => DTypeUsageSet::empty(),
+            // Ops without a quantized kernel dequantize, so a symmetric scheme serves every op.
+            DType::QFloat(scheme)
+                if scheme.mode == QuantMode::Symmetric
+                    && cortex_std::quantization::quantizable(&scheme) =>
+            {
+                DTypeUsage::general()
+            }
+            DType::QFloat(_) => DTypeUsageSet::empty(),
+            _ => DTypeUsageSet::empty(),
+        }
+    }
+
+    fn flush(_device: &Self::Device) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+}
+
+impl BackendIr for Flex {
+    type Handle = HandleKind<Self>;
+
+    fn float_tensor(handle: TensorHandle<Self::Handle>) -> FlexTensor {
+        match handle.handle {
+            HandleKind::Float(t) => t,
+            _ => panic!("Expected float handle, got {}", handle.handle.name()),
+        }
+    }
+
+    fn int_tensor(handle: TensorHandle<Self::Handle>) -> FlexTensor {
+        match handle.handle {
+            HandleKind::Int(t) => t,
+            _ => panic!("Expected int handle, got {}", handle.handle.name()),
+        }
+    }
+
+    fn bool_tensor(handle: TensorHandle<Self::Handle>) -> FlexTensor {
+        match handle.handle {
+            HandleKind::Bool(t) => t,
+            _ => panic!("Expected bool handle, got {}", handle.handle.name()),
+        }
+    }
+
+    fn quantized_tensor(handle: TensorHandle<Self::Handle>) -> FlexQTensor {
+        match handle.handle {
+            HandleKind::Quantized(t) => t,
+            _ => panic!("Expected quantized handle, got {}", handle.handle.name()),
+        }
+    }
+
+    fn float_tensor_handle(tensor: FlexTensor) -> Self::Handle {
+        HandleKind::Float(tensor)
+    }
+
+    fn int_tensor_handle(tensor: FlexTensor) -> Self::Handle {
+        HandleKind::Int(tensor)
+    }
+
+    fn bool_tensor_handle(tensor: FlexTensor) -> Self::Handle {
+        HandleKind::Bool(tensor)
+    }
+
+    fn quantized_tensor_handle(tensor: FlexQTensor) -> Self::Handle {
+        HandleKind::Quantized(tensor)
+    }
+}
+
+// Ops traits are implemented in the ops module
+
+#[cfg(test)]
+mod tests {
+    use cortex_backend::{Backend, DType};
+    use cortex_std::{BoolStore, QuantValue};
+
+    use super::*;
+
+    #[test]
+    fn keyed_draws_replay_without_advancing_the_default_generator() {
+        use cortex_backend::{
+            Distribution, FloatDType, IntDType,
+            ops::{FloatTensorOps, IntTensorOps},
+        };
+
+        let device = FlexDevice;
+        let draw = |key| {
+            (
+                Flex::float_random(
+                    [32].into(),
+                    Distribution::Default,
+                    &device,
+                    FloatDType::F32,
+                    key,
+                )
+                .into_data(),
+                Flex::int_random(
+                    [32].into(),
+                    Distribution::Uniform(0.0, 1000.0),
+                    &device,
+                    IntDType::I32,
+                    key,
+                )
+                .into_data(),
+            )
+        };
+
+        Flex::seed(&device, 19);
+        let expected_next = Flex::next_random_key(&device);
+        Flex::seed(&device, 19);
+        let key = RandomKey::new(7);
+        let expected = draw(key);
+        assert_eq!(Flex::next_random_key(&device), expected_next);
+
+        Flex::seed(&device, 23);
+        assert_eq!(draw(key), expected);
+        let different = draw(RandomKey::new(11));
+        assert_ne!(different.0, expected.0);
+        assert_ne!(different.1, expected.1);
+    }
+
+    #[test]
+    fn supports_every_symmetric_quantized_scheme() {
+        let device = FlexDevice;
+        let q8 = QuantScheme::default();
+        let e2m1 = q8.with_value(QuantValue::E2M1);
+
+        for scheme in [
+            q8,
+            q8.with_value(QuantValue::Q4S)
+                .with_store(QuantStore::Native),
+            q8.with_value(QuantValue::E4M3),
+            e2m1,
+            e2m1.with_store(QuantStore::PackedNative(0)),
+        ] {
+            assert!(
+                Flex::supports_dtype(&device, DType::QFloat(scheme)),
+                "{scheme:?}"
+            );
+        }
+        assert!(!Flex::supports_dtype(
+            &device,
+            DType::QFloat(q8.with_mode(QuantMode::Lookup))
+        ));
+    }
+
+    #[test]
+    fn supports_bool_native() {
+        let device = FlexDevice;
+        assert!(Flex::supports_dtype(
+            &device,
+            DType::Bool(BoolStore::Native)
+        ));
+    }
+
+    #[test]
+    fn supports_bool_u8() {
+        let device = FlexDevice;
+        assert!(Flex::supports_dtype(&device, DType::Bool(BoolStore::U8)));
+    }
+
+    #[test]
+    fn does_not_support_bool_u32() {
+        let device = FlexDevice;
+        assert!(
+            !Flex::supports_dtype(&device, DType::Bool(BoolStore::U32)),
+            "Bool(U32) should not be supported: flex stores bools as 1 byte per element"
+        );
+    }
+
+    #[test]
+    fn bool_empty_preserves_native_dtype() {
+        use cortex_backend::ops::BoolTensorOps;
+        let shape = cortex_std::Shape::from(alloc::vec![3]);
+        let t = Flex::bool_empty(shape, &FlexDevice, cortex_std::BoolDType::Native);
+        assert_eq!(t.dtype(), DType::Bool(BoolStore::Native));
+    }
+
+    #[test]
+    fn bool_empty_preserves_u8_dtype() {
+        use cortex_backend::ops::BoolTensorOps;
+        let shape = cortex_std::Shape::from(alloc::vec![3]);
+        let t = Flex::bool_empty(shape, &FlexDevice, cortex_std::BoolDType::U8);
+        assert_eq!(t.dtype(), DType::Bool(BoolStore::U8));
+    }
+
+    #[test]
+    fn device_prints_as_cpu() {
+        use alloc::format;
+        assert_eq!(format!("{:?}", FlexDevice), "Cpu");
+        assert_eq!(format!("{}", FlexDevice), "Cpu");
+    }
+
+    #[test]
+    fn comparison_preserves_out_dtype_native() {
+        let lhs = FlexTensor::from_data(cortex_backend::TensorData::from([1.0f32, 2.0, 3.0]));
+        let rhs = FlexTensor::from_data(cortex_backend::TensorData::from([2.0f32, 2.0, 1.0]));
+        let result = crate::ops::comparison::greater(lhs, rhs, cortex_std::BoolDType::Native);
+        assert_eq!(result.dtype(), DType::Bool(BoolStore::Native));
+    }
+
+    #[test]
+    fn comparison_preserves_out_dtype_u8() {
+        let lhs = FlexTensor::from_data(cortex_backend::TensorData::from([1.0f32, 2.0, 3.0]));
+        let rhs = FlexTensor::from_data(cortex_backend::TensorData::from([2.0f32, 2.0, 1.0]));
+        let result = crate::ops::comparison::greater(lhs, rhs, cortex_std::BoolDType::U8);
+        assert_eq!(result.dtype(), DType::Bool(BoolStore::U8));
+    }
+
+    #[test]
+    #[should_panic(expected = "Bool(U32)")]
+    fn comparison_u32_panics() {
+        let lhs = FlexTensor::from_data(cortex_backend::TensorData::from([1.0f32, 2.0]));
+        let rhs = FlexTensor::from_data(cortex_backend::TensorData::from([2.0f32, 1.0]));
+        let _ = crate::ops::comparison::greater(lhs, rhs, cortex_std::BoolDType::U32);
+    }
+
+    #[test]
+    fn bool_not_preserves_u8_dtype() {
+        use cortex_backend::ops::BoolTensorOps;
+        // Construct a Bool(U8) tensor directly to verify bool_not preserves
+        // the dtype tag across the op. from_data would produce Bool(Native),
+        // so we use make_bool_tensor to get the U8 tag.
+        let t_u8 = crate::ops::comparison::make_bool_tensor(
+            alloc::vec![1, 0, 1],
+            cortex_std::Shape::from(alloc::vec![3]),
+            cortex_std::BoolDType::U8,
+        );
+        let result = Flex::bool_not(t_u8);
+        assert_eq!(result.dtype(), DType::Bool(BoolStore::U8));
+        let data: &[u8] = result.bytes();
+        assert_eq!(&data[..3], &[0, 1, 0]);
+    }
+}

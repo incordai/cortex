@@ -1,0 +1,21 @@
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    ignore:
+      - dependency-name: "tracel-ai/github-actions*"
+
+  - package-ecosystem: "cargo"
+    directories:
+      - "/"
+      - "crates/cortex"
+      - "crates/cortex-*"
+      - "crates/cortex-import/*-tests"
+      - "examples/*"
+      - "xtask"
+    schedule:
+      interval: "weekly"
+

@@ -1,0 +1,89 @@
+use std::path::PathBuf;
+
+use crate::dataset::{HousingBatcher, HousingDataset};
+use crate::model::RegressionModelConfig;
+use cortex::optim::AdamConfig;
+use cortex::train::{Learner, SupervisedTraining};
+use cortex::{
+    data::{dataloader::DataLoaderBuilder, dataset::Dataset},
+    prelude::*,
+    train::metric::LossMetric,
+};
+
+#[derive(Config, Debug)]
+pub struct ExpConfig {
+    #[config(default = 100)]
+    pub num_epochs: usize,
+
+    #[config(default = 2)]
+    pub num_workers: usize,
+
+    #[config(default = 1337)]
+    pub seed: u64,
+
+    pub optimizer: AdamConfig,
+
+    #[config(default = 256)]
+    pub batch_size: usize,
+}
+
+fn create_artifact_dir(artifact_dir: &str) {
+    std::fs::remove_file(PathBuf::from(artifact_dir).join("experiment.log")).ok();
+    std::fs::create_dir_all(artifact_dir).ok();
+}
+
+pub fn run(artifact_dir: &str, device: impl Into<Device>) {
+    create_artifact_dir(artifact_dir);
+
+    // Config
+    let optimizer = AdamConfig::new();
+    let config = ExpConfig::new(optimizer);
+
+    let device = device.into();
+    device.seed(config.seed);
+    let autodiff_device = device.clone().autodiff();
+
+    let model = RegressionModelConfig::new().init(&autodiff_device);
+
+    // Define train/valid datasets and dataloaders
+    let train_dataset = HousingDataset::train();
+    let valid_dataset = HousingDataset::validation();
+
+    println!("Train Dataset Size: {}", train_dataset.len());
+    println!("Valid Dataset Size: {}", valid_dataset.len());
+
+    let batcher_train = HousingBatcher::new(&autodiff_device);
+    let batcher_test = HousingBatcher::new(&device);
+
+    let dataloader_train = DataLoaderBuilder::new(batcher_train)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(train_dataset);
+
+    let dataloader_test = DataLoaderBuilder::new(batcher_test)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(valid_dataset);
+
+    // Model
+    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
+        .metric_train_numeric(LossMetric::new())
+        .metric_valid_numeric(LossMetric::new())
+        .with_default_checkpointers()
+        .num_epochs(config.num_epochs)
+        .summary();
+
+    let result = training.launch(Learner::new(model, config.optimizer.init(), 1e-3));
+
+    config
+        .save(format!("{artifact_dir}/config.json").as_str())
+        .unwrap();
+
+    result
+        .model
+        .into_record()
+        .save(format!("{artifact_dir}/model"))
+        .expect("Failed to save trained model");
+}
