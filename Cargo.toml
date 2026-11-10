@@ -225,11 +225,11 @@ cortex-wgpu = { path = "crates/cortex-wgpu", version = "0.23.0-pre.1", default-f
 pytorch-reader = { path = "crates/pytorch-reader", version = "0.23.0-pre.1" }
 
 ### For the main cortex branch. ###
-cubecl = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
-cubecl-common = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
-cubecl-environment = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
-cubecl-zspace = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "cb1b7bc6e521b2556ed01cf096b99104a50b35ae" }
-cubek = { git = "https://github.com/tracel-ai/cubek", default-features = false, rev = "24ea8e9f2c3baff39fcb1db5efef1872c00e7b86" }
+cubecl = { git = "https://github.com/incordai/cubecl", default-features = false, rev = "52faf4138984043811cbd16354acd774cdafa1ab" }
+cubecl-common = { git = "https://github.com/incordai/cubecl", default-features = false, rev = "52faf4138984043811cbd16354acd774cdafa1ab" }
+cubecl-environment = { git = "https://github.com/incordai/cubecl", default-features = false, rev = "52faf4138984043811cbd16354acd774cdafa1ab" }
+cubecl-zspace = { git = "https://github.com/incordai/cubecl", default-features = false, rev = "52faf4138984043811cbd16354acd774cdafa1ab" }
+cubek = { git = "https://github.com/incordai/cubek", default-features = false, rev = "cd1fd3d88fc5147994f50713bdb14d44a4bdd71c" }
 ### For local development. ###
 # cubecl = { path = "../cubecl/crates/cubecl", default-features = false }
 # cubecl-common = { path = "../cubecl/crates/cubecl-common", default-features = false }
